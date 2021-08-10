@@ -8,7 +8,7 @@ int16_t vol = 1000; // 0 - 1024, 10 bit
 
 void setup() {
   Serial.begin(115200);
-  sinGen(sineTable); // fill the wavetable
+  Osc::sinGen(sineTable); // fill the wavetable
   aOsc1.setPitch(440);
   audioStart();
 }
