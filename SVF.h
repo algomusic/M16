@@ -38,8 +38,9 @@ class SVF {
     /** Set the centre or corner frequency of the filter.
     @param centre_freq 40 - 11k Hz (SAMPLE_RATE/4). */
     void setCentreFreq(int centre_freq) {
-      centre_freq = max(40, min(SAMPLE_RATE/4, centre_freq));
+      centre_freq = max(40, min(SAMPLE_RATE/4, (int)(centre_freq - random(centre_freq * 0.05))));
       f = 2 * sin(3.1459 * centre_freq / SAMPLE_RATE);
+      int centFreq = centre_freq;
     }
 
     /** Calculate the next Lowpass filter sample, given an input signal.
@@ -74,6 +75,19 @@ class SVF {
 //       return max(-32767, min(32767, band));
     }
 
+    /** Calculate the next Allpass filter sample, given an input signal.
+     *  Input is an output from an oscillator or other audio element.
+     *  Perhaps not technically a state variable filter, but...
+     */
+    inline
+    int nextAllpass(int input) {
+      // y = x + x(t-1) - y(t-1)
+      int output = input + allpassPrevIn - allpassPrevOut;
+      allpassPrevIn = input;
+      allpassPrevOut = output;
+      return output;
+    }
+
     /** Calculate the next Notch filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
      *  Needs to use int rather than uint16_t for some reason(?)
@@ -85,12 +99,13 @@ class SVF {
     }
 
     private:
-      int low, band, high, notch;
+      int low, band, high, notch, allpassPrevIn, allpassPrevOut;
 //       float q = 1.0;
       int q = 255;
 //       float scale;
       int scale = sqrt(1) * 255;
       volatile float f = SAMPLE_RATE / 4;
+      int centFreq = 10000;
 
       void calcFilter(int input) {
         low += f * band;

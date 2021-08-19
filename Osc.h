@@ -36,10 +36,10 @@ public:
 	inline
 	int16_t next() {
     int16_t sampVal = readTable();
-    int16_t outSamp = ((int32_t)sampVal + (int32_t)prevSampVal)/2; // smooth
-    prevSampVal = outSamp;
+    if (sampVal < 0) sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)/2; // smooth
+    prevSampVal = sampVal;
     incrementPhase();
-		return outSamp; // or return sampVal for no smoothing
+    return sampVal;
 	}
 
   /** Returns the sample at for the oscillator phase at specified time in milliseconds.
@@ -113,6 +113,22 @@ public:
     return (noiseVal * particleEnv) >> 16;
   }
 
+  /** PhISM Shaker model
+   * Designed for Osc being set to a noise wavetable.
+   * @param thresh The amount of aparent particles. Typically 0.9 - 0.999
+   * Envelope output and pass to one or more band pass filters or other resonator.
+   */
+  inline
+  int16_t particle(float thresh) {
+    int32_t noiseVal = readTable();
+    if (noiseVal > (MAX_16 * thresh)) {
+      particleEnv = noiseVal - (MAX_16 - noiseVal) - (MAX_16 - noiseVal);
+    } else particleEnv *= particleEnvReleaseRate;
+    incrementPhase();
+    noiseVal = (prevParticle + noiseVal + noiseVal)/3;
+    return (noiseVal * particleEnv) >> 16;
+  }
+
   /** Frequency Modulation Feedback
    * Designed for Osc being set to a sine waveform, but works with any.
    * @modIndex amount of feedback applied, >=0 and useful < 100
@@ -142,7 +158,7 @@ public:
 	void setFreq(float freq) {
 		if (freq > 0) {
       frequency = freq;
-		  phase_increment_fractional = freq / 440.0 * (float)TABLE_SIZE / 109.25;
+		  phase_increment_fractional = freq / 440.0 * (float)TABLE_SIZE / (SAMPLE_RATE / 440.0f); //109.25;
       cycleLengthPerMS = frequency / 1000.0f;
     }
 	}
@@ -156,7 +172,7 @@ public:
 	/** Set the frequency via a MIDI pitch value 0 - 127 */
 	inline
 	void setPitch(float midi_pitch) {
-		setFreq(mtof(min(127.0f, max(0.0f,midi_pitch))));
+		setFreq(mtof(min(127.0f, max(0.0f,midi_pitch * (1 + (random(6)) * 0.00001f)))));
 	}
 
 	/** Set a specific phase increment. */
@@ -220,7 +236,7 @@ public:
   static void sawGen(int16_t * theTable) {
     int waveData [TABLE_SIZE];
     for (int i=0; i<TABLE_SIZE; i++) {
-      theTable[i] = (MAX_16 - i * (MAX_16 * 2 / TABLE_SIZE));
+      theTable[i] = (MAX_16 - i * (MAX_16 * 2 / TABLE_SIZE) * -1);
     }
   }
 
@@ -255,7 +271,7 @@ private:
 		  } else {
 		    phase_fractional -= TABLE_SIZE;
         // randomness destabilises pitch at the expense of some CPU load
-        phase_increment_fractional *= (1 + (rand(11) - 5) * 0.000001);
+        phase_increment_fractional *= (1 + (rand(9) - 4) * 0.000001);
 		  }
 		}
 	}

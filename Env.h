@@ -56,7 +56,10 @@ class Env {
       envStartTime = millis();
       peaked = false;
       envState = 1; // attack
-      releaseStartLevel = MAX_ENV_LEVEL;
+      JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (random(MAX_ENV_LEVEL * 0.3));
+      releaseStartLevel = JIT_MAX_ENV_LEVEL;
+      jitEnvRelease = envRelease + random(envRelease * 0.2);
+      jitEnvAttack = envAttack + random(envAttack * 0.2);
       next();
     }
 
@@ -96,12 +99,12 @@ class Env {
           break;
         case 1:
           // attack
-          if (elapsedTime <= envAttack) {
-            double aPercent = (millis() - envStartTime) / (double)envAttack;
-            envVal = (MAX_ENV_LEVEL - envVal) * aPercent + envVal;
-            return min(MAX_ENV_LEVEL, envVal);
+          if (elapsedTime <= jitEnvAttack) {
+            double aPercent = (millis() - envStartTime) / (double)jitEnvAttack;
+            envVal = (JIT_MAX_ENV_LEVEL - envVal) * aPercent + envVal;
+            return min(JIT_MAX_ENV_LEVEL, envVal);
           } else if (!peaked) {
-            envVal = MAX_ENV_LEVEL;
+            envVal = JIT_MAX_ENV_LEVEL;
             peaked = true;
             envState = 2; // go to hold
             return envVal;
@@ -109,7 +112,7 @@ class Env {
           break;
         case 2:
           // hold
-          if (envHold > 0 && elapsedTime <= envAttack + envHold) { // hold
+          if (envHold > 0 && elapsedTime <= jitEnvAttack + envHold) { // hold
             return envVal;
           } else {
             envState = 3; // go to decay
@@ -118,10 +121,10 @@ class Env {
           break;
         case 3:
           // decay
-          if (envDecay > 0 && elapsedTime <= envAttack + envHold + envDecay) { // decay
+          if (envDecay > 0 && elapsedTime <= jitEnvAttack + envHold + envDecay) { // decay
             //calulate and return envDecay value
-            double dPercent = (millis() - envStartTime - envAttack) / (double)envDecay;
-            envVal = (MAX_ENV_LEVEL - envSustain) * (1 - dPercent) + envSustain;
+            double dPercent = (millis() - envStartTime - jitEnvAttack) / (double)envDecay;
+            envVal = (JIT_MAX_ENV_LEVEL - envSustain) * (1 - dPercent) + envSustain;
             return envVal;
           } else {
             envState = 4; // go to sustain
@@ -141,8 +144,8 @@ class Env {
           break;
         case 5:
           // release
-          if (millis() < releaseStartTime + envRelease) {
-            double rPercent = pow(1.0f - (millis() - releaseStartTime) / (double)envRelease, 4); // exp
+          if (millis() < releaseStartTime + jitEnvRelease) {
+            double rPercent = pow(1.0f - (millis() - releaseStartTime) / (double)jitEnvRelease, 4); // exp
 //              float rPercent = 1.0f - (millis() - releaseStartTime) / (float)envRelease; // linear
             envVal = releaseStartLevel * rPercent;
             return envVal;
@@ -182,8 +185,10 @@ class Env {
 
   private:
     uint32_t MAX_ENV_LEVEL = MAX_16 - 1;
-    uint16_t envAttack, envHold, envDecay, envSustain = 0;
+    uint32_t JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
+    uint16_t jitEnvAttack, envAttack, envHold, envDecay, envSustain = 0;
     uint16_t envRelease = 600;
+    uint16_t jitEnvRelease = envRelease;
 //    bool releaseState = false;
     bool peaked = false;
     unsigned long envStartTime, releaseStartTime;
