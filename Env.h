@@ -101,7 +101,7 @@ class Env {
           // attack
           if (elapsedTime <= jitEnvAttack) {
             double aPercent = (millis() - envStartTime) / (double)jitEnvAttack;
-            envVal = (JIT_MAX_ENV_LEVEL - envVal) * aPercent + envVal;
+            envVal = (JIT_MAX_ENV_LEVEL - envVal) * aPercent + envVal; //min(1, (int)envVal);
             return min(JIT_MAX_ENV_LEVEL, envVal);
           } else if (!peaked) {
             envVal = JIT_MAX_ENV_LEVEL;
@@ -144,7 +144,7 @@ class Env {
           break;
         case 5:
           // release
-          if (millis() < releaseStartTime + jitEnvRelease) {
+          if (millis() < releaseStartTime + jitEnvRelease && abs((int)envVal) > 1) {
             double rPercent = pow(1.0f - (millis() - releaseStartTime) / (double)jitEnvRelease, 4); // exp
 //              float rPercent = 1.0f - (millis() - releaseStartTime) / (float)envRelease; // linear
             envVal = releaseStartLevel * rPercent;

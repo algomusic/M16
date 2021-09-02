@@ -12,13 +12,17 @@
  * M32 is licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
  */
 
+ #define SAMPLE_RATE 44100 // supports about 2x 2 osc voices at 48000, 3 x 3 osc voices at 22050
+ #define MAX_16 32767
+ #define MIN_16 -32767
+
 #include "driver/i2s.h"
 static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
 
 /* ESP32 I2S configuration structures */
 static const i2s_config_t i2s_config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-    .sample_rate = 44100,
+    .sample_rate = SAMPLE_RATE,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
     .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
     .communication_format = I2S_COMM_FORMAT_STAND_I2S,
@@ -38,11 +42,6 @@ static const i2s_pin_config_t pin_config = { // D1 mini, NodeMCU
     .data_in_num = I2S_PIN_NO_CHANGE                // we are not interested in I2S data into the ESP32
 };
 
-
-#define SAMPLE_RATE 48000 // supports about 2x 2 osc voices at 48000, 3 x 3 osc voices at 22050
-#define MAX_16 32767
-#define MIN_16 -32767
-
 const uint16_t TABLE_SIZE = 2048; //4096;
 
 //#define SINE 0
@@ -57,29 +56,10 @@ uint16_t prevWaveVal = 0;
 * audioUpdate function must be defined in your main file
 * In it, calulate the next sample data values for left and right channels
 * Typically using aOsc.next() or similar calls.
-* The function must end with i2s_write_lr(leftVal, rightVal);
+* Surround all code with a forever loop. RTOS handles threading.
+* The function must end with i2s_write_samples(leftVal, rightVal);
 */
-void audioUpdate();
-
-/** Setup audio output callback */
-/* create a hardware timer */
-// hw_timer_t * audioTimer = NULL;
-
-// bool fillAudio = false;
-//
-// void IRAM_ATTR onAudioTimer(){
-//   audioUpdate();
-//   // timerAlarmWrite(audioTimer, 20000, false);
-//   // fillAudio = true;
-// }
-
-// void ICACHE_RAM_ATTR onTimerISR() { //Code needs to be in IRAM because its a ISR
-//   while (!(i2s_is_full())) { //Don’t block the ISR if the buffer is full
-//     //i2s_write_sample(audioUpdate());
-//     audioUpdate();
-//   }
-//   timer1_write(1500);//Next callback in 2mS
-// }
+void audioUpdate(void * paramRequiredButNotUsed);
 
 /** Start the audio callback
  *  This function is typically called in setup() in the main file
@@ -88,14 +68,11 @@ void audioStart() {
   i2s_driver_install(i2s_num, &i2s_config, 0, NULL);        // ESP32 will allocated resources to run I2S
   i2s_set_pin(i2s_num, &pin_config);                        // Tell it the pins you will be using
   i2s_start(i2s_num); // not explicity necessary, called by install
-  // callback
-  // audioTimer = timerBegin(0, 80, true);
-  // timerAttachInterrupt(audioTimer, &onAudioTimer, true);
-  // timerAlarmWrite(audioTimer, 20000, true); // Set alarm to call onTimer function every 2 ms
-  // timerAlarmEnable(audioTimer); // start an alarm
+  // RTOS callback
+  xTaskCreatePinnedToCore(audioUpdate, "FillAudioBuffer", 1024, NULL, configMAX_PRIORITIES - 1, NULL, 0); // 2048 = memory, 1 = priorty, 1 = core
 }
 
-/* Combine smaples and send out via I2S */
+/* Combine left and right samples and send out via I2S */
 bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
   static size_t bytesWritten = 0;
   uint32_t value32Bit = ((uint32_t)leftSample/2 <<16) | ((uint32_t)rightSample/2 & 0xffff); // Output both left and right channels

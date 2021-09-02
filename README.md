@@ -1,7 +1,9 @@
 # M16
- Arduino Audio Library for ESP8266
+ Arduino Audio Library for ESP8266 and ESP32
 
  M16 is a 16-bit audio synthesis library for ESP microprocessors and I2S audio DACs/ADCs.
+
+ Include the M16.h file when using an ESP8266 or the M32.h file when using an ESP32.
 
  Designed for use with the Arduino IDE.
 

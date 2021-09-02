@@ -68,6 +68,11 @@ void audioStart() {
   timer1_write(1500);
 }
 
+/* Combine left and right samples and send out via I2S */
+bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+  i2s_write_lr(leftSample, rightSample);
+}
+
 /** Return freq from a MIDI pitch */
 float mtof(float midival) {
     float f = 0.0;

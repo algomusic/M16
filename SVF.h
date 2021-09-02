@@ -31,7 +31,7 @@ class SVF {
     void setResonance(float resonance) {
       q = (1.0 - max(0.1f, min(0.98f, resonance))) * 255;
       // q = sqrt(1.0 - atan(sqrt(resonance * 255)) * 2.0 / 3.1459); // alternative
-      scale = sqrt(resonance) * 255; //255;
+      scale = sqrt(max(0.1f, resonance)) * 255;
       // scale = sqrt(q) * 255; // alternative
     }
 
@@ -109,7 +109,7 @@ class SVF {
 
       void calcFilter(int input) {
         low += f * band;
-        high = ((int)(scale * input * 2) >> 8) - low - ((int)(q * band) >> 8);
+        high = ((scale * input) >> 7) - low - ((q * band) >> 8);
         band += f * high;
         notch = high + low;
       }

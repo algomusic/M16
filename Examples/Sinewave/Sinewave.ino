@@ -21,10 +21,11 @@ void loop() {
 }
 
 /* This function is required in all M16 programs 
-* to specify the sample values to be played
+* to specify the audio sample values to be played.
+* Always finish with i2s_write_samples()
 */
 void audioUpdate() {
   uint16_t leftVal = (aOsc1.next() * vol)>>10;
   uint16_t rightVal = leftVal;
-  i2s_write_lr(leftVal, rightVal);
+  i2s_write_samples(leftVal, rightVal);
 }
