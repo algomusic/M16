@@ -1,6 +1,7 @@
 // M16 plucked string and arpeggiator example
 
-#include "M16.h"
+#include "M16.h" // use this for ESP8266
+//#include "M32.h" // use this for ESP32
 #include "Osc.h"
 #include "Env.h"
 #include "FX.h"
@@ -19,7 +20,7 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println();Serial.println("M16 running");
-  noiseGen(noiseTable); aOsc1.setNoise(true); // fill wavetable and set noise flag
+  Osc::noiseGen(noiseTable); aOsc1.setNoise(true); // fill wavetable and set noise flag
   ampEnv1.setRelease(100);
   int newSet [] = {48, 52, 55, 58, 60, 64};
   arp1.setPitches(newSet, 6);

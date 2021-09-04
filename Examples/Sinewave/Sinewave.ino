@@ -1,5 +1,6 @@
 // M16 Sinewave example
-#include "M16.h"
+#include "M16.h" // use this for ESP8266
+//#include "M32.h" // use this for ESP32
 #include "Osc.h"
 
 int16_t sineTable [TABLE_SIZE]; // empty wavetable
