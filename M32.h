@@ -12,7 +12,7 @@
  * M32 is licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
  */
 
- #define SAMPLE_RATE 44100 // supports about 2x 2 osc voices at 48000, 3 x 3 osc voices at 22050
+ #define SAMPLE_RATE 48000 // supports about 2x 2 osc voices at 48000, 3 x 3 osc voices at 22050
  #define MAX_16 32767
  #define MIN_16 -32767
 
@@ -56,10 +56,16 @@ uint16_t prevWaveVal = 0;
 * audioUpdate function must be defined in your main file
 * In it, calulate the next sample data values for left and right channels
 * Typically using aOsc.next() or similar calls.
-* Surround all code with a forever loop. RTOS handles threading.
 * The function must end with i2s_write_samples(leftVal, rightVal);
 */
-void audioUpdate(void * paramRequiredButNotUsed);
+void audioUpdate();
+
+/** Function for RTOS tasks to fill audio buffer */
+void audioCallback(void * paramRequiredButNotUsed) {
+  for(;;) { // Looks ugly, but necesary. RTOS manages thread
+    audioUpdate();
+  }
+}
 
 /** Start the audio callback
  *  This function is typically called in setup() in the main file
@@ -69,7 +75,8 @@ void audioStart() {
   i2s_set_pin(i2s_num, &pin_config);                        // Tell it the pins you will be using
   i2s_start(i2s_num); // not explicity necessary, called by install
   // RTOS callback
-  xTaskCreatePinnedToCore(audioUpdate, "FillAudioBuffer", 1024, NULL, configMAX_PRIORITIES - 1, NULL, 0); // 2048 = memory, 1 = priorty, 1 = core
+  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 1024, NULL, configMAX_PRIORITIES - 1, NULL, 0); // 2048 = memory, 1 = priorty, 1 = core
+  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, NULL, 1);
 }
 
 /* Combine left and right samples and send out via I2S */
