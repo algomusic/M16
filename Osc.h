@@ -36,7 +36,8 @@ public:
 	inline
 	int16_t next() {
     int16_t sampVal = readTable();
-    if (sampVal < 0) sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)/2; // smooth
+    // if (sampVal < 0) sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth /2
+    sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
     prevSampVal = sampVal;
     incrementPhase();
     return sampVal;
@@ -73,6 +74,23 @@ public:
 	inline
   float getPhase() {
 		return phase_fractional;
+	}
+
+  /** Get a blend of this Osc and another.
+  * @param secondWaveTable - an wavetable array to morph with
+  * @param morphAmount - The balance (mix) of the second wavetable, 0.0 - 1.0
+  */
+	inline
+  int16_t nextMorph(int16_t * secondWaveTable, float morphAmount) {
+    int intMorphAmount = max(0, min (1024, (int)(1024 * morphAmount)));
+    int16_t sampVal = readTable();
+    int16_t sampVal2 = secondWaveTable[(int)phase_fractional];
+    if (morphAmount > 0) sampVal = (((int32_t)(sampVal2 * intMorphAmount) >> 10) +
+      ((int32_t)(sampVal * (1024 - intMorphAmount)) >> 10));
+    sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
+    prevSampVal = sampVal;
+    incrementPhase();
+    return sampVal;
 	}
 
   /** Phase Modulation (FM)
@@ -236,7 +254,7 @@ public:
   static void sawGen(int16_t * theTable) {
     int waveData [TABLE_SIZE];
     for (int i=0; i<TABLE_SIZE; i++) {
-      theTable[i] = (MAX_16 - i * (MAX_16 * 2 / TABLE_SIZE) * -1);
+      theTable[i] = (MAX_16 - i * (MAX_16 * 2 / TABLE_SIZE));
     }
   }
 
