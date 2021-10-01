@@ -1,7 +1,6 @@
 // M16 plucked string and arpeggiator example
 
-#include "M16.h" // use this for ESP8266
-//#include "M32.h" // use this for ESP32
+#include "M16.h"
 #include "Osc.h"
 #include "Env.h"
 #include "FX.h"

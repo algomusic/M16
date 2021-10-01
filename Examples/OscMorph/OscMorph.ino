@@ -1,6 +1,5 @@
 // M16 Oscillator morphing example
-#include "M16.h" // use this for ESP8266
-//#include "M32.h" // use this for ESP32
+#include "M16.h" 
 #include "Osc.h"
 
 int16_t sawTable [TABLE_SIZE]; // empty wavetable
