@@ -11,7 +11,9 @@
  *
  * M16 is licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
  */
-#include "Hardware_defines.h"
+// from "Hardware_defines.h" in Mozzi
+#define IS_ESP8266() (defined(ESP8266))
+#define IS_ESP32() (defined(ESP32))
 
 #if IS_ESP8266()
 #include <I2S.h>
@@ -130,12 +132,12 @@ float mtof(float midival) {
 
 /** Return left amount for a pan position 0.0-1.0 */
 float panLeft(float panVal) {
-  return cos(6.219 * panVal * 0.25);
+  return max(0.0, min(1.0, cos(6.219 * panVal * 0.25)));
 }
 
 /** Return right amount for a pan position 0.0-1.0 */
 float panRight(float panVal) {
-  return cos(6.219 * (panVal * 0.25 + 0.75));
+  return max(0.0, min(1.0, cos(6.219 * (panVal * 0.25 + 0.75))));
 }
 
 /** Return sigmond distributed value for value between 0.0-1.0 */
@@ -146,7 +148,6 @@ float sigmoid(float inVal) { // 0.0 to 1.0
     return max(0.2, pow(inVal * 2, 0.25) / 2.0f);
   }
 }
-
 
 // Rand from Mozzi library
 static unsigned long randX=132456789, randY=362436069, randZ=521288629;
