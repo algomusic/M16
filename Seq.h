@@ -174,6 +174,34 @@ class Seq {
 			} else return 250;
     }
 
+    /** Update the current BPM and
+    * Return the number of milliseconds between steps
+    * @param bpm The new tempo in beats per minute
+    */
+    inline
+    double setTempo(float bpm) {
+      double stepD;
+      if (bpm > 0) {
+        seqBPM = bpm;
+        stepD = calcStepDelta(bpm, sliceVal);
+      }
+      return stepD;
+    }
+
+    /** Update the seq length
+    * @param val The maximum number of steps in the sequence
+    */
+    inline void setMaxSize(int val) {
+      if (val > 0) seqMaxSize = val;
+    }
+
+    /** Update the seq length
+    * @param val The number of steps in the sequence
+    */
+    inline void setSize(int val) {
+      if (val > 0) seqSize = val;
+    }
+
   private:
     // int * seqValues;
     int * seqValues;
