@@ -8,7 +8,7 @@
  ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)
  Some I2S DAC boards also require other terminals to be grounded.
 
- Include the M16.h file when using an ESP8266 or the M32.h file when using an ESP32.
+ Always include the M16.h file and add a void AudioUpdate() function that ends with a call to i2s_write_samples(leftVal, rightVal).
 
  Designed for use with the Arduino IDE.
 
