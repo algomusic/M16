@@ -1,5 +1,5 @@
 // M16 Oscillator morphing example
-#include "M16.h" 
+#include "M16.h"
 #include "Osc.h"
 
 int16_t sawTable [TABLE_SIZE]; // empty wavetable
@@ -15,7 +15,6 @@ void setup() {
   Osc::sawGen(sawTable); // fill the wavetable
   Osc::triGen(triTable); // fill the wavetable
   aOsc1.setPitch(440);
-  lfo1.setFreq(2);
   audioStart();
 }
 
@@ -45,7 +44,7 @@ void loop() {
   }
 }
 
-/* This function is required in all M16 programs 
+/* This function is required in all M16 programs
 * to specify the audio sample values to be played.
 * Always finish with i2s_write_samples()
 */
