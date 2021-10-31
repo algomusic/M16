@@ -25,10 +25,13 @@ class FX {
 
     /** Wave Folding
     *  Fold clipped values
-    *  Pass in a signal and multiply its value beforehand to change fold depth
+    *  Pass in a signal and an amount to multiply its value by
+    * @param sample_in The next sample value
+    * @param amount The degree of amplifcation with is then folded; 1.0 +
     */
     inline
-    int16_t waveFold(int sample_in) {
+    int16_t waveFold(int sample_in, float amount) {
+      sample_in *= amount;
       while(abs(sample_in) > MAX_16) {
         if (sample_in > 0) sample_in = MAX_16 - (sample_in - MAX_16);
         if (sample_in < 0) sample_in = -MAX_16 - (sample_in + MAX_16);
@@ -38,7 +41,7 @@ class FX {
 
     /** Clipping
     *  Clip values outside max/min range
-    *  Pass in a signal and multiply its value beforehand to change fold depth
+    *  Pass in a signal
     */
     inline
     int16_t clip(int32_t sample_in) {
@@ -60,7 +63,7 @@ class FX {
       // if (samp > 26033) samp = min(MAX_16, 26033 + ((samp - 26033) >> 3));
       // if (samp < -26033) samp = max(-MAX_16, -26033 + ((samp + 26033) >> 3));
       // 2/pi * arctan(samp * depth) // 0.635748
-      int16_t samp = 20831 * atan(amount * (sample_in / (float)MAX_16)); 
+      int16_t samp = 20831 * atan(amount * (sample_in / (float)MAX_16));
       // int16_t samp = (sample_in / (float)MAX_16) * MAX_16;
       return samp;
     }
