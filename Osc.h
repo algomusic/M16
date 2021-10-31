@@ -95,13 +95,16 @@ public:
 
   /** Phase Modulation (FM)
    *  Pass in a second oscillator and multiply its value to change mod depth
-   *  Multiply incomming oscillator Depth between 0.0 - 1.0 (plus if required).
+   * @param modulator - The next sample from the modulating waveform
+   * @param modIndex - The depth value to amplify the modulator by.
+   * ModIndex values between 0.0 - 1.0 are normally enough, higher values are possible
+   * In Phase Mod, typically values 1/10th of FM ModIndex values provide equvalemnt change.
    */
   inline
-  int16_t phMod(int32_t phmod_proportion) {
+  int16_t phMod(int32_t modulator, float modIndex) {
+    modulator *= modIndex;
   	incrementPhase();
-    // >> 12 is just for M32 input, remove for M16 input - To DO - sort this out.
-    return table[(int16_t)(phase_fractional + (phmod_proportion >> 12)) & (TABLE_SIZE - 1)];
+    return table[(int16_t)(phase_fractional + (modulator >> 4)) & (TABLE_SIZE - 1)];
   }
 
   /** Ring Modulation
