@@ -51,6 +51,23 @@ class Seq {
       seqSize = size;
     }
 
+    /** Update the specified sequence step
+    * @param index The seq step to update
+    * @param val The new value for that step
+    */
+    inline
+    void setStepValue(int index, int val) {
+      if (index >=0 && index <= seqMaxSize) seqValues[index] = val;
+    }
+
+    /** Retrieve the specified sequence step value
+    * @param index The seq step to get
+    */
+    inline
+    int getStepValue(int index) {
+      if (index >=0 && index <= seqMaxSize) return seqValues[index];
+    }
+
     /** Change the sequence array which will be played.
   	* @param seqName The name of the array containing new seq data.
     * Must be the same size as the original table used when instantiated (16 by default).
