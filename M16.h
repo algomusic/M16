@@ -21,7 +21,7 @@
 #include "driver/i2s.h"
 static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
 #endif
-// #include "ESP8266WiFi.h"
+// ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)
 // ESP8266 I2S interface (D1 mini pins) BCLK->BCK (D8), I2SO->DOUT (RX), and LRCLK(WS)->LCK (D4) [SCK to GND on some boards]
 // #if not defined (SAMPLE_RATE)
 #define SAMPLE_RATE 48000 // supports about 2x 2 osc voices at 48000, 3 x 3 osc voices at 22050
