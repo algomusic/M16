@@ -125,7 +125,7 @@ class Seq {
       seqIndex = 0;
     }
 
-    /** Reset the sequence back to the first step*/
+    /** Set the sequence to the specified step*/
     inline
     void setStep(int newStep) {
       if( newStep >= 0 && newStep < seqMaxSize) {
