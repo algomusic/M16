@@ -24,7 +24,7 @@ static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
 // ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)
 // ESP8266 I2S interface (D1 mini pins) BCLK->BCK (D8), I2SO->DOUT (RX), and LRCLK(WS)->LCK (D4) [SCK to GND on some boards]
 // #if not defined (SAMPLE_RATE)
-#define SAMPLE_RATE 48000 // supports about 2x 2 osc voices at 48000, 3 x 3 osc voices at 22050
+#define SAMPLE_RATE 48000 // ESP8266 supports about 2x 2 osc voices at 48000, 3 x 3 osc voices at 22050
 #define MAX_16 32767
 #define MIN_16 -32767
 
@@ -43,29 +43,42 @@ void audioUpdate();
 
 #if IS_ESP8266()
 /** Setup audio output callback for ESP8266*/
+/*
 void ICACHE_RAM_ATTR onTimerISR() { //Code needs to be in IRAM because its a ISR
   while (!(i2s_is_full())) { //Don’t block the ISR if the buffer is full
     audioUpdate();
   }
   timer1_write(1500);//Next callback in 2mS
 }
-
+*/
 /** Start the audio callback
  *  This function is typically called in setup() in the main file
  */
+
 void audioStart() {
-  WiFi.forceSleepBegin(); // not necessary, but can't hurt
+  I2S.begin(I2S_PHILIPS_MODE, SAMPLE_RATE, 16);
+  // WiFi.forceSleepBegin(); // not necessary, but can't hurt
+  /*
   delay(1);
   i2s_rxtx_begin(true, true); // Enable I2S RX only
   i2s_set_rate(SAMPLE_RATE);
   timer1_attachInterrupt(onTimerISR); //Attach our sampling ISR
   timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
   timer1_write(1500);
+  */
 }
-
 /* Combine left and right samples and send out via I2S */
 bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
-  i2s_write_lr(leftSample, rightSample);
+  I2S.write((int32_t)(leftSample + MAX_16));
+  I2S.write((int32_t)(rightSample + MAX_16));
+  /*
+  uint32_t s = 0;
+  s |= 0xffff & leftSample;
+  s = rightSample & 0xffff;
+  i2s_write_sample(s);
+  */
+  // i2s_write_sample((uint32_t)leftSample + MAX_16);
+  // i2s_write_sample((uint32_t)rightSample + MAX_16);
 }
 
 #elif IS_ESP32()
@@ -109,6 +122,11 @@ void audioStart() {
   // RTOS callback
   xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 1024, NULL, configMAX_PRIORITIES - 1, NULL, 0); // 2048 = memory, 1 = priorty, 1 = core
   xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, NULL, 1);
+}
+
+/** Stop the audio callback */
+void audioStop() {
+  i2s_driver_uninstall(i2s_num); //stop & destroy i2s driver
 }
 
 /* Combine left and right samples and send out via I2S */
