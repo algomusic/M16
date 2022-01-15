@@ -112,6 +112,9 @@ void audioCallback(void * paramRequiredButNotUsed) {
   }
 }
 
+TaskHandle_t auidioCallback1Handle = NULL;
+TaskHandle_t auidioCallback2Handle = NULL;
+
 /** Start the audio callback
  *  This function is typically called in setup() in the main file
  */
@@ -120,13 +123,19 @@ void audioStart() {
   i2s_set_pin(i2s_num, &pin_config);                        // Tell it the pins you will be using
   i2s_start(i2s_num); // not explicity necessary, called by install
   // RTOS callback
-  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 1024, NULL, configMAX_PRIORITIES - 1, NULL, 0); // 2048 = memory, 1 = priorty, 1 = core
-  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, NULL, 1);
+  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback1Handle, 0); // 2048 = memory, 1 = priorty, 1 = core
+  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback2Handle, 1);
 }
 
-/** Stop the audio callback */
+/** Uninstall the audio driver and halt the audio callbacks */
 void audioStop() {
   i2s_driver_uninstall(i2s_num); //stop & destroy i2s driver
+  if(auidioCallback1Handle != NULL) {
+    vTaskDelete(auidioCallback1Handle);
+  }
+  if(auidioCallback2Handle != NULL) {
+    vTaskDelete(auidioCallback2Handle);
+  }
 }
 
 /* Combine left and right samples and send out via I2S */
