@@ -127,7 +127,7 @@ class Seq {
 
     /** Set the sequence to the specified step*/
     inline
-    void setStep(int newStep) {
+    void setToStep(int newStep) {
       if( newStep >= 0 && newStep < seqMaxSize) {
         seqIndex = newStep;
       }
@@ -135,7 +135,7 @@ class Seq {
 
     /** Return the current sequence step*/
     inline
-    int getStep() {
+    int getCurrStep() {
       return seqIndex;
     }
 
