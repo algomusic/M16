@@ -152,6 +152,7 @@ bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
 
 /** Return freq from a MIDI pitch */
 float mtof(float midival) {
+    midival = max(0.0f, min(127.0f, midival));
     float f = 0.0;
     if(midival) f = 8.1757989156 * pow(2.0, midival/12.0);
     return f;
@@ -172,7 +173,7 @@ float sigmoid(float inVal) { // 0.0 to 1.0
   if (inVal > 0.5) {
     return 0.5 + pow((inVal - 0.5)* 2, 4) / 2.0f;
   } else {
-    return max(0.2, pow(inVal * 2, 0.25) / 2.0f);
+    return max(0.0, pow(inVal * 2, 0.25) / 2.0f);
   }
 }
 
@@ -205,4 +206,15 @@ int rand(int maxval)
 {
   return (int) (((xorshift96() & 0xFFFF) * maxval)>>16);
 }
+
+/** Approximate Gausian Random
+* The values will tend to be near the middle of the range, midway between zero and maxVal
+@param maxVal The largest integer possible
+*/
+int gaussRand(int maxVal) {
+  int r1 = rand(maxVal + 1);
+  int r2 = rand(maxVal + 1);
+  return (r1 + r2) / 2;
+}
+
 // #endif /* M16_H_ */
