@@ -101,7 +101,7 @@ class Env {
           // attack
           if (elapsedTime <= jitEnvAttack) {
             double aPercent = (millis() - envStartTime) / (double)jitEnvAttack;
-            envVal = (JIT_MAX_ENV_LEVEL - envVal) * aPercent + envVal; //min(1, (int)envVal);
+            envVal = JIT_MAX_ENV_LEVEL * aPercent; 
             return min(JIT_MAX_ENV_LEVEL, envVal);
           } else if (!peaked) {
             envVal = JIT_MAX_ENV_LEVEL;
