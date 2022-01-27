@@ -57,7 +57,7 @@ class Env {
       peaked = false;
       envState = 1; // attack
       JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (random(MAX_ENV_LEVEL * 0.3));
-      releaseStartLevel = JIT_MAX_ENV_LEVEL;
+      releaseStartLevelDiff = JIT_MAX_ENV_LEVEL; // 0
       jitEnvRelease = envRelease + random(envRelease * 0.2);
       jitEnvAttack = envAttack + random(envAttack * 0.2);
       next();
@@ -76,7 +76,7 @@ class Env {
     void startRelease() {
       if (envState > 0 && envState < 5) {
 //        Serial.print("release - envVal is ");Serial.println(envVal);
-        releaseStartLevel = envVal;
+        releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
         releaseStartTime = millis();
         envState = 5; // release
       }
@@ -101,7 +101,7 @@ class Env {
           // attack
           if (elapsedTime <= jitEnvAttack) {
             double aPercent = (millis() - envStartTime) / (double)jitEnvAttack;
-            envVal = JIT_MAX_ENV_LEVEL * aPercent; 
+            envVal = JIT_MAX_ENV_LEVEL * aPercent;
             return min(JIT_MAX_ENV_LEVEL, envVal);
           } else if (!peaked) {
             envVal = JIT_MAX_ENV_LEVEL;
@@ -136,7 +136,7 @@ class Env {
           if (envSustain > 0) {// sustain
             return envSustain;
           } else {
-            releaseStartLevel = envVal;
+            releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
             releaseStartTime = millis();
             envState = 5; // go to release
             return envVal;
@@ -147,7 +147,7 @@ class Env {
           if (millis() < releaseStartTime + jitEnvRelease && abs((int)envVal) > 1) {
             double rPercent = pow(1.0f - (millis() - releaseStartTime) / (double)jitEnvRelease, 4); // exp
 //              float rPercent = 1.0f - (millis() - releaseStartTime) / (float)envRelease; // linear
-            envVal = releaseStartLevel * rPercent;
+            envVal = (JIT_MAX_ENV_LEVEL - releaseStartLevelDiff) * rPercent;
             return envVal;
           } else {
             envState = 0; // go to complete
@@ -175,6 +175,7 @@ class Env {
     inline
     void setMaxLevel(float level) {
       MAX_ENV_LEVEL = MAX_16 * level;
+      JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
     }
 
     /** Return the current maximum envelope value */
@@ -194,7 +195,7 @@ class Env {
     unsigned long envStartTime, releaseStartTime;
     uint32_t envVal = 0;
     uint32_t prevEnvVal = 0;
-    uint32_t releaseStartLevel = MAX_ENV_LEVEL;
+    uint32_t releaseStartLevelDiff = MAX_ENV_LEVEL; // 0?
 //    unsigned long rStart;
     int envState = 0; // complete = 0, attack = 1, hold = 2, decay = 3, sustain = 4, release = 5
 
