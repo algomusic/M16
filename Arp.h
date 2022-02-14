@@ -40,7 +40,7 @@ class Arp {
     void start() {
       arpIndex = 0;
       currOctave = 0;
-      upDownDirection = ARP_UP;
+      // upDownDirection = ARP_UP;
     }
 
     inline
