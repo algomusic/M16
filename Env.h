@@ -60,6 +60,7 @@ class Env {
       releaseStartLevelDiff = JIT_MAX_ENV_LEVEL; // 0
       jitEnvRelease = envRelease + random(envRelease * 0.2);
       jitEnvAttack = envAttack + random(envAttack * 0.2);
+      jitEnvDecay = envDecay + random(envDecay * 0.2);
       next();
     }
 
@@ -121,9 +122,9 @@ class Env {
           break;
         case 3:
           // decay
-          if (envDecay > 0 && elapsedTime <= jitEnvAttack + envHold + envDecay) { // decay
+          if (jitEnvDecay > 0 && elapsedTime <= jitEnvAttack + envHold + jitEnvDecay) { // decay
             //calulate and return envDecay value
-            double dPercent = pow((millis() - envStartTime - jitEnvAttack) / (double)envDecay, 4); // exp
+            double dPercent = pow((millis() - envStartTime - jitEnvAttack) / (double)jitEnvDecay, 4); // exp
             envVal = (JIT_MAX_ENV_LEVEL - envSustain) * (1 - dPercent) + envSustain;
             return envVal;
           } else {
@@ -187,7 +188,7 @@ class Env {
   private:
     uint32_t MAX_ENV_LEVEL = MAX_16 - 1;
     uint32_t JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
-    uint16_t jitEnvAttack, envAttack, envHold, envDecay, envSustain = 0;
+    uint16_t jitEnvAttack, envAttack, envHold, envDecay, jitEnvDecay, envSustain = 0;
     uint16_t envRelease = 600;
     uint16_t jitEnvRelease = envRelease;
 //    bool releaseState = false;
