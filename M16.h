@@ -24,7 +24,7 @@ static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
 // ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)
 // ESP8266 I2S interface (D1 mini pins) BCLK->BCK (D8), I2SO->DOUT (RX), and LRCLK(WS)->LCK (D4) [SCK to GND on some boards]
 // #if not defined (SAMPLE_RATE)
-#define SAMPLE_RATE 48000 // ESP8266 supports about 2x 2 osc voices at 48000, 3 x 3 osc voices at 22050
+#define SAMPLE_RATE 48000
 #define MAX_16 32767
 #define MIN_16 -32767
 
@@ -40,6 +40,7 @@ uint16_t prevWaveVal = 0;
 * Keep output vol to max 50% for mono MAX98357 which sums both channels!
 */
 void audioUpdate();
+// uint16_t leftSample, rightSample;
 
 #if IS_ESP8266()
 /** Setup audio output callback for ESP8266*/
@@ -51,35 +52,27 @@ void ICACHE_RAM_ATTR onTimerISR() { //Code needs to be in IRAM because its a ISR
   timer1_write(1500);//Next callback in 2mS
 }
 */
+
 /** Start the audio callback
  *  This function is typically called in setup() in the main file
  */
-
 void audioStart() {
   I2S.begin(I2S_PHILIPS_MODE, SAMPLE_RATE, 16);
-  // WiFi.forceSleepBegin(); // not necessary, but can't hurt
-  /*
-  delay(1);
-  i2s_rxtx_begin(true, true); // Enable I2S RX only
-  i2s_set_rate(SAMPLE_RATE);
-  timer1_attachInterrupt(onTimerISR); //Attach our sampling ISR
-  timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
-  timer1_write(1500);
-  */
+
+  // delay(1);
+  // i2s_rxtx_begin(true, true); // Enable I2S RX only
+  // i2s_set_rate(SAMPLE_RATE);
+  // timer1_attachInterrupt(onTimerISR); //Attach our sampling ISR
+  // timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
+  // timer1_write(1500);
+
 }
 /* Combine left and right samples and send out via I2S */
-bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
-  I2S.write((int32_t)(leftSample + MAX_16));
-  I2S.write((int32_t)(rightSample + MAX_16));
-  /*
-  uint32_t s = 0;
-  s |= 0xffff & leftSample;
-  s = rightSample & 0xffff;
-  i2s_write_sample(s);
-  */
-  // i2s_write_sample((uint32_t)leftSample + MAX_16);
-  // i2s_write_sample((uint32_t)rightSample + MAX_16);
+void IRAM_ATTR i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+    i2s_write_lr(leftSample, rightSample);
 }
+
+// end ESP8266 specific setup
 
 #elif IS_ESP32()
 /* ESP32 I2S configuration structures */
@@ -148,7 +141,7 @@ bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
       return true;
   } else return false;
 }
-#endif
+#endif // ESP32
 
 /** Return freq from a MIDI pitch */
 float mtof(float midival) {
