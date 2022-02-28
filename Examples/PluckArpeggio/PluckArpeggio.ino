@@ -33,6 +33,10 @@ void setup() {
 }
 
 void loop() {
+  #if IS_ESP8266()
+    audioUpdate(); //for ESP8266
+  #endif 
+  
   msNow = millis();
   
   if (msNow > stepTime) {
@@ -48,7 +52,12 @@ void loop() {
   }
 }
 
-// This function required in all M16 programs to specify the samples to be played
+/* The audioUpdate function is required in all M16 programs 
+* to specify the audio sample values to be played.
+* Always finish with i2s_write_samples()
+* For ESP32 programs this function is called in teh background
+* for ESP8266 programs a call to audioUpdate() is required in the loop() function.
+*/
 void audioUpdate() {
   int16_t leftVal = aEffect1.pluck((aOsc1.next() * ampEnv1.getValue() >> 16), aOsc1.getFreq(), 0.99);
   int16_t rightVal = leftVal;
