@@ -208,6 +208,19 @@ public:
 		isNoise = val;
 	}
 
+  /** Set using crackle waveform flag . */
+	inline
+	void setCrackle(bool val) {
+		isCrackle = val;
+	}
+
+  /** Set using crackle waveform flag . */
+	inline
+	void setCrackle(bool val, int amnt) {
+		isCrackle = val;
+    crackleAmnt = max(0, min(MAX_16, amnt));
+	}
+
  /** Below are helper methods for generating waveforms into existing arrays.
  * Call from class not instance. e.g. Osc::triGen(myWaveTableArray);
  * While it might be simpler to have each instance have its own wavetable,
@@ -231,7 +244,6 @@ public:
 
   /** Generate a triangle wave */
   static void triGen(int16_t * theTable) {
-    int16_t waveData [TABLE_SIZE];
     for (int i=0; i<TABLE_SIZE; i++) {
       if (i < TABLE_SIZE / 2) {
         theTable[i] = MAX_16 - i * (MAX_16 * 2.0f / TABLE_SIZE * 2.0f);
@@ -241,7 +253,6 @@ public:
 
   /** Generate a square/pulse wave */
   static void pulseGen(int16_t * theTable, float duty) { // 0.0 - 1.0, 0.5 = sqr
-    int16_t waveData [TABLE_SIZE];
     for(int i=0; i<TABLE_SIZE; i++) {
       if (i < TABLE_SIZE * duty) {
         theTable[i] = MAX_16;
@@ -255,7 +266,6 @@ public:
 
   /** Generate a sawtooth wave */
   static void sawGen(int16_t * theTable) {
-    int waveData [TABLE_SIZE];
     for (int i=0; i<TABLE_SIZE; i++) {
       theTable[i] = (MAX_16 - i * (MAX_16 * 2 / TABLE_SIZE));
     }
@@ -263,9 +273,16 @@ public:
 
   /** Generate white noise */
   static void noiseGen(int16_t * theTable) {
-    int16_t waveData [TABLE_SIZE];
     for(int i=0; i<TABLE_SIZE; i++) {
       theTable[i] = random(MAX_16 * 2) - MAX_16;
+    }
+  }
+
+  /** Generate crackle noise */
+  static void crackleGen(int16_t * theTable) {
+    theTable[0] = MAX_16;
+    for(int i=1; i<TABLE_SIZE; i++) {
+      theTable[i] = 0;
     }
   }
 
@@ -275,6 +292,8 @@ private:
 	const int16_t * table;
   int16_t prevSampVal = 0;
   bool isNoise = false;
+  bool isCrackle = false;
+  int crackleAmnt = 0;
   float frequency = 440;;
   int16_t prevParticle, particleEnv, particleThreshold = MAX_16 * 0.993;
   float particleEnvReleaseRate = 0.92; // thresh and rate = number of apparent particles
@@ -289,7 +308,11 @@ private:
 		if (phase_fractional > TABLE_SIZE) {
 		  if (isNoise) {
         phase_fractional = random(TABLE_SIZE);
-		  } else {
+		  } else if (isCrackle) {
+        if (rand(MAX_16) < crackleAmnt) {
+          phase_fractional = random(TABLE_SIZE);
+        } else phase_fractional = 1;
+      } else {
 		    phase_fractional -= TABLE_SIZE;
         // randomness destabilises pitch at the expense of some CPU load
         phase_increment_fractional *= (1 + (rand(9) - 4) * 0.000001);
