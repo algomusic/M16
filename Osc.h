@@ -35,11 +35,19 @@ public:
 	*/
 	inline
 	int16_t next() {
-    int16_t sampVal = readTable();
+    int32_t sampVal = readTable();
     // if (sampVal < 0) sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth /2
     sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
-    prevSampVal = sampVal;
+    // prevSampVal = sampVal;
     incrementPhase();
+    if (spread > 0){
+      int32_t spreadSamp1 = table[(int)phase_fractional_s1];
+      sampVal = (sampVal + spreadSamp1)>>1;
+      int32_t spreadSamp2 = table[(int)phase_fractional_s2];
+      sampVal = (sampVal + spreadSamp2)>>1;
+      incrementSpreadPhase();
+    }
+    prevSampVal = sampVal;
     return sampVal;
 	}
 
@@ -68,12 +76,20 @@ public:
 	inline
   void setPhase(float phase) {
 		phase_fractional = phase;
+    phase_fractional_s1 = phase;
+    phase_fractional_s2 = phase;
 	}
 
 	/** Get the phase of the Oscil in fractional format. */
 	inline
   float getPhase() {
 		return phase_fractional;
+	}
+
+  /** Set the spread value of the Oscil. Ranges from 0 to 1.0 */
+	inline
+  void setSpread(float newVal) {
+		spread = newVal;
 	}
 
   /** Get a blend of this Osc and another.
@@ -92,6 +108,16 @@ public:
     incrementPhase();
     return sampVal;
 	}
+
+  /** Get a window transform between this Osc and another wavetable.
+  * Inspired by the Window Transform Function by Dove Audio
+  * @param secondWaveTable - an wavetable array to transform with
+  * @param windowSize - The amount (mix) of the second wavetable to let through, 0.0 - 1.0
+  */
+	inline
+  int16_t nextWTrans(int16_t * secondWaveTable, float windowSize) {
+    // TBC - see https://dove-audio.com/wtf-module/
+  }
 
   /** Phase Modulation (FM)
    *  Pass in a second oscillator and multiply its value to change mod depth
@@ -180,6 +206,13 @@ public:
 		if (freq > 0) {
       frequency = freq;
 		  phase_increment_fractional = freq / 440.0 * (float)TABLE_SIZE / (SAMPLE_RATE / 440.0f); //109.25;
+      if (spread > 0) {
+        phase_increment_fractional_s1 = phase_increment_fractional * (1.0f + spread);
+        phase_increment_fractional_s2 = phase_increment_fractional * (1.0f - spread);
+      } else {
+        phase_increment_fractional_s1 = phase_increment_fractional;
+        phase_increment_fractional_s2 = phase_increment_fractional;
+      }
       cycleLengthPerMS = frequency / 1000.0f;
     }
 	}
@@ -194,6 +227,7 @@ public:
 	inline
 	void setPitch(float midi_pitch) {
 		setFreq(mtof(min(127.0f, max(0.0f,midi_pitch * (1 + (random(6)) * 0.00001f)))));
+    setPhase(0);
 	}
 
 	/** Set a specific phase increment. */
@@ -288,7 +322,12 @@ public:
 
 private:
   float phase_fractional = 0.0;
+  float spread = 0.0;
+  float phase_fractional_s1 = 0.0;
+  float phase_fractional_s2 = 0.0;
 	float phase_increment_fractional = 18.75;
+  float phase_increment_fractional_s1 = 18.75;
+  float phase_increment_fractional_s2 = 18.75;
 	const int16_t * table;
   int16_t prevSampVal = 0;
   bool isNoise = false;
@@ -319,6 +358,16 @@ private:
 		  }
 		}
 	}
+
+  /** Increments the phase of spread reads of the oscillator
+  * without returning a sample.*/
+	inline
+	void incrementSpreadPhase() {
+		phase_fractional_s1 += phase_increment_fractional_s1;
+    if (phase_fractional_s1 > TABLE_SIZE) phase_fractional_s1 -= TABLE_SIZE;
+    phase_fractional_s2 += phase_increment_fractional_s2;
+    if (phase_fractional_s2 > TABLE_SIZE) phase_fractional_s2 -= TABLE_SIZE;
+  }
 
 	/** Returns the current sample. */
 	inline
