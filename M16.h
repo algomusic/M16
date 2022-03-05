@@ -151,6 +151,20 @@ float mtof(float midival) {
     return f;
 }
 
+/** Return freq a chromatic interval away from base
+* @freqVal The base frequency in Htz
+* @interval The chromatic distance from the base in semitones, -12 to 12
+*/
+static float intervalRatios[] = {0.5, 0.53, 0.56, 0.595, 0.63, 0.665, 0.705, 0.75, 0.795, 0.84, 0.89, 0.945,
+  1, 1.06, 1.12, 1.19, 1.26, 1.33, 1.41, 1.5, 1.59, 1.68, 1.78, 1.89, 2}; // equal tempered
+// static float intervalRatios[] = {1, 1.067, 1.125, 1.2, 1.25, 1.33, 1.389, 1.5, 1.6, 1.67, 1.8, 1.875, 2}; // just
+
+float intervalFreq(float freqVal, int interval) {
+  float f = freqVal;
+  if (interval >= -12 && interval <= 12) f = freqVal * intervalRatios[(interval + 12)];
+  return f;
+}
+
 /** Return left amount for a pan position 0.0-1.0 */
 float panLeft(float panVal) {
   return max(0.0, min(1.0, cos(6.219 * panVal * 0.25)));
