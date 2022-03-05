@@ -1,9 +1,11 @@
 // M16 Spread example
 #include "M16.h" 
 #include "Osc.h"
+#include "SVF.h"
 
 int16_t waveTable [TABLE_SIZE]; // empty wavetable
 Osc aOsc1(waveTable);
+SVF filter;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow, pitchTime;
 int noteCnt = 0;
@@ -12,6 +14,7 @@ void setup() {
   Serial.begin(115200);
   Osc::sawGen(waveTable); // fill the wavetable
   aOsc1.setPitch(69);
+  filter.setCentreFreq(6000);
   audioStart();
 }
 
@@ -33,7 +36,7 @@ void loop() {
         aOsc1.setSpread(i1, i2);
       }
     }
-    int pitch = random(36) + 48;
+    int pitch = random(48) + 36;
     Serial.println(pitch);
     aOsc1.setPitch(pitch);
   }
@@ -46,7 +49,7 @@ void loop() {
 * for ESP8266 programs a call to audioUpdate() is required in the loop() function.
 */
 void audioUpdate() {
-  uint16_t leftVal = (aOsc1.next() * vol)>>10;
+  uint16_t leftVal = (filter.nextLPF(aOsc1.next()) * vol)>>10;
   uint16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }
