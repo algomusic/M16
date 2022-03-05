@@ -140,8 +140,16 @@ public:
   inline
   int16_t phMod(int32_t modulator, float modIndex) {
     modulator *= modIndex;
+    int32_t sampVal = table[(int16_t)(phase_fractional + (modulator >> 4)) & (TABLE_SIZE - 1)];
   	incrementPhase();
-    return table[(int16_t)(phase_fractional + (modulator >> 4)) & (TABLE_SIZE - 1)];
+    if (spread1 != 0) {
+      int32_t spreadSamp1 = table[(int)phase_fractional_s1];
+      sampVal = (sampVal + spreadSamp1)>>1;
+      int32_t spreadSamp2 = table[(int)phase_fractional_s2];
+      sampVal = (sampVal + spreadSamp2)>>1;
+      incrementSpreadPhase();
+    }
+    return sampVal;
   }
 
   /** Ring Modulation
