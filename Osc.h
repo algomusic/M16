@@ -40,7 +40,7 @@ public:
     sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
     // prevSampVal = sampVal;
     incrementPhase();
-    if (spread > 0){
+    if (spread1 != 0) {
       int32_t spreadSamp1 = table[(int)phase_fractional_s1];
       sampVal = (sampVal + spreadSamp1)>>1;
       int32_t spreadSamp2 = table[(int)phase_fractional_s2];
@@ -86,10 +86,21 @@ public:
 		return phase_fractional;
 	}
 
-  /** Set the spread value of the Oscil. Ranges from 0 to 1.0 */
+  /** Set the spread value of the Oscil.
+  * @newVal A multiplyer of the base freq, from 0 to 1.0, values near zero are best
+  */
 	inline
   void setSpread(float newVal) {
-		spread = newVal;
+		// spread = newVal;
+    spread1 = 1.0f + newVal;
+    spread2 = 1.0f - newVal;
+	}
+
+  /** Set the spread value of the Oscil. Ranges from 0 to 1.0 */
+	inline
+  void setSpread(int val1, int val2) {
+		spread1 = intervalRatios[val1 + 12]; //intervalFreq(frequency, val1);
+    spread2 = intervalRatios[val2 + 12]; //intervalFreq(frequency, val2);
 	}
 
   /** Get a blend of this Osc and another.
@@ -206,9 +217,9 @@ public:
 		if (freq > 0) {
       frequency = freq;
 		  phase_increment_fractional = freq / 440.0 * (float)TABLE_SIZE / (SAMPLE_RATE / 440.0f); //109.25;
-      if (spread > 0) {
-        phase_increment_fractional_s1 = phase_increment_fractional * (1.0f + spread);
-        phase_increment_fractional_s2 = phase_increment_fractional * (1.0f - spread);
+      if (spread1 != 0) {
+        phase_increment_fractional_s1 = phase_increment_fractional * spread1;
+        phase_increment_fractional_s2 = phase_increment_fractional * spread2;
       } else {
         phase_increment_fractional_s1 = phase_increment_fractional;
         phase_increment_fractional_s2 = phase_increment_fractional;
@@ -322,7 +333,8 @@ public:
 
 private:
   float phase_fractional = 0.0;
-  float spread = 0.0;
+  float spread1 = 0.0;
+  float spread2 = 0.0;
   float phase_fractional_s1 = 0.0;
   float phase_fractional_s2 = 0.0;
 	float phase_increment_fractional = 18.75;
