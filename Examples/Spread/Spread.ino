@@ -6,6 +6,7 @@ int16_t waveTable [TABLE_SIZE]; // empty wavetable
 Osc aOsc1(waveTable);
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow, pitchTime;
+int noteCnt = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -20,9 +21,19 @@ void loop() {
   #endif 
   msNow = millis();
   if (msNow > pitchTime) {
-    pitchTime = msNow + 2000;
-    aOsc1.setSpread(random(1000) * 0.00001);
-    int pitch = random(24) + 58;
+    pitchTime = msNow + 1000;
+    if (noteCnt++ % 4 == 0) {
+      if (random(2) == 0) {
+        Serial.println("Detune spread ");
+        aOsc1.setSpread(random(1000) * 0.00001); // close phase mod
+      } else { // chordal, up to one octave above or below
+        int i1 = random(25) - 12;
+        int i2 = random(25) - 12;
+        Serial.print("Chord spread ");Serial.print(i1);Serial.print(" ");Serial.println(i2);
+        aOsc1.setSpread(i1, i2);
+      }
+    }
+    int pitch = random(36) + 48;
     Serial.println(pitch);
     aOsc1.setPitch(pitch);
   }
