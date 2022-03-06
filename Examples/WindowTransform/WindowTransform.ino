@@ -23,6 +23,7 @@ void setup() {
   Osc::sawGen(sawtoothWave); // fill
   osc1.setPitch(48);
   lfo.setFreq(0.1); // Hertz
+//  osc1.setSpread(0.005);
   audioStart();
 }
 

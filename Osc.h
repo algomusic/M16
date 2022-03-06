@@ -38,7 +38,7 @@ public:
     int32_t sampVal = readTable();
     sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
     incrementPhase();
-    if (spread1 != 0) {
+    if (spread1 != 1) {
       sampVal = doSpread(sampVal);
     }
     prevSampVal = sampVal;
@@ -87,6 +87,7 @@ public:
 		// spread = newVal;
     spread1 = 1.0f + newVal;
     spread2 = 1.0f - newVal;
+    setFreq(getFreq());
 	}
 
   /** Set the spread value of the Oscil. Ranges from 0 to 1.0 */
@@ -110,7 +111,7 @@ public:
     sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
     prevSampVal = sampVal;
     incrementPhase();
-    if (spread1 != 0) {
+    if (spread1 != 1) {
       sampVal = doSpread(sampVal);
     }
     return sampVal;
@@ -120,10 +121,12 @@ public:
   * Inspired by the Window Transform Function by Dove Audio
   * @param secondWaveTable - an wavetable array to transform with
   * @param windowSize - The amount (mix) of the second wavetable to let through, 0.0 - 1.0
+  * @param duel - Use a duel window that can increase harmonicity
+  * @param duel - Invert the second wavefrom that can increase harmonicity
   */
 	inline
   int16_t nextWTrans(int16_t * secondWaveTable, float windowSize, bool duel, bool invert) {
-    // TBC - see https://dove-audio.com/wtf-module/
+    // see https://dove-audio.com/wtf-module/
     int halfTable = TABLE_SIZE / 2;
     int portion12 = halfTable * windowSize;
     int quarterTable = TABLE_SIZE / 4;
@@ -134,22 +137,43 @@ public:
       if (phase_fractional < (quarterTable - portion14) || (phase_fractional > (quarterTable + portion14) &&
           phase_fractional < (threeQuarterTable - portion14)) || phase_fractional > (threeQuarterTable + portion14)) {
         sampVal = readTable();
-      } else if (invert) {
-        sampVal = secondWaveTable[(int)phase_fractional] * -1;
-      } else sampVal = secondWaveTable[(int)phase_fractional];
+        if (spread1 != 1) {
+          sampVal = doSpread(sampVal);
+        }
+      } else {
+        sampVal = secondWaveTable[(int)phase_fractional];
+        if (invert) sampVal *= -1;
+        if (spread1 != 1) {
+          int32_t spreadSamp1 = secondWaveTable[(int)phase_fractional];
+          sampVal = (sampVal + spreadSamp1)>>1;
+          int32_t spreadSamp2 = secondWaveTable[(int)phase_fractional];
+          sampVal = (sampVal + spreadSamp2)>>1;
+          incrementSpreadPhase();
+        }
+      }
     } else {
       if (phase_fractional < (halfTable - portion12) || phase_fractional > (halfTable + portion12)) {
         sampVal = readTable();
-      } else if (invert) {
-        sampVal = secondWaveTable[(int)phase_fractional] * -1;
-      } else sampVal = secondWaveTable[(int)phase_fractional];
+        if (spread1 != 1) {
+          sampVal = doSpread(sampVal);
+        }
+      } else {
+        sampVal = secondWaveTable[(int)phase_fractional];
+        if (invert) sampVal *= -1;
+        if (spread1 != 1) {
+          int32_t spreadSamp1 = secondWaveTable[(int)phase_fractional];
+          sampVal = (sampVal + spreadSamp1)>>1;
+          int32_t spreadSamp2 = secondWaveTable[(int)phase_fractional];
+          sampVal = (sampVal + spreadSamp2)>>1;
+          incrementSpreadPhase();
+        }
+      }
     }
     sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
-    incrementPhase();
-    if (spread1 != 0) {
-      sampVal = doSpread(sampVal);
-    }
     prevSampVal = sampVal;
+    incrementPhase();
+
+
     return sampVal;
   }
 
@@ -165,7 +189,7 @@ public:
     modulator *= modIndex;
     int32_t sampVal = table[(int16_t)(phase_fractional + (modulator >> 4)) & (TABLE_SIZE - 1)];
   	incrementPhase();
-    if (spread1 != 0) {
+    if (spread1 != 1) {
       sampVal = doSpread(sampVal);
     }
     return sampVal;
@@ -180,7 +204,7 @@ public:
     incrementPhase();
     int32_t currSamp = readTable();
     int16_t sampVal = (currSamp * audioIn)>>15;
-    if (spread1 != 0) {
+    if (spread1 != 1) {
       sampVal = doSpread(sampVal);
     }
     return sampVal;
@@ -248,7 +272,7 @@ public:
 		if (freq > 0) {
       frequency = freq;
 		  phase_increment_fractional = freq / 440.0 * (float)TABLE_SIZE / (SAMPLE_RATE / 440.0f); //109.25;
-      if (spread1 != 0) {
+      if (spread1 != 1) {
         phase_increment_fractional_s1 = phase_increment_fractional * spread1;
         phase_increment_fractional_s2 = phase_increment_fractional * spread2;
       } else {
@@ -367,8 +391,8 @@ public:
 
 private:
   float phase_fractional = 0.0;
-  float spread1 = 0.0;
-  float spread2 = 0.0;
+  float spread1 = 1.0;
+  float spread2 = 1.0;
   float phase_fractional_s1 = 0.0;
   float phase_fractional_s2 = 0.0;
 	float phase_increment_fractional = 18.75;
@@ -427,7 +451,7 @@ private:
 		return table[ind];
 	}
 
-  /** Returns a particular sample. */
+  /** Returns a spread sample. */
 	inline
 	int16_t doSpread(int16_t sampVal) {
     int32_t spreadSamp1 = table[(int)phase_fractional_s1];
@@ -437,7 +461,6 @@ private:
     incrementSpreadPhase();
     return sampVal;
 	}
-
 };
 
 
