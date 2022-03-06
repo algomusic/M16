@@ -57,6 +57,7 @@ void loop() {
 
   if (msNow > envTime) {
     envTime = msNow + 11;
+    modEnv.next();
     modVal = modIndex * modEnv.getValue() / MAX_16;
   }
 }
