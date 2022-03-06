@@ -159,8 +159,8 @@ public:
   inline
   int16_t ringMod(int32_t audioIn) {
     incrementPhase();
-    int16_t currSamp = readTable();
-    return (currSamp * audioIn)>>16;
+    int32_t currSamp = readTable();
+    return (currSamp * audioIn)>>15;
   }
 
   /** PhISM Shaker model
