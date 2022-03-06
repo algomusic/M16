@@ -36,16 +36,10 @@ public:
 	inline
 	int16_t next() {
     int32_t sampVal = readTable();
-    // if (sampVal < 0) sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth /2
     sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
-    // prevSampVal = sampVal;
     incrementPhase();
     if (spread1 != 0) {
-      int32_t spreadSamp1 = table[(int)phase_fractional_s1];
-      sampVal = (sampVal + spreadSamp1)>>1;
-      int32_t spreadSamp2 = table[(int)phase_fractional_s2];
-      sampVal = (sampVal + spreadSamp2)>>1;
-      incrementSpreadPhase();
+      sampVal = doSpread(sampVal);
     }
     prevSampVal = sampVal;
     return sampVal;
@@ -57,7 +51,6 @@ public:
 	*/
 	inline
 	int16_t atTime(unsigned long ms) {
-    // float cycleLengthPerMS = frequency / 1000.0f;
     unsigned long indexAtTime = ms * cycleLengthPerMS * TABLE_SIZE;
     int index = indexAtTime % TABLE_SIZE;
     int16_t outSamp = readTableIndex(index);
@@ -117,6 +110,9 @@ public:
     sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
     prevSampVal = sampVal;
     incrementPhase();
+    if (spread1 != 0) {
+      sampVal = doSpread(sampVal);
+    }
     return sampVal;
 	}
 
@@ -126,8 +122,35 @@ public:
   * @param windowSize - The amount (mix) of the second wavetable to let through, 0.0 - 1.0
   */
 	inline
-  int16_t nextWTrans(int16_t * secondWaveTable, float windowSize) {
+  int16_t nextWTrans(int16_t * secondWaveTable, float windowSize, bool duel, bool invert) {
     // TBC - see https://dove-audio.com/wtf-module/
+    int halfTable = TABLE_SIZE / 2;
+    int portion12 = halfTable * windowSize;
+    int quarterTable = TABLE_SIZE / 4;
+    int threeQuarterTable = quarterTable * 3;
+    int portion14 = quarterTable * windowSize;
+    int16_t sampVal = 0;
+    if (duel) {
+      if (phase_fractional < (quarterTable - portion14) || (phase_fractional > (quarterTable + portion14) &&
+          phase_fractional < (threeQuarterTable - portion14)) || phase_fractional > (threeQuarterTable + portion14)) {
+        sampVal = readTable();
+      } else if (invert) {
+        sampVal = secondWaveTable[(int)phase_fractional] * -1;
+      } else sampVal = secondWaveTable[(int)phase_fractional];
+    } else {
+      if (phase_fractional < (halfTable - portion12) || phase_fractional > (halfTable + portion12)) {
+        sampVal = readTable();
+      } else if (invert) {
+        sampVal = secondWaveTable[(int)phase_fractional] * -1;
+      } else sampVal = secondWaveTable[(int)phase_fractional];
+    }
+    sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
+    incrementPhase();
+    if (spread1 != 0) {
+      sampVal = doSpread(sampVal);
+    }
+    prevSampVal = sampVal;
+    return sampVal;
   }
 
   /** Phase Modulation (FM)
@@ -143,11 +166,7 @@ public:
     int32_t sampVal = table[(int16_t)(phase_fractional + (modulator >> 4)) & (TABLE_SIZE - 1)];
   	incrementPhase();
     if (spread1 != 0) {
-      int32_t spreadSamp1 = table[(int)phase_fractional_s1];
-      sampVal = (sampVal + spreadSamp1)>>1;
-      int32_t spreadSamp2 = table[(int)phase_fractional_s2];
-      sampVal = (sampVal + spreadSamp2)>>1;
-      incrementSpreadPhase();
+      sampVal = doSpread(sampVal);
     }
     return sampVal;
   }
@@ -157,10 +176,14 @@ public:
   *  Multiplying incomming oscillator Depth between 0.5 - 2.0 is best.
   */
   inline
-  int16_t ringMod(int32_t audioIn) {
+  int16_t ringMod(int16_t audioIn) {
     incrementPhase();
     int32_t currSamp = readTable();
-    return (currSamp * audioIn)>>15;
+    int16_t sampVal = (currSamp * audioIn)>>15;
+    if (spread1 != 0) {
+      sampVal = doSpread(sampVal);
+    }
+    return sampVal;
   }
 
   /** PhISM Shaker model
@@ -289,7 +312,10 @@ public:
   }
 
   static void sinGen(int16_t * theTable) {
-    cosGen(theTable);
+    // cosGen(theTable);
+    for(int i=0; i<TABLE_SIZE; i++) {
+      theTable[i] = (sin(2 * 3.1459 * i / TABLE_SIZE) * MAX_16); //32767, 16383
+    }
   //  for(int i=0; i<TABLE_SIZE; i++) {
   //    theTable[i] = max(0, min(65534, (int)(cos(2 * 3.1459 * i / TABLE_SIZE) * 32767 + 32767))) >> 1;
   //  }
@@ -399,6 +425,17 @@ private:
 	inline
 	int16_t readTableIndex(int ind) {
 		return table[ind];
+	}
+
+  /** Returns a particular sample. */
+	inline
+	int16_t doSpread(int16_t sampVal) {
+    int32_t spreadSamp1 = table[(int)phase_fractional_s1];
+    sampVal = (sampVal + spreadSamp1)>>1;
+    int32_t spreadSamp2 = table[(int)phase_fractional_s2];
+    sampVal = (sampVal + spreadSamp2)>>1;
+    incrementSpreadPhase();
+    return sampVal;
 	}
 
 };
