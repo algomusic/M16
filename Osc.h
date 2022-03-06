@@ -381,6 +381,19 @@ public:
     }
   }
 
+  /** Generate grainly white noise
+  * @grainSize The number of samples each random value is held for
+  */
+  static void noiseGen(int16_t * theTable, int grainSize) {
+    int grainCnt = 0;
+    int randVal = random(MAX_16 * 2) - MAX_16;
+    for(int i=0; i<TABLE_SIZE; i++) {
+      theTable[i] = randVal;
+      grainCnt++;
+      if (grainCnt % grainSize == 0) randVal = random(MAX_16 * 2) - MAX_16;
+    }
+  }
+
   /** Generate crackle noise */
   static void crackleGen(int16_t * theTable) {
     theTable[0] = MAX_16;
