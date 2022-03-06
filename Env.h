@@ -164,7 +164,6 @@ class Env {
     /** Return the current envelope value */
     inline
     uint16_t getValue() {
-      next();
       uint16_t easeVal = (prevEnvVal * 4 + envVal)/5;
       prevEnvVal = easeVal;
       return prevEnvVal + envVal;
