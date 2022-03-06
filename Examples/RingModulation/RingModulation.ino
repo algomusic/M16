@@ -9,7 +9,7 @@ int16_t triangleWave [TABLE_SIZE]; // empty wavetable
 Osc osc1(triangleWave); // experiment with different waveform combinations
 Osc osc2(squareWave);
 
-unsigned long msNow, pitchTime;
+unsigned long msNow, modTime;
 float freqRatio = 0;
 
 void setup() {
@@ -26,8 +26,8 @@ void loop() {
     audioUpdate(); //for ESP8266
   #endif 
   msNow = millis();
-  if (msNow > pitchTime) {
-    pitchTime = msNow + 10;
+  if (msNow > modTime) {
+    modTime = msNow + 10;
     float freq1 = mtof(48);
     osc1.setFreq(freq1);
     float freq2 = freq1 * freqRatio;
