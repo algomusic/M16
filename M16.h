@@ -81,7 +81,8 @@ static const i2s_config_t i2s_config = {
     .sample_rate = SAMPLE_RATE,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
     .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-    .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB), //I2S_COMM_FORMAT_STAND_I2S,
+    // .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB), //ESP32 Arduino version 1
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S, // ESP32 Arduino version 2
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,       // high interrupt priority
     .dma_buf_count = 8,                             // 8 buffers
     .dma_buf_len = 64, //1024,                            // 1K per buffer, so 8K of buffer space
@@ -92,9 +93,9 @@ static const i2s_config_t i2s_config = {
 
 /* ESP32 I2S pin allocation */
 static const i2s_pin_config_t pin_config = { // D1 mini, NodeMCU
-    .bck_io_num = 25, //25,     // 25    // 8   // 6                     // The bit clock connectiom, goes to pin 27 of ESP32
-    .ws_io_num = 27, //27,      //27    // 6   // 4                // Word select, also known as word select or left right clock
-    .data_out_num = 12, //12,     //26   // 7   // 5            // Data out from the ESP32, connect to DIN on 38357A
+    .bck_io_num = 25, //25,  //C3 10   // 25    // 8   // 6                     // The bit clock connectiom, goes to pin 27 of ESP32
+    .ws_io_num = 27, //27,   //C3 8   //27    // 6   // 4                // Word select, also known as word select or left right clock
+    .data_out_num = 12, //12,  // C3 20   //26   // 7   // 5            // Data out from the ESP32, connect to DIN on 38357A
     .data_in_num = I2S_PIN_NO_CHANGE                // we are not interested in I2S data into the ESP32
 };
 
@@ -102,6 +103,7 @@ static const i2s_pin_config_t pin_config = { // D1 mini, NodeMCU
 void audioCallback(void * paramRequiredButNotUsed) {
   for(;;) { // Looks ugly, but necesary. RTOS manages thread
     audioUpdate();
+    yield();
   }
 }
 
@@ -117,7 +119,7 @@ void audioStart() {
   i2s_start(i2s_num); // not explicity necessary, called by install
   // RTOS callback
   xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback1Handle, 0); // 2048 = memory, 1 = priorty, 1 = core
-  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback2Handle, 1);
+  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 2, &auidioCallback2Handle, 1);
 }
 
 /** Uninstall the audio driver and halt the audio callbacks */
@@ -149,6 +151,26 @@ float mtof(float midival) {
     float f = 0.0;
     if(midival) f = 8.1757989156 * pow(2.0, midival/12.0);
     return f;
+}
+
+/** Return closest scale pitch to a given MIDI pitch
+* @pitch MIDI pitch number
+* @pitchClassSet an int array of chromatic values, 0-11, of size 12 (padded with zeros as required)
+* @key pitch class key, 0-11, where 0 = C root
+*/
+inline
+int pitchQuantize(int pitch, int * pitchClassSet, int key) {
+  for (int j=0; j<3; j++) {
+    int pitchClass = pitch%12;
+    bool adjust = true;
+    for (int i=0; i < 12; i++) {
+      if (pitchClass == pitchClassSet[i] + key) {
+        adjust = false;
+      }
+    }
+    if (adjust) pitch -= 1;
+  }
+  return pitch;
 }
 
 /** Return freq a chromatic interval away from base

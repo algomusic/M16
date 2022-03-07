@@ -65,7 +65,9 @@ class Seq {
     */
     inline
     int getStepValue(int index) {
-      if (index >=0 && index <= seqMaxSize) return seqValues[index];
+      if (index >=0 && index <= seqMaxSize) {
+        return seqValues[index];
+      } else return seqValues[0];
     }
 
     /** Change the sequence array which will be played.
