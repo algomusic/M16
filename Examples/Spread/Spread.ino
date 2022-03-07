@@ -27,8 +27,9 @@ void loop() {
     pitchTime = msNow + 1000;
     if (noteCnt++ % 4 == 0) {
       if (random(2) == 0) {
-        Serial.println("Detune spread ");
-        aOsc1.setSpread(random(1000) * 0.00001); // close phase mod
+        float detSpread = random(1000) * 0.00001;
+        Serial.print("Detune spread "); Serial.println(detSpread);
+        aOsc1.setSpread(detSpread); // close phase mod
       } else { // chordal, up to one octave above or below
         int i1 = random(25) - 12;
         int i2 = random(25) - 12;
