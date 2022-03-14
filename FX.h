@@ -15,6 +15,8 @@
 #ifndef FX_H_
 #define FX_H_
 
+#include "Del.h"
+
 class FX {
 
   public:
@@ -107,16 +109,89 @@ class FX {
       return aveOut;
     }
 
+    /** A simple reverb using recursive delay lines.
+    * Mono version that sums left and right channels
+    * @audioIn A mono audio signal
+    * Inspired by reverb example G08 in Pure Data.
+    */
+    inline
+    int16_t reverb(int16_t audioIn) {
+      // set up first time called
+      if (!reverbInitiated) {
+        initReverb();
+      }
+      processReverb(audioIn, audioIn);
+      return ((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11) + ((revP2 * reverbMix)>>11);
+    }
+
+    /** A simple reverb using recursive delay lines.
+    * Stereo version that takes two inputs (can be the same) and sets left and right channel outs
+    * @audioInLeft A mono audio signal
+    * @audioInRight A mono audio signal
+    * @audioOutLeft A mono audio destination variable for the left channel
+    * @audioOutRight A mono audio destination variable for the right channel
+    * Inspired by reverb example G08 in Pure Data.
+    */
+    inline
+    void reverbStereo(int16_t audioInLeft, int16_t audioInRight, int16_t &audioOutLeft, int16_t &audioOutRight) {
+      // set up first time called
+      if (!reverbInitiated) {
+        initReverb();
+      }
+      processReverb(audioInLeft, audioInRight);
+      audioOutLeft = ((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>10);
+      audioOutRight = ((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>10);
+    }
+
+    /** Set the reverb length
+    * @rLen The amount of feedback that effects reverb decay time. Values from 0 to 1024.
+    */
+    inline
+    void setReverbLength(int rLen) {
+      reverbLength = max(0, min(1024, rLen));
+    }
+
+    /** Set the reverb amount
+    * @rMix The balance between dry and wet signal. Amount of wet signal, from 0 to 1024.
+    */
+    inline
+    void setReverbMix(int rMix) {
+      reverbMix = max(0, min(1024, rMix));
+    }
+
   private:
     const static int16_t PLUCK_BUFFER_SIZE = 500;
     int pluckBuffer [PLUCK_BUFFER_SIZE];
     float pluck_buffer_write_index = 0;
     int prevPluckOutput = 0;
+    bool reverbInitiated = false;
+    int reverbLength = 900;
+    int reverbMix = 400; // use wet only by default?
+    Del delay1, delay2, delay3, delay4;
+    int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
 
     void initPluckBuffer() {
       for(int i=0; i<PLUCK_BUFFER_SIZE; i++) {
         pluckBuffer[i] = 0;
       }
+    }
+
+    void initReverb() {
+      delay1.setMaxDelayTime(61); delay2.setMaxDelayTime(72);
+      delay3.setMaxDelayTime(89); delay4.setMaxDelayTime(97);
+      delay1.setTime(60); delay1.setLevel(reverbLength); delay1.setFeedback(true);
+      delay2.setTime(71.9435); delay2.setLevel(reverbLength); delay2.setFeedback(true);
+      delay3.setTime(86.754); delay3.setLevel(reverbLength); delay3.setFeedback(true);
+      delay4.setTime(96.945); delay4.setLevel(reverbLength); delay4.setFeedback(true);
+      reverbInitiated = true;
+    }
+
+    void processReverb(int16_t audioInLeft, int16_t audioInRight) {
+      revD1 = delay1.read(); revD2 = delay2.read(); revD3 = delay3.read(); revD4 = delay4.read();
+      revP1 = audioInLeft + revD1; revP2 = audioInRight + revD2;
+      revP3 = (revP1 + revP2); revM3 = (revP1 - revP2); revP4 = (revD3 + revD4); revM4 = (revD3 - revD4);
+      revP5 = (revP3 + revP4)>>1; revP6 = (revM3 + revM4)>>1; revM5 = (revP3 - revP4)>>1; revM6 = (revM3 - revM4)>>1;
+      delay1.write(revP5); delay2.write(revP6); delay3.write(revM5); delay4.write(revM6);
     }
 };
 
