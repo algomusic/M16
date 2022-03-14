@@ -1,5 +1,5 @@
 /*
- * Oscil.h
+ * Osc.h
  *
  * A wavetable oscillator class. Contains generators for common wavetables.
  *
@@ -266,6 +266,19 @@ public:
   	return out;
   }
 
+  /** Glide toward the frequency of the oscillator in Hz.
+  * @freq The desired final value
+  * @amnt The percentage toward target (0.0 - 1.0)
+  */
+  inline
+	void slewFreq(float freq, float amnt) {
+		if (freq > 0 && amnt > 0 && amnt <= 1) {
+      float tempFreq = frequency;
+      setFreq(slew(frequency, freq, amnt));
+      prevFrequency = tempFreq;
+    }
+  }
+
 	/** Set the frequency of the oscillator in Hz. */
 	inline
 	void setFreq(float freq) {
@@ -293,7 +306,8 @@ public:
 	inline
 	void setPitch(float midi_pitch) {
 		setFreq(mtof(min(127.0f, max(0.0f,midi_pitch * (1 + (random(6)) * 0.00001f)))));
-    setPhase(0);
+    prevFrequency = frequency;
+    // setPhase(0); // do it manually for perc sounds if deseired
 	}
 
 	/** Set a specific phase increment. */
@@ -416,7 +430,8 @@ private:
   bool isNoise = false;
   bool isCrackle = false;
   int crackleAmnt = 0;
-  float frequency = 440;;
+  float frequency = 440;
+  float prevFrequency = 440;
   int16_t prevParticle, particleEnv, particleThreshold = MAX_16 * 0.993;
   float particleEnvReleaseRate = 0.92; // thresh and rate = number of apparent particles
   float feedback_phase_fractional = 0;
