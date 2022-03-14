@@ -23,21 +23,33 @@ private:
   float delayTime_ms = 0.0f;
   unsigned int delayTime_samples = 0;
   int16_t delayLevel = 1024; // 0 to 1024
-  float maxDelayTime_ms;
-  unsigned int delayBufferSize_samples;
+  float maxDelayTime_ms = 0;
+  unsigned int delayBufferSize_samples = 0;
   bool delayFeedback = 0;
+  int16_t prevOutValue = 0;
+  byte filtered = 1;
 
 public:
+  /** Constructor.
+	* Create but don't setup delay.
+  * To use, setMaxDecayTime() must be called to initiate the audio buffer.
+	*/
+	Del() {};
+
+  void setMaxDelayTime(unsigned int maxDelayTime) {
+    delete[] delayBuffer; // remove any previous memory allocation
+    maxDelayTime_ms = max((unsigned int)0, maxDelayTime);
+    delayBufferSize_samples = maxDelayTime_ms * SAMPLE_RATE * 0.001;
+    delayBuffer = new int16_t[delayBufferSize_samples]; // create a new audio buffer
+    for(int i=0; i<delayBufferSize_samples; i++) {
+      delayBuffer[i] = 0; // zero out the buffer
+    }
+  }
   /** Constructor.
 	@param maxDelayTime The size of the delay buffer, in milliseconds.
 	*/
 	Del(unsigned int maxDelayTime) {
-    maxDelayTime_ms = max((unsigned int)0, maxDelayTime);
-    delayBufferSize_samples = maxDelayTime_ms * SAMPLE_RATE * 0.001;
-    delayBuffer = new int16_t[delayBufferSize_samples];
-    for(int i=0; i<delayBufferSize_samples; i++) {
-      delayBuffer[i] = 0;
-    }
+    setMaxDelayTime(maxDelayTime);
   }
 
   ~Del() {
@@ -82,6 +94,11 @@ public:
     delayFeedback = state;
   }
 
+  /** Specify the degree of filtering of the delay signal, from 0 (none) to 4 (most dull) */
+  void setFiltered(byte newVal) {
+    if (newVal >= 0) filtered = newVal;
+  }
+
   /** Input a value to the delay and retrieve the signal delayed by delayTime milliseconds .
 	* @param inVal The signal input.
 	*/
@@ -105,6 +122,17 @@ public:
     int readPos = writePos - delayTime_samples;
     if (readPos < 0) readPos += delayBufferSize_samples;
     outValue = min(MAX_16, max(MIN_16, (int)delayBuffer[readPos]));
+    if(filtered > 0) {
+      if (filtered == 1) {
+        outValue = (outValue + outValue + outValue + prevOutValue)>>2; // smooth
+      } else if (filtered == 2) {
+        outValue = (outValue + prevOutValue)>>1; // smooth
+      } else if (filtered == 3) {
+        outValue = (outValue + prevOutValue + prevOutValue + prevOutValue)>>2; // smooth
+      } else outValue = (outValue + prevOutValue + prevOutValue + prevOutValue +
+          prevOutValue + prevOutValue + prevOutValue + prevOutValue)>>3; // smooth
+      prevOutValue = outValue;
+    }
     return (outValue * delayLevel)>>10;
   }
 
