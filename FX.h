@@ -57,7 +57,9 @@ class FX {
     * Pass in a signal and depth amount.
     * Output level can vary, so best to mix with original signal.
     * @param sample_in The next sample value
-    * @param amount The degree of clipping to be applied - 0 to 400 is a reasonable range
+    * @param amount The degree of clipping to be applied - 1 to 400 is a reasonable range
+    * From amount of 1.0 (neutral) upward to about 2.0 for some compression to
+    * about 3.0 for mild drive, to about 4 - 6 for noticiable overdrive, to 7 - 10 for distortion
     */
     inline
     int16_t softClip(int32_t sample_in, float amount) { // 14745, 13016
@@ -165,8 +167,8 @@ class FX {
     float pluck_buffer_write_index = 0;
     int prevPluckOutput = 0;
     bool reverbInitiated = false;
-    int reverbLength = 900;
-    int reverbMix = 400; // use wet only by default?
+    int reverbLength = 880; // 0 to 1024
+    int reverbMix = 270; // 0 to 1024
     Del delay1, delay2, delay3, delay4;
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
 
