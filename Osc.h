@@ -211,7 +211,7 @@ public:
   }
 
   /** PhISM Shaker model
-   *  Designed for Osc being set to a noise wavetable.
+   * Designed for Osc being set to a noise wavetable.
    * Uses some private hard coded params.
    * Envelope output and pass to one or more band pass filters or other resonator.
    */
@@ -243,7 +243,7 @@ public:
   }
 
   /** Frequency Modulation Feedback
-   * Designed for Osc being set to a sine waveform, but works with any.
+   * Designed for Osc being set to a sine waveform, but works with any waveform.
    * @modIndex amount of feedback applied, >=0 and useful < 100
    * Credit to description in The CMT (Roads 1996).
    */
@@ -272,7 +272,9 @@ public:
   */
   inline
 	void slewFreq(float freq, float amnt) {
-		if (freq > 0 && amnt > 0 && amnt <= 1) {
+    if (amnt == 0) {
+      setFreq(freq);
+		} else if (freq > 0 && amnt > 0 && amnt <= 1) {
       float tempFreq = frequency;
       setFreq(slew(frequency, freq, amnt));
       prevFrequency = tempFreq;
