@@ -50,8 +50,8 @@ class SVF {
     inline
     int nextLPF(int input) {
       calcFilter(input);
-      return max(-MAX_16, min(MAX_16, low)); // 65534, 32767
-//      return low;
+      // return max(-MAX_16, min(MAX_16, low)); // 65534, 32767
+     return low;
     }
 
     /** Calculate the next Highpass filter sample, given an input signal.
@@ -61,7 +61,8 @@ class SVF {
     inline
     int nextHPF(int input) {
       calcFilter(input);
-      return max(-MAX_16, min(MAX_16, high));
+      // return max(-MAX_16, min(MAX_16, high));
+      return high;
     }
 
     /** Calculate the next Bandpass filter sample, given an input signal.
@@ -71,8 +72,8 @@ class SVF {
     inline
     int nextBPF(int input) {
       calcFilter(input);
-      return max(-MAX_16, min(MAX_16, band));
-//       return max(-32767, min(32767, band));
+      // return max(-MAX_16, min(MAX_16, band));
+      return band;
     }
 
     /** Calculate the next Allpass filter sample, given an input signal.
