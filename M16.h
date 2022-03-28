@@ -27,6 +27,7 @@ static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
 #define SAMPLE_RATE 48000
 #define MAX_16 32767
 #define MIN_16 -32767
+#define MAX_16_INV 0.00003052
 
 const uint16_t TABLE_SIZE = 2048; //4096;
 
@@ -119,7 +120,7 @@ void audioStart() {
   i2s_start(i2s_num); // not explicity necessary, called by install
   // RTOS callback
   xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback1Handle, 0); // 2048 = memory, 1 = priorty, 1 = core
-  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 2, &auidioCallback2Handle, 1);
+  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback2Handle, 1);
 }
 
 /** Uninstall the audio driver and halt the audio callbacks */
@@ -198,12 +199,24 @@ float panRight(float panVal) {
 }
 
 /** Return sigmond distributed value for value between 0.0-1.0 */
+inline
 float sigmoid(float inVal) { // 0.0 to 1.0
   if (inVal > 0.5) {
     return 0.5 + pow((inVal - 0.5)* 2, 4) / 2.0f;
   } else {
     return max(0.0, pow(inVal * 2, 0.25) / 2.0f);
   }
+}
+
+/** Return a partial increment toward target from current value
+* @curr The curent value
+* @target The desired final value
+* @amt The percentage toward target (0.0 - 1.0)
+*/
+inline
+float slew(float curr, float target, float amt) {
+  float dist = target - curr;
+  return curr + dist * amt;
 }
 
 // Rand from Mozzi library
