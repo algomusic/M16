@@ -29,7 +29,8 @@ static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
 #define MIN_16 -32767
 #define MAX_16_INV 0.00003052
 
-const uint16_t TABLE_SIZE = 2048; //4096;
+const uint16_t TABLE_SIZE = 8192; //4096; // 2048 // 8192
+const uint16_t HALF_TABLE_SIZE = 4096; //1024;
 
 uint16_t prevWaveVal = 0;
 
