@@ -103,15 +103,19 @@ public:
 	* @param inVal The signal input.
 	*/
 	inline
-	int16_t next(int inValue) {
-    int16_t outValue = 0;
+	int16_t next(int32_t inValue) {
+    int32_t outValue = 0;
     if (delayTime_samples > 0) {
       outValue = read();
     }
     if (delayFeedback) {
       inValue = (inValue + outValue)>>1;
     }
+    if (inValue > MAX_16) inValue = MAX_16;
+    if (inValue < -MAX_16) inValue = -MAX_16;
     write(inValue);
+    if (outValue > MAX_16) outValue = MAX_16;
+    if (outValue < -MAX_16) outValue = -MAX_16;
     return outValue;
   }
 
