@@ -33,10 +33,12 @@ class FX {
     */
     inline
     int16_t waveFold(int sample_in, float amount) {
-      sample_in *= amount;
-      while(abs(sample_in) > MAX_16) {
-        if (sample_in > 0) sample_in = MAX_16 - (sample_in - MAX_16);
-        if (sample_in < 0) sample_in = -MAX_16 - (sample_in + MAX_16);
+      if (amount > 1.0) {
+        sample_in *= amount;
+        while(abs(sample_in) > MAX_16) {
+          if (sample_in > 0) sample_in = MAX_16 - (sample_in - MAX_16);
+          if (sample_in < 0) sample_in = -MAX_16 - (sample_in + MAX_16);
+        }
       }
       return sample_in;
     }
@@ -67,8 +69,9 @@ class FX {
       // if (samp > 26033) samp = min(MAX_16, 26033 + ((samp - 26033) >> 3));
       // if (samp < -26033) samp = max(-MAX_16, -26033 + ((samp + 26033) >> 3));
       // 2/pi * arctan(samp * depth) // 0.635748
-      int16_t samp = 20831 * atan(amount * (sample_in / (float)MAX_16));
+      int16_t samp = 20831 * atan(amount * (sample_in / (float)MAX_16)); // 20831
       // int16_t samp = (sample_in / (float)MAX_16) * MAX_16;
+      // if (samp > MAX_16 || samp < MIN_16) Serial.println(samp);
       return samp;
     }
 
