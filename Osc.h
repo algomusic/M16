@@ -127,7 +127,7 @@ public:
 	inline
   int16_t nextWTrans(int16_t * secondWaveTable, float windowSize, bool duel, bool invert) {
     // see https://dove-audio.com/wtf-module/
-    int halfTable = TABLE_SIZE / 2;
+    int halfTable = HALF_TABLE_SIZE;
     int portion12 = halfTable * windowSize;
     int quarterTable = TABLE_SIZE / 4;
     int threeQuarterTable = quarterTable * 3;
@@ -211,22 +211,6 @@ public:
   }
 
   /** PhISM Shaker model
-   * Designed for Osc being set to a noise wavetable.
-   * Uses some private hard coded params.
-   * Envelope output and pass to one or more band pass filters or other resonator.
-   */
-  inline
-  int16_t particle() {
-    int32_t noiseVal = readTable();
-  	if (noiseVal > particleThreshold) {
-  		particleEnv = noiseVal - (MAX_16 - noiseVal) - (MAX_16 - noiseVal);
-  	} else particleEnv *= particleEnvReleaseRate;
-  	incrementPhase();
-  	noiseVal = (prevParticle + noiseVal + noiseVal)/3;
-    return (noiseVal * particleEnv) >> 16;
-  }
-
-  /** PhISM Shaker model
    * Designed for Osc being set to a noise wavetable.
    * @param thresh The amount of aparent particles. Typically 0.9 - 0.999
    * Envelope output and pass to one or more band pass filters or other resonator.
@@ -240,6 +224,23 @@ public:
     incrementPhase();
     noiseVal = (prevParticle + noiseVal + noiseVal)/3;
     return (noiseVal * particleEnv) >> 16;
+  }
+
+  /** PhISM Shaker model
+   * Designed for Osc being set to a noise wavetable.
+   * Uses some private hard coded params.
+   * Envelope output and pass to one or more band pass filters or other resonator.
+   */
+  inline
+  int16_t particle() {
+    return particle(particleThreshold);
+    // int32_t noiseVal = readTable();
+  	// if (noiseVal > particleThreshold) {
+  	// 	particleEnv = noiseVal - (MAX_16 - noiseVal) - (MAX_16 - noiseVal);
+  	// } else particleEnv *= particleEnvReleaseRate;
+  	// incrementPhase();
+  	// noiseVal = (prevParticle + noiseVal + noiseVal)/3;
+    // return (noiseVal * particleEnv) >> 16;
   }
 
   /** Frequency Modulation Feedback
@@ -286,7 +287,11 @@ public:
 	void setFreq(float freq) {
 		if (freq > 0) {
       frequency = freq;
-		  phase_increment_fractional = freq / 440.0 * (float)TABLE_SIZE / (SAMPLE_RATE / 440.0f); //109.25;
+		  phase_increment_fractional = freq / 440.0f * (float)TABLE_SIZE / (SAMPLE_RATE / 440.0f);
+      if (pulseWidthOn) {
+        phase_increment_fractional_w1 = phase_increment_fractional * 0.5 / pulseWidth;
+        phase_increment_fractional_w2 = phase_increment_fractional * 0.5 / (1.0 - pulseWidth);
+      }
       if (spread1 != 1) {
         phase_increment_fractional_s1 = phase_increment_fractional * spread1;
         phase_increment_fractional_s2 = phase_increment_fractional * spread2;
@@ -304,38 +309,57 @@ public:
 		return frequency;
 	}
 
-	/** Set the frequency via a MIDI pitch value 0 - 127 */
+	/** Set the frequency via a MIDI pitch
+  * @ midiPitch The pitch, value 0 - 127
+  */
 	inline
 	void setPitch(float midi_pitch) {
-		setFreq(mtof(min(127.0f, max(0.0f,midi_pitch * (1 + (random(6)) * 0.00001f)))));
+		setFreq(mtof(min(127.0f, max(0.0f, midi_pitch * (1 + (random(6)) * 0.00001f)))));
     prevFrequency = frequency;
-    // setPhase(0); // do it manually for perc sounds if deseired
 	}
 
-	/** Set a specific phase increment. */
+	/** Set a specific phase increment.
+  * phaseinc_fractional, value between 0.0 to 1.0
+  */
 	inline
 	void setPhaseInc(float phaseinc_fractional) {
 		phase_increment_fractional = phaseinc_fractional;
 	}
 
-	/** Set using noise waveform flag . */
+	/** Set using noise waveform flag.
+  * @val Is true or false
+  */
 	inline
 	void setNoise(bool val) {
 		isNoise = val;
 	}
 
-  /** Set using crackle waveform flag . */
+  /** Set using crackle waveform flag.
+  * @val Is true or false
+  */
 	inline
 	void setCrackle(bool val) {
 		isCrackle = val;
 	}
 
-  /** Set using crackle waveform flag . */
+  /** Set using crackle waveform flag.
+  * @val Is true or false
+  * @amnt Spareness of impulse in samples, from 1 to MAX_16
+  */
 	inline
 	void setCrackle(bool val, int amnt) {
 		isCrackle = val;
-    crackleAmnt = max(0, min(MAX_16, amnt));
+    crackleAmnt = max(1, min(MAX_16, amnt));
 	}
+
+  /** Set using pulse width for the waveform
+  * @width The cycle amount for the first half of the wave - 0.0 to 1.0
+  */
+	inline
+	void setPulseWidth(float width) {
+    pulseWidthOn = true;
+    pulseWidth = max(0.25f, min(0.75f, width));
+  }
 
  /** Below are helper methods for generating waveforms into existing arrays.
  * Call from class not instance. e.g. Osc::triGen(myWaveTableArray);
@@ -344,34 +368,40 @@ public:
  * main program file and reference them from instances of this class.
  */
 
-  /** Generate a cosine wave */
+  /** Generate a cosine wave
+  * @theTable The the wavetable to be filled
+  */
   static void cosGen(int16_t * theTable) {
     for(int i=0; i<TABLE_SIZE; i++) {
       theTable[i] = (cos(2 * 3.1459 * i / TABLE_SIZE) * MAX_16); //32767, 16383
     }
   }
 
+  /** Generate a sine wave
+  * @theTable The the wavetable to be filled
+  */
   static void sinGen(int16_t * theTable) {
-    // cosGen(theTable);
     for(int i=0; i<TABLE_SIZE; i++) {
       theTable[i] = (sin(2 * 3.1459 * i / TABLE_SIZE) * MAX_16); //32767, 16383
     }
-  //  for(int i=0; i<TABLE_SIZE; i++) {
-  //    theTable[i] = max(0, min(65534, (int)(cos(2 * 3.1459 * i / TABLE_SIZE) * 32767 + 32767))) >> 1;
-  //  }
   }
 
-  /** Generate a triangle wave */
+  /** Generate a triangle wave
+  * @theTable The the wavetable to be filled
+  */
   static void triGen(int16_t * theTable) {
     for (int i=0; i<TABLE_SIZE; i++) {
-      if (i < TABLE_SIZE / 2) {
+      if (i < HALF_TABLE_SIZE) {
         theTable[i] = MAX_16 - i * (MAX_16 * 2.0f / TABLE_SIZE * 2.0f);
-      } else theTable[i] = MIN_16 + (i - TABLE_SIZE / 2.0f) * (MAX_16 * 2.0f / TABLE_SIZE * 2.0f);
+      } else theTable[i] = MIN_16 + (i - (float)HALF_TABLE_SIZE) * (MAX_16 * 2.0f / TABLE_SIZE * 2.0f);
     }
   }
 
-  /** Generate a square/pulse wave */
-  static void pulseGen(int16_t * theTable, float duty) { // 0.0 - 1.0, 0.5 = sqr
+  /** Generate a square/pulse wave
+  * @theTable The the wavetable to be filled
+  * @duty The duty cycle, or pulse width, 0.0 - 1.0, 0.5 = sqr
+  */
+  static void pulseGen(int16_t * theTable, float duty) {
     for(int i=0; i<TABLE_SIZE; i++) {
       if (i < TABLE_SIZE * duty) {
         theTable[i] = MAX_16;
@@ -379,25 +409,33 @@ public:
     }
   }
 
+  /** Generate a square wave
+  * @theTable The the wavetable to be filled
+  */
   static void sqrGen(int16_t * theTable) {
     pulseGen(theTable, 0.5);
   }
 
-  /** Generate a sawtooth wave */
+  /** Generate a sawtooth wave
+  * @theTable The the wavetable to be filled
+  */
   static void sawGen(int16_t * theTable) {
     for (int i=0; i<TABLE_SIZE; i++) {
       theTable[i] = (MAX_16 - i * (MAX_16 * 2 / TABLE_SIZE));
     }
   }
 
-  /** Generate white noise */
+  /** Generate white noise
+  * @theTable The the wavetable to be filled
+  */
   static void noiseGen(int16_t * theTable) {
     for(int i=0; i<TABLE_SIZE; i++) {
       theTable[i] = random(MAX_16 * 2) - MAX_16;
     }
   }
 
-  /** Generate grainly white noise
+  /** Generate grainly white noise, like a sample and hold wave
+  * @theTable The the wavetable to be filled
   * @grainSize The number of samples each random value is held for
   */
   static void noiseGen(int16_t * theTable, int grainSize) {
@@ -410,7 +448,9 @@ public:
     }
   }
 
-  /** Generate crackle noise */
+  /** Generate crackle noise
+  * @theTable The the wavetable to be filled
+  */
   static void crackleGen(int16_t * theTable) {
     theTable[0] = MAX_16;
     for(int i=1; i<TABLE_SIZE; i++) {
@@ -427,6 +467,8 @@ private:
 	float phase_increment_fractional = 18.75;
   float phase_increment_fractional_s1 = 18.75;
   float phase_increment_fractional_s2 = 18.75;
+  float phase_increment_fractional_w1 = phase_increment_fractional;
+  float phase_increment_fractional_w2 = phase_increment_fractional;
 	const int16_t * table;
   int16_t prevSampVal = 0;
   bool isNoise = false;
@@ -434,7 +476,9 @@ private:
   int crackleAmnt = 0;
   float frequency = 440;
   float prevFrequency = 440;
-  int16_t prevParticle, particleEnv, particleThreshold = MAX_16 * 0.993;
+  float pulseWidth = 0.5;
+  bool pulseWidthOn = false;
+  int16_t prevParticle, particleEnv, particleThreshold = 0.993; //MAX_16 * 0.993;
   float particleEnvReleaseRate = 0.92; // thresh and rate = number of apparent particles
   float feedback_phase_fractional = 0;
   float testVal = 1.3;
@@ -443,7 +487,11 @@ private:
   /** Increments the phase of the oscillator without returning a sample.*/
 	inline
 	void incrementPhase() {
-		phase_fractional += phase_increment_fractional;
+    if (pulseWidthOn) {
+      if (phase_fractional < HALF_TABLE_SIZE) {
+        phase_fractional += phase_increment_fractional_w1;
+      } else phase_fractional += phase_increment_fractional_w2;
+    } else phase_fractional += phase_increment_fractional;
 		if (phase_fractional > TABLE_SIZE) {
 		  if (isNoise) {
         phase_fractional = random(TABLE_SIZE);
@@ -455,6 +503,10 @@ private:
 		    phase_fractional -= TABLE_SIZE;
         // randomness destabilises pitch at the expense of some CPU load
         phase_increment_fractional *= (1 + (rand(9) - 4) * 0.000001);
+        if (pulseWidthOn) {
+          phase_increment_fractional_w1 = phase_increment_fractional * 0.5 / pulseWidth;
+          phase_increment_fractional_w2 = phase_increment_fractional * 0.5 / (1.0 - pulseWidth);
+        }
 		  }
 		}
 	}
@@ -472,7 +524,7 @@ private:
 	/** Returns the current sample. */
 	inline
 	int16_t readTable() {
-		return table[(int)phase_fractional];
+    return table[(int)(phase_fractional)];
 	}
 
 	/** Returns a particular sample. */
