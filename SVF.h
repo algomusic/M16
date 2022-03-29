@@ -37,7 +37,7 @@ class SVF {
 
     /** Set the centre or corner frequency of the filter.
     @param centre_freq 40 - 11k Hz (SAMPLE_RATE/4). */
-    void setCentreFreq(int centre_freq) {
+    void setCentreFreq(int32_t centre_freq) {
       centre_freq = max(40, min(SAMPLE_RATE/4, (int)(centre_freq - random(centre_freq * 0.05))));
       f = 2 * sin(3.1459 * centre_freq / SAMPLE_RATE);
       int centFreq = centre_freq;
@@ -48,10 +48,10 @@ class SVF {
      *  Needs to use int rather than uint16_t for some reason(?)
      */
     inline
-    int nextLPF(int input) {
+    int16_t nextLPF(int32_t input) {
       calcFilter(input);
-      // return max(-MAX_16, min(MAX_16, low)); // 65534, 32767
-     return low;
+      return max(-MAX_16, min(MAX_16, low)); // 65534, 32767
+     // return low;
     }
 
     /** Calculate the next Highpass filter sample, given an input signal.
@@ -59,10 +59,10 @@ class SVF {
      *  Needs to use int rather than uint16_t for some reason(?)
      */
     inline
-    int nextHPF(int input) {
+    int16_t nextHPF(int32_t input) {
       calcFilter(input);
-      // return max(-MAX_16, min(MAX_16, high));
-      return high;
+      return max(-MAX_16, min(MAX_16, high));
+      // return high;
     }
 
     /** Calculate the next Bandpass filter sample, given an input signal.
@@ -70,10 +70,10 @@ class SVF {
      *  Needs to use int rather than uint16_t for some reason(?)
      */
     inline
-    int nextBPF(int input) {
+    int16_t nextBPF(int32_t input) {
       calcFilter(input);
-      // return max(-MAX_16, min(MAX_16, band));
-      return band;
+      return max(-MAX_16, min(MAX_16, band));
+      // return band;
     }
 
     /** Calculate the next Allpass filter sample, given an input signal.
@@ -81,12 +81,12 @@ class SVF {
      *  Perhaps not technically a state variable filter, but...
      */
     inline
-    int nextAllpass(int input) {
+    int16_t nextAllpass(int32_t input) {
       // y = x + x(t-1) - y(t-1)
-      int output = input + allpassPrevIn - allpassPrevOut;
+      int32_t output = input + allpassPrevIn - allpassPrevOut;
       allpassPrevIn = input;
       allpassPrevOut = output;
-      return output;
+      return max(-MAX_16, min(MAX_16, output));
     }
 
     /** Calculate the next Notch filter sample, given an input signal.
@@ -94,21 +94,21 @@ class SVF {
      *  Needs to use int rather than uint16_t for some reason(?)
      */
     inline
-    int nextNotch(int input) {
+    int16_t nextNotch(int32_t input) {
       calcFilter(input);
       return max(-MAX_16, min(MAX_16, notch));
     }
 
     private:
-      int low, band, high, notch, allpassPrevIn, allpassPrevOut;
+      int32_t low, band, high, notch, allpassPrevIn, allpassPrevOut;
 //       float q = 1.0;
-      int q = 255;
+      int32_t q = 255;
 //       float scale;
-      int scale = sqrt(1) * 255;
+      int32_t scale = sqrt(1) * 255;
       volatile float f = SAMPLE_RATE / 4;
-      int centFreq = 10000;
+      int32_t centFreq = 10000;
 
-      void calcFilter(int input) {
+      void calcFilter(int32_t input) {
         low += f * band;
         high = ((scale * input) >> 7) - low - ((q * band) >> 8);
         band += f * high;
