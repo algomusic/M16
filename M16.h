@@ -260,4 +260,19 @@ int gaussRand(int maxVal) {
   return (r1 + r2) / 2;
 }
 
+/** Approximate Chaotic Random number generator
+* The output values will between 0 and range
+* Range of 1 provides 2 attractor oscillation, other value provide more diversity
+* @param range The largest value possible
+* Algorithm by Roger Luebeck  2000, 2017
+*  https://chaos-equations.com/index.htm
+*/
+float prevChaosRandVal = 0.5;
+
+float chaosRand(float range) {
+  float chaosRandVal = range * sin(3.1459 * prevChaosRandVal);
+  prevChaosRandVal = chaosRandVal;
+  return chaosRandVal * 0.5 + range * 0.5;
+}
+
 // #endif /* M16_H_ */
