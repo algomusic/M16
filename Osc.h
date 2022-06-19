@@ -58,7 +58,7 @@ public:
   }
 
 	/** Change the sound table which will be played by the Oscil.
-	@param TABLE_NAME is the name of the array. Must be the same size as the original table used when instantiated.
+	* @param TABLE_NAME is the name of the array. Must be the same size as the original table used when instantiated.
 	*/
   inline
 	void setTable(const int16_t * TABLE_NAME) {
@@ -455,6 +455,18 @@ public:
     theTable[0] = MAX_16;
     for(int i=1; i<TABLE_SIZE; i++) {
       theTable[i] = 0;
+    }
+  }
+
+  /** Generate colored noise
+  * @theTable The the wavetable to be filled
+  * @deviation The maximum change from one sample to the next, 0 to MAX_16
+  */
+  static void colorGen(int16_t * theTable, int deviation) {
+    int val = 0;
+    for(int i=0; i<TABLE_SIZE; i++) {
+      val += gaussRand(deviation) - deviation/2;
+      theTable[i] = max(MIN_16, min(MAX_16, val));
     }
   }
 
