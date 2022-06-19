@@ -23,6 +23,7 @@ class FX {
     /** Constructor. */
     FX() {
       initPluckBuffer();
+      initShapeTable();
     }
 
     /** Wave Folding
@@ -87,6 +88,26 @@ class FX {
       if (sample_in < -26033) sample_in = (sample_in * -1 * ((float)MAX_16/((thresh+MAX_16)/2.0))) * -1;
       return sample_in;
     }
+
+    /** Wave Shaper
+    *  Distorts wave input by wave shaping function
+    *  Shaping wave is, like osc wavetables, WAVE_TABLE wide from MIN_16 to MAX_16 values
+    */
+    inline
+    int16_t waveShaper(int32_t sample_in) {
+      int index = (sample_in + MAX_16) / waveShaperStepInc;
+      return shapeTable[index];
+    }
+
+    /** Change the wave shaping table
+  	* @param TABLE_NAME is the name of the array.
+    * Must be TABLE_SIZE in length with values from MIN_16 to MAX_16.
+  	*/
+    inline
+  	void setShapeTable(const int16_t * TABLE_NAME) {
+  		shapeTable = TABLE_NAME;
+  	}
+
 
      /** Karplus Strong fedback model
     *  @audioIn Pass in an oscillator or other signal
@@ -174,11 +195,21 @@ class FX {
     int reverbMix = 270; // 0 to 1024
     Del delay1, delay2, delay3, delay4;
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
+    int16_t initalShapeTable [TABLE_SIZE];
+    const int16_t * shapeTable;
+    float waveShaperStepInc = MAX_16 * 2.0 / TABLE_SIZE;
 
     void initPluckBuffer() {
       for(int i=0; i<PLUCK_BUFFER_SIZE; i++) {
         pluckBuffer[i] = 0;
       }
+    }
+
+    void initShapeTable() {
+      for(int i=0; i<TABLE_SIZE; i++) {
+        initalShapeTable[i] = MIN_16 + i * waveShaperStepInc;
+      }
+      setShapeTable(initalShapeTable);
     }
 
     void initReverb() {
