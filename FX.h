@@ -108,7 +108,6 @@ class FX {
   		shapeTable = TABLE_NAME;
   	}
 
-
      /** Karplus Strong fedback model
     *  @audioIn Pass in an oscillator or other signal
     *  @pluckFreq Feedback freq, usually equal to the freq of the incoming osc,
