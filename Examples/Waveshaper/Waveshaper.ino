@@ -14,9 +14,9 @@ void setup() {
   Serial.begin(115200);
   Osc::sinGen(sineTable); // fill the wavetable
   aOsc1.setPitch(69);
-  float stepInc = MAX_16 * 2.0 / TABLE_SIZE;
+  float stepInc = (MAX_16 * 2.0 - 1) / TABLE_SIZE;
   for(int i=0; i<TABLE_SIZE; i++) { // create the shaping wavetable
-    waveShapeTable[i] = (MIN_16 + i * stepInc) + random(1000);
+    waveShapeTable[i] = max(MIN_16, min(MAX_16, (int)(MIN_16 + i * stepInc * 1.5)));
   }
   effect1.setShapeTable(waveShapeTable); // install the shaping wavetable
   audioStart();
@@ -29,7 +29,7 @@ void loop() {
   msNow = millis();
   if (msNow > pitchTime) {
     pitchTime = msNow + 1000;
-    int pitch = random(24) + 58;
+    int pitch = 36 + random(24);
     Serial.println(pitch);
     aOsc1.setPitch(pitch);
   }
