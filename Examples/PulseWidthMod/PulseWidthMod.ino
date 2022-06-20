@@ -15,11 +15,11 @@ float pVal = 0.5;
   
 void setup() {
   Serial.begin(115200);
-  Osc::sinGen(lfoTable); // fill wavetable
-  Osc::triGen(waveTable); // fill wavetable, try other waves e.g. sqrGen, sawGen, triGen
-  aOsc1.setPitch(69);
+  Osc::triGen(lfoTable); // fill wavetable
+  Osc::sqrGen(waveTable); // fill wavetable, try other waves e.g. sinGen, sawGen, triGen
+  aOsc1.setPitch(57);
   filter.setCentreFreq(2500);
-  LFO1.setFreq(0.2); 
+  LFO1.setFreq(0.1); 
   aOsc1.setPulseWidth(0.25);
   audioStart();
 }
@@ -31,7 +31,7 @@ void loop() {
   msNow = millis();
   
   if (msNow > pitchTime) {
-    pitchTime = msNow + 5000;
+    pitchTime = msNow + 10000;
     int pitch = random(24) + 36;
     Serial.println(pitch);
     aOsc1.setPitch(pitch);
@@ -41,8 +41,8 @@ void loop() {
     widthTime = msNow + lfoReadRate; 
     // Compute the LFO value to modulate the duty cycle amount (freqency) by
     // = osc val / osc range * depth * val range reduction + offset (to make unipolar)
-    float lfo1Val = (LFO1.atTime(msNow) * MAX_16_INV * 0.8) * 0.5 + 0.5; 
-    aOsc1.setPulseWidth(lfo1Val);
+    float lfo1Val = (LFO1.atTime(msNow) * MAX_16_INV * 0.5) * 0.5 + 0.5; 
+    aOsc1.setPulseWidth(lfo1Val); // 0.0 - 1.0
   }
 }
 
