@@ -358,7 +358,7 @@ public:
 	inline
 	void setPulseWidth(float width) {
     pulseWidthOn = true;
-    pulseWidth = max(0.25f, min(0.75f, width));
+    pulseWidth = max(0.05f, min(0.95f, width));
   }
 
  /** Below are helper methods for generating waveforms into existing arrays.
@@ -405,7 +405,7 @@ public:
     for(int i=0; i<TABLE_SIZE; i++) {
       if (i < TABLE_SIZE * duty) {
         theTable[i] = MAX_16;
-      } else theTable[i] = -MAX_16;
+      } else theTable[i] = MIN_16;
     }
   }
 
