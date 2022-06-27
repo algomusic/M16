@@ -21,10 +21,7 @@ class FX {
 
   public:
     /** Constructor. */
-    FX() {
-      initPluckBuffer();
-      initShapeTable();
-    }
+    FX() {}
 
     /** Wave Folding
     *  Fold clipped values
@@ -89,24 +86,68 @@ class FX {
       return sample_in;
     }
 
+    /** Update the wave shaping table
+  	* @param TABLE_NAME is the name of the array. Filled with 16bit values.
+    * @param tableSize the length in samples, typically a power of 2.
+    * Size of TABLE_SIZE is suggested, smaller or larger bit sizes will reduce or increase resolution.
+  	*/
+    inline
+    void setShapeTable(int16_t * TABLE_NAME, int tableSize) {
+      delete[] shapeTable; // remove any previous memory allocation
+      shapeTableSize = tableSize;
+      waveShaperStepInc = 65537.0 / shapeTableSize;
+      shapeTable = new int16_t[shapeTableSize]; // create a new waveshape table
+      shapeTable = TABLE_NAME;
+    }
+
     /** Wave Shaper
     *  Distorts wave input by wave shaping function
     *  Shaping wave is, like osc wavetables, WAVE_TABLE wide from MIN_16 to MAX_16 values
     */
     inline
     int16_t waveShaper(int32_t sample_in) {
-      int index = (sample_in + MAX_16) / waveShaperStepInc;
+      int index = sample_in;
+      if (shapeTableSize > 0) index = (sample_in + MAX_16) / waveShaperStepInc;
       return shapeTable[index];
     }
 
-    /** Change the wave shaping table
-  	* @param TABLE_NAME is the name of the array.
-    * Must be TABLE_SIZE in length with values from MIN_16 to MAX_16.
-  	*/
+    /** Create a dedicated soft clip wave shaper
+    *  Distorts wave input by wave shaping function
+    * @amount is the degree of distortion, from 1.0 being minimal to ~10.0 being a lot
+    * It is not efficient to update this in real time,
+    * if required, then manage wave shape function in your main code
+    */
     inline
-  	void setShapeTable(const int16_t * TABLE_NAME) {
-  		shapeTable = TABLE_NAME;
-  	}
+    void setShapeTableSoftClip(float amount) {
+      delete[] shapeTable; // remove any previous memory allocation
+      shapeTableSize = TABLE_SIZE;
+      waveShaperStepInc = 65537.0 / shapeTableSize;
+      shapeTable = new int16_t[shapeTableSize]; // create a new waveshape table
+      for(int i=0; i<shapeTableSize; i++) {
+        shapeTable[i] = 20813 * atan(amount * ((MIN_16 + i * waveShaperStepInc) / (float)MAX_16));
+      }
+    }
+
+    /** Create a dedicated s-wave wave shaper
+    *  Distorts wave input by wave shaping function
+    * @amount is the degree of distortion, from 0.0 to 1.0
+    * Smaller values for amount may require gain increase compensation
+    * It is not efficient to update this in real time,
+    * if required, then manage wave shape function in your main code
+    */
+    inline
+    void setShapeTableSigmoidCurve(float amount) {
+      delete[] shapeTable; // remove any previous memory allocation
+      shapeTableSize = TABLE_SIZE;
+      waveShaperStepInc = 65537.0 / shapeTableSize;
+      shapeTable = new int16_t[shapeTableSize]; // create a new waveshape table
+      float tabInc = 1.0 / shapeTableSize * 2;
+      for(int i=0; i<shapeTableSize/2; i++) {
+        float sVal = pow(i * tabInc, amount);
+        shapeTable[i] = sVal * MAX_16 - MAX_16;
+        shapeTable[TABLE_SIZE - i] = MAX_16 - sVal * MAX_16;
+      }
+    }
 
      /** Karplus Strong fedback model
     *  @audioIn Pass in an oscillator or other signal
@@ -117,6 +158,7 @@ class FX {
     */
     inline
     int16_t pluck(int16_t audioIn, float pluckFreq, float depth) {
+      if (!pluckBufferEstablished) initPluckBuffer();
       // read
 //      float read_index_fractional = SAMPLE_RATE / pluckFreq;
       int pluck_buffer_read_index = pluck_buffer_write_index - SAMPLE_RATE / pluckFreq + 1;
@@ -186,30 +228,33 @@ class FX {
 
   private:
     const static int16_t PLUCK_BUFFER_SIZE = 500;
-    int pluckBuffer [PLUCK_BUFFER_SIZE];
+    int * pluckBuffer; // [PLUCK_BUFFER_SIZE];
     float pluck_buffer_write_index = 0;
     int prevPluckOutput = 0;
+    bool pluckBufferEstablished = false;
     bool reverbInitiated = false;
     int reverbLength = 880; // 0 to 1024
     int reverbMix = 270; // 0 to 1024
     Del delay1, delay2, delay3, delay4;
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
-    int16_t initalShapeTable [TABLE_SIZE];
-    const int16_t * shapeTable;
+    int16_t * shapeTable;
+    int shapeTableSize = 0;
     float waveShaperStepInc = MAX_16 * 2.0 / TABLE_SIZE;
 
     void initPluckBuffer() {
+      pluckBuffer = new int[PLUCK_BUFFER_SIZE]; // create a new array
       for(int i=0; i<PLUCK_BUFFER_SIZE; i++) {
         pluckBuffer[i] = 0;
       }
+      pluckBufferEstablished = true;
     }
 
-    void initShapeTable() {
-      for(int i=0; i<TABLE_SIZE; i++) {
-        initalShapeTable[i] = MIN_16 + i * waveShaperStepInc;
-      }
-      setShapeTable(initalShapeTable);
-    }
+    // void initShapeTable() {
+    //   for(int i=0; i<TABLE_SIZE; i++) {
+    //     initalShapeTable[i] = MIN_16 + i * waveShaperStepInc;
+    //   }
+    //   setShapeTable(initalShapeTable);
+    // }
 
     void initReverb() {
       delay1.setMaxDelayTime(61); delay2.setMaxDelayTime(72);
