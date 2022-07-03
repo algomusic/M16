@@ -61,6 +61,7 @@ class Env {
       jitEnvAttack = envAttack + rand(envAttack * 0.2);
       jitEnvDecay = envDecay + rand(envDecay * 0.2);
       envStartTime = micros(); //millis();
+      prevEnvVal = 0;
       next();
     }
 
@@ -102,15 +103,17 @@ class Env {
           break;
         case 1:
           // attack
-          if (elapsedTime <= jitEnvAttack) {
-            envVal = JIT_MAX_ENV_LEVEL * (microsTime - envStartTime) / (float)jitEnvAttack;
-            if (envVal > JIT_MAX_ENV_LEVEL) {
-              peaked = true;
-              envState = 2;
-              return JIT_MAX_ENV_LEVEL;
-            } else return envVal; 
+          if (jitEnvAttack == 0) {
+            envState = 2; // go to hold
+            envVal = JIT_MAX_ENV_LEVEL;
+            return envVal;
+          } else if (elapsedTime <= jitEnvAttack) {
+            double attackPortion = elapsedTime / (double)jitEnvAttack;
+            envVal = min((double)JIT_MAX_ENV_LEVEL, JIT_MAX_ENV_LEVEL * attackPortion);
+            return envVal;
           } else {
             envState = 2; // go to hold
+            envVal = JIT_MAX_ENV_LEVEL;
             return envVal;
           }
           break;
@@ -150,7 +153,6 @@ class Env {
           // release
           if (microsTime < releaseStartTime + jitEnvRelease && abs((int)envVal) > 1) {
             float rPercent = pow(1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease, 4); // exp
-//              float rPercent = 1.0f - (millis() - releaseStartTime) / (float)envRelease; // linear
             envVal = (JIT_MAX_ENV_LEVEL - releaseStartLevelDiff) * rPercent;
             return envVal;
           } else {
@@ -167,9 +169,9 @@ class Env {
     /** Return the current envelope value */
     inline
     uint16_t getValue() {
-      uint16_t easeVal = (prevEnvVal * 4 + envVal)/5;
-      prevEnvVal = easeVal;
-      return prevEnvVal + envVal;
+      // envVal = (prevEnvVal*4 + envVal) / 5; // smooth abrupt changes
+      // prevEnvVal = envVal;
+      return envVal;
     }
 
     /** Set the maximum envelope value
@@ -197,8 +199,8 @@ class Env {
     bool peaked = false;
     unsigned long envStartTime, releaseStartTime;
     uint32_t envVal = 0;
-    uint32_t prevEnvVal = 0;
     uint32_t releaseStartLevelDiff = MAX_ENV_LEVEL;
+    uint32_t prevEnvVal = 0;
 
     int envState = 0; // complete = 0, attack = 1, hold = 2, decay = 3, sustain = 4, release = 5
 
