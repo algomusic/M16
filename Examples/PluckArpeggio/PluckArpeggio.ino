@@ -20,6 +20,7 @@ void setup() {
   delay(200);
   Serial.println();Serial.println("M16 running");
   Osc::noiseGen(noiseTable); aOsc1.setNoise(true); // fill wavetable and set noise flag
+  ampEnv1.setAttack(10);
   ampEnv1.setRelease(100);
   int newSet [] = {48, 52, 55, 58, 60, 64};
   arp1.setPitches(newSet, 6);
