@@ -28,6 +28,7 @@ class SVF {
     /** Set how resonant the filter will be.
     * 0.01 > res < 1.0
     */
+    inline
     void setResonance(float resonance) {
       q = (1.0 - max(0.1f, min(0.98f, resonance))) * 255;
       // q = sqrt(1.0 - atan(sqrt(resonance * 255)) * 2.0 / 3.1459); // alternative
@@ -36,11 +37,26 @@ class SVF {
     }
 
     /** Set the centre or corner frequency of the filter.
-    @param centre_freq 40 - 11k Hz (SAMPLE_RATE/4). */
-    void setCentreFreq(int32_t centre_freq) {
-      centre_freq = max(40, min(SAMPLE_RATE/4, (int)(centre_freq - random(centre_freq * 0.05))));
-      f = 2 * sin(3.1459 * centre_freq / SAMPLE_RATE);
-      int centFreq = centre_freq;
+    * @param centre_freq_val  40 - 10k Hz (SAMPLE_RATE/4).
+    */
+    inline
+    void setCentreFreq(int32_t centre_freq_val) {
+      int maxFreq = SAMPLE_RATE/4.5;
+      f = 2 * sin(3.1459 * max(0, min(maxFreq, centre_freq_val)) / SAMPLE_RATE);
+    }
+
+    /** Set the cutoff or corner frequency of the filter.
+    * @param cutoff_val 0.0 - 1.0 which equates to 40 - 10k Hz (SAMPLE_RATE/4).
+    * Sweeping the cutoff linearly is mapped to a non-linear frequency sweep
+    */
+    inline
+    void setCutoff(float cutoff_val) {
+      cutoff_val = max(0.0f, min(1.0f, cutoff_val));
+      float cutoff_freq = 0;
+      if (cutoff_val > 0.7) {
+        cutoff_freq = pow(cutoff_val, 3) * SAMPLE_RATE/4.5;
+      } else cutoff_freq = pow(cutoff_val * 1.43, 2) * 3500 + 40;
+      f = 2 * sin(3.1459 * cutoff_freq / SAMPLE_RATE);
     }
 
     /** Calculate the next Lowpass filter sample, given an input signal.
@@ -51,7 +67,6 @@ class SVF {
     int16_t nextLPF(int32_t input) {
       calcFilter(input);
       return max(-MAX_16, min(MAX_16, low)); // 65534, 32767
-     // return low;
     }
 
     /** Calculate the next Highpass filter sample, given an input signal.
@@ -62,7 +77,6 @@ class SVF {
     int16_t nextHPF(int32_t input) {
       calcFilter(input);
       return max(-MAX_16, min(MAX_16, high));
-      // return high;
     }
 
     /** Calculate the next Bandpass filter sample, given an input signal.
@@ -73,7 +87,27 @@ class SVF {
     int16_t nextBPF(int32_t input) {
       calcFilter(input);
       return max(-MAX_16, min(MAX_16, band));
-      // return band;
+    }
+
+    /** Calculate the next filter sample, given an input signal and a filter mix value.
+     *  @input is an output from an oscillator or other audio element.
+     *  @mix is the balance between low, band and high pass outputs, 0.0 - 1.0
+     *  Mix 0 is LPF, Mix 0.5 is BPF and mix 1.0 is HPF, in between are combinations
+     */
+    inline
+    int16_t nextFiltMix(int32_t input, float mix) {
+      calcFilter(input);
+      int lpfAmnt = 0;
+      if (mix < 0.5) lpfAmnt = low * (1 - mix * 2);
+      int bpfAmnt = 0;
+      if (mix != 0 || mix != 1) {
+        if (mix < 0.5) {
+          lpfAmnt = band * mix * 2;
+        } else lpfAmnt = band * (2 - mix * 2);
+      }
+      int hpfAmnt = 0;
+      if (mix > 0.5) hpfAmnt = high * (mix - 0.5) * 2;
+      return max(-MAX_16, min(MAX_16, lpfAmnt + bpfAmnt + hpfAmnt));
     }
 
     /** Calculate the next Allpass filter sample, given an input signal.
