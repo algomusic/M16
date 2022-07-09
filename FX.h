@@ -124,7 +124,7 @@ class FX {
       waveShaperStepInc = 65537.0 / shapeTableSize;
       shapeTable = new int16_t[shapeTableSize]; // create a new waveshape table
       for(int i=0; i<shapeTableSize; i++) {
-        shapeTable[i] = 20813 * atan(amount * ((MIN_16 + i * waveShaperStepInc) / (float)MAX_16));
+        shapeTable[i] = 20813.0 * atan(amount * ((MIN_16 + i * waveShaperStepInc) / (float)MAX_16));
       }
     }
 
