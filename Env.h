@@ -109,7 +109,7 @@ class Env {
             return envVal;
           } else if (elapsedTime <= jitEnvAttack) {
             double attackPortion = elapsedTime / (double)jitEnvAttack;
-            envVal = min((double)JIT_MAX_ENV_LEVEL, JIT_MAX_ENV_LEVEL * attackPortion);
+            envVal = max(envVal, min(JIT_MAX_ENV_LEVEL, (uint32_t)(JIT_MAX_ENV_LEVEL * attackPortion)));
             return envVal;
           } else {
             envState = 2; // go to hold
@@ -184,10 +184,12 @@ class Env {
       JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
     }
 
-    /** Return the current maximum envelope value */
+    /** Return the current maximum envelope value
+    * level from 0.0 - 1.0
+    */
     inline
-    uint16_t getMaxLevel() {
-      return MAX_ENV_LEVEL;
+    float getMaxLevel() {
+      return MAX_ENV_LEVEL/ (float)MAX_16;
     }
 
   private:
