@@ -70,14 +70,14 @@ class Seq {
       } else return seqValues[0];
     }
 
-    /** Change the sequence array which will be played.
-  	* @param seqName The name of the array containing new seq data.
-    * Must be the same size as the original table used when instantiated (16 by default).
+    /** Set all seq values to zero.
   	*/
-    // inline
-  	// void setSequence(int * seqName) {
-  	// 	seqValues = seqName;
-  	// }
+    inline
+  	void empty() {
+      for (int i=0; i<seqMaxSize; i++) {
+        seqValues[i] = 0;
+      }
+  	}
 
     /** Return the next sequence value
     * Loop around to the start if at the end of the sequence
