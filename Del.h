@@ -41,9 +41,7 @@ public:
     maxDelayTime_ms = max((unsigned int)0, maxDelayTime);
     delayBufferSize_samples = maxDelayTime_ms * SAMPLE_RATE * 0.001;
     delayBuffer = new int16_t[delayBufferSize_samples]; // create a new audio buffer
-    for(int i=0; i<delayBufferSize_samples; i++) {
-      delayBuffer[i] = 0; // zero out the buffer
-    }
+    empty();
   }
   /** Constructor.
 	@param maxDelayTime The size of the delay buffer, in milliseconds.
@@ -97,6 +95,13 @@ public:
   /** Specify the degree of filtering of the delay signal, from 0 (none) to 4 (most dull) */
   void setFiltered(byte newVal) {
     if (newVal >= 0) filtered = newVal;
+  }
+
+  /** Fill the delay with silence */
+  void empty() {
+    for(int i=0; i<delayBufferSize_samples; i++) {
+      delayBuffer[i] = 0; // zero out the buffer
+    }
   }
 
   /** Input a value to the delay and retrieve the signal delayed by delayTime milliseconds .
