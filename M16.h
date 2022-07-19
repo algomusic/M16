@@ -245,19 +245,30 @@ Ranged random number generator, faster than Arduino's built-in random function, 
 @param maxval the maximum signed int value of the range to be chosen from.  Maxval-1 will be the largest value possibly returned by the function.
 @return a random int between 0 and maxval-1 inclusive.
 */
-int rand(int maxval)
+int rand(int maxVal)
 {
-  return (int) (((xorshift96() & 0xFFFF) * maxval)>>16);
+  return (int) (((xorshift96() & 0xFFFF) * maxVal)>>16);
 }
 
 /** Approximate Gausian Random
 * The values will tend to be near the middle of the range, midway between zero and maxVal
-@param maxVal The largest integer possible
+* @param maxVal The largest integer possible
+* @tightness how many rand values (2+), greater numbers increasingly reduce standard deviation
+*/
+int gaussRandNumb(int maxVal, int tightness) {
+  int sum = 0;
+  for (int i=0; i<tightness; i++) {
+    sum += rand(maxVal + 1);
+  }
+  return sum / tightness;
+}
+
+/** Approximate Gausian Random
+* The values will tend to be near the middle of the range, midway between zero and maxVal
+* @param maxVal The largest integer possible
 */
 int gaussRand(int maxVal) {
-  int r1 = rand(maxVal + 1);
-  int r2 = rand(maxVal + 1);
-  return (r1 + r2) / 2;
+  return gaussRandNumb(maxVal, 2);
 }
 
 /** Approximate Chaotic Random number generator
