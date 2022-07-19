@@ -44,6 +44,7 @@ class Seq {
     /** Add values to the sequence starting at the beginning
     * @param seq An array of ints
     * @param size The number of items in the array
+    * It can be best to manage seq contents outside this class in the referenced array
     */
     inline
     void setSequence(int * seq, int size) {
@@ -222,7 +223,6 @@ class Seq {
     }
 
   private:
-    // int * seqValues;
     int * seqValues;
     int seqMaxSize = 16;
     int seqSize = 16;
