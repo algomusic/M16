@@ -458,15 +458,39 @@ public:
     }
   }
 
-  /** Generate colored noise
+  /** Generate Browian noise
   * @theTable The the wavetable to be filled
-  * @deviation The maximum change from one sample to the next, 0 to MAX_16
   */
-  static void colorGen(int16_t * theTable, int deviation) {
+  static void brownNoiseGen(int16_t * theTable) {
     int val = 0;
+    int deviation = MAX_16 / 2;
+    int halfDev = deviation / 2;
     for(int i=0; i<TABLE_SIZE; i++) {
-      val += gaussRand(deviation) - deviation/2;
+      val += gaussRand(deviation) - halfDev;
+      if (val > MAX_16) val = val - MAX_16;
+      if (val < MIN_16) val = MIN_16 + abs(val) - MAX_16;
       theTable[i] = max(MIN_16, min(MAX_16, val));
+    }
+  }
+
+  /** Generate pink noise
+  * @theTable The the wavetable to be filled
+  * Using Paul Kellet's refined method
+  */
+  static void pinkNoiseGen(int16_t * theTable) {
+    float b0, b1, b2, b3, b4, b5, b6;
+    for (int i=0; i<TABLE_SIZE; i++) {
+      float white = (random(20000) - 10000) * 0.001;
+      b0 = 0.99886 * b0 + white * 0.0555179;
+      b1 = 0.99332 * b1 + white * 0.0750759;
+      b2 = 0.969 * b2 + white * 0.153852;
+      b3 = 0.8665 * b3 + white * 0.3104856;
+      b4 = 0.55 * b4 + white * 0.5329522;
+      b5 = -0.7616 * b5 - white * 0.016898;
+      float pink = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+      pink *= 0.11;
+      b6 = white * 0.115926;
+      theTable[i] = max(MIN_16, min(MAX_16, (int)(pink * MAX_16)));
     }
   }
 
