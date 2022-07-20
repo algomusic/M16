@@ -226,6 +226,16 @@ class FX {
       reverbMix = max(0, min(1024, rMix));
     }
 
+    /** Set the reverb memory size
+    * @newSize A multiple of the default, usually >= 1.0.
+    * Larger sizes take up more memory
+    */
+    inline
+    void setReverbSize(float newSize) {
+      reverbSize = newSize;
+      initReverb();
+    }
+
   private:
     const static int16_t PLUCK_BUFFER_SIZE = 500;
     int * pluckBuffer; // [PLUCK_BUFFER_SIZE];
@@ -235,6 +245,7 @@ class FX {
     bool reverbInitiated = false;
     int reverbLength = 880; // 0 to 1024
     int reverbMix = 270; // 0 to 1024
+    float reverbSize = 1.0;
     Del delay1, delay2, delay3, delay4;
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
     int16_t * shapeTable;
@@ -249,20 +260,23 @@ class FX {
       pluckBufferEstablished = true;
     }
 
-    // void initShapeTable() {
-    //   for(int i=0; i<TABLE_SIZE; i++) {
-    //     initalShapeTable[i] = MIN_16 + i * waveShaperStepInc;
-    //   }
-    //   setShapeTable(initalShapeTable);
-    // }
-
+    /** Set the reverb params */
     void initReverb() {
-      delay1.setMaxDelayTime(61); delay2.setMaxDelayTime(72);
-      delay3.setMaxDelayTime(89); delay4.setMaxDelayTime(97);
-      delay1.setTime(60); delay1.setLevel(reverbLength); delay1.setFeedback(true);
-      delay2.setTime(71.9435); delay2.setLevel(reverbLength); delay2.setFeedback(true);
-      delay3.setTime(86.754); delay3.setLevel(reverbLength); delay3.setFeedback(true);
-      delay4.setTime(96.945); delay4.setLevel(reverbLength); delay4.setFeedback(true);
+      initReverb(reverbSize);
+    }
+
+
+    /** Set the reverb params
+    * Times are kept short to minise memeroy usage
+    * Better reverb can be achieved with extended reverb times (x2, x3, etc.)
+    */
+    void initReverb(float size) {
+      delay1.setMaxDelayTime(31 * size); delay2.setMaxDelayTime(36 * size);
+      delay3.setMaxDelayTime(45 * size); delay4.setMaxDelayTime(49 * size);
+      delay1.setTime(30 * size); delay1.setLevel(reverbLength); delay1.setFeedback(true);
+      delay2.setTime(35.972 * size); delay2.setLevel(reverbLength); delay2.setFeedback(true);
+      delay3.setTime(43.377 * size); delay3.setLevel(reverbLength); delay3.setFeedback(true);
+      delay4.setTime(48.472 * size); delay4.setLevel(reverbLength); delay4.setFeedback(true);
       reverbInitiated = true;
     }
 
