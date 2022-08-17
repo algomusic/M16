@@ -36,6 +36,16 @@ class Env {
       if (val >= 0) envDecay = val * 1000;
     }
 
+    /** Set the number of times to repeat the decay segment.
+    * Useful for clap sounds or guiro scrapes...
+    */
+    void setDecayRepeats(int val) {
+      if (val >= 0) {
+        delayRepeats = val;
+        delayExp = 1;
+      }
+    }
+
     /** Set envSustain level as a value from 0.0 - 1.0 */
     void setSustain(float val) {
       if (val >= 0 && val <= 1) {
@@ -62,6 +72,7 @@ class Env {
       jitEnvDecay = envDecay + rand(envDecay * 0.2);
       envStartTime = micros(); //millis();
       prevEnvVal = 0;
+      currDelayRepeats = delayRepeats;
       next();
     }
 
@@ -130,11 +141,17 @@ class Env {
           // decay
           if (jitEnvDecay > 0 && elapsedTime <= jitEnvAttack + envHold + jitEnvDecay) { // decay
             //calulate and return envDecay value
-            float dPercent = pow((microsTime - envStartTime - jitEnvAttack) / (float)jitEnvDecay, 4); // exp
+            float dPercent = pow((microsTime - envStartTime - jitEnvAttack) / (float)jitEnvDecay, delayExp); // exp
             envVal = (JIT_MAX_ENV_LEVEL - envSustain) * (1 - dPercent) + envSustain;
             return envVal;
           } else {
-            envState = 4; // go to sustain
+            if (currDelayRepeats > 0) {
+              currDelayRepeats -= 1;
+              envStartTime += jitEnvDecay;
+            } else {
+              envState = 4; // go to sustain
+              if (delayRepeats > 0 && envSustain == 0) envVal = JIT_MAX_ENV_LEVEL;
+            }
             return envVal;
           }
           break;
@@ -203,6 +220,9 @@ class Env {
     uint32_t envVal = 0;
     uint32_t releaseStartLevelDiff = MAX_ENV_LEVEL;
     uint32_t prevEnvVal = 0;
+    int delayRepeats = 0;
+    int currDelayRepeats = 0;
+    int delayExp = 4;
 
     int envState = 0; // complete = 0, attack = 1, hold = 2, decay = 3, sustain = 4, release = 5
 
