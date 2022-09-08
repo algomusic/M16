@@ -34,7 +34,7 @@ void loop() {
 * for ESP8266 programs a call to audioUpdate() is required in the loop() function.
 */
 void audioUpdate() {
-  uint16_t leftVal = (aOsc1.next() * vol)>>10;
-  uint16_t rightVal = leftVal;
+  int16_t leftVal = (aOsc1.next() * vol)>>10;
+  int16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }
