@@ -2,9 +2,9 @@
  * Samp.h
  *
  * A sample wavetable playback class
- * 
+ *
  * by Andrew R. Brown 2021
- * 
+ *
  * Mostly identical to the Sample class in the Mozzi audio library by Tim Barrass 2012
  *
  * This file is part of the M16 audio library.
@@ -19,7 +19,7 @@ class Samp {
 
 public:
   /** Constructor.
-  * @param TABLE_NAME the name of the array with sample data in it. 
+  * @param TABLE_NAME the name of the array with sample data in it.
   * @param TABLE_SIZE the number of samples in the table.
   */
   Samp(const int16_t * TABLE_NAME, unsigned long TABLE_SIZE):table(TABLE_NAME),table_size((unsigned long) TABLE_SIZE) {
@@ -45,8 +45,8 @@ public:
     startpos_fractional = (unsigned long) startpos;
   }
 
-  /** Resets the phase (the playhead) to the start position, 
-  * which will be 0 unless set to another value with setStart(); 
+  /** Resets the phase (the playhead) to the start position,
+  * which will be 0 unless set to another value with setStart();
   */
   inline
   void start() {
@@ -73,22 +73,22 @@ public:
   /** Turns looping on.*/
   inline
   void setLoopingOn() {
-    looping=true;
+    looping = true;
   }
 
   /** Turns looping off.*/
   inline
   void setLoopingOff() {
-    looping=false;
+    looping = false;
   }
 
   /** Returns the sample at the current phase position. */
   inline
-  int16_t next() { 
+  int16_t next() {
     if (phase_fractional>endpos_fractional){
       if (looping) {
         phase_fractional = startpos_fractional + (phase_fractional - endpos_fractional);
-      }else{
+      } else {
         return 0;
       }
     }
@@ -100,15 +100,15 @@ public:
   /** Checks if the sample is playing by seeing if the phase is within the limits of its end position.*/
   inline
   boolean isPlaying() {
-    return phase_fractional<endpos_fractional;
+    return phase_fractional < endpos_fractional;
   }
 
   /** Set the sample frequency.
   * @param frequency to play the wave table.
   */
   inline
-  void setFreq(float frequency) { 
-    phase_increment_fractional = (unsigned long)((float)table_size * frequency / SAMPLE_RATE); 
+  void setFreq(float frequency) {
+    phase_increment_fractional = (unsigned long)((float)table_size * frequency * SAMPLE_RATE_INV);
   }
 
   /**  Returns the sample at the given table index.

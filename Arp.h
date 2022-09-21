@@ -136,9 +136,9 @@ class Arp {
      */
     inline
     double calcStepDelta(float bpm, int slice) {
-	if (bpm > 0 && slice > 0) {
-		return 60.0 / bpm * 1000.0 / slice / stepDiv;
-	} else return 250;
+    	if (bpm > 0 && slice > 0) {
+    		return 60.0 / bpm * 1000.0 / slice / stepDiv;
+    	} else return 250;
     }
 
     /** Return the number of milliseconds between steps

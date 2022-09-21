@@ -67,7 +67,7 @@ class FX {
       // if (samp > 26033) samp = min(MAX_16, 26033 + ((samp - 26033) >> 3));
       // if (samp < -26033) samp = max(-MAX_16, -26033 + ((samp + 26033) >> 3));
       // 2/pi * arctan(samp * depth) // 0.635748
-      int16_t samp = 20831 * atan(amount * (sample_in / (float)MAX_16)); // 20831
+      int16_t samp = 20831 * atan(amount * (sample_in * (float)MAX_16_INV)); // 20831
       // int16_t samp = (sample_in / (float)MAX_16) * MAX_16;
       // if (samp > MAX_16 || samp < MIN_16) Serial.println(samp);
       return samp;
@@ -81,8 +81,8 @@ class FX {
     inline
     int16_t softSaturation(int32_t sample_in) { // 14745, 13016 // a + (x-a)/(1+((x-a)/(1-a))^2) // f(x)*(1/((a+1)/2))
       int16_t thresh = 26033;
-      if (sample_in > thresh) sample_in *= ((float)MAX_16/((thresh+MAX_16)/2.0));
-      if (sample_in < -26033) sample_in = (sample_in * -1 * ((float)MAX_16/((thresh+MAX_16)/2.0))) * -1;
+      if (sample_in > thresh) sample_in *= ((float)MAX_16 / ((thresh + MAX_16) * 0.5f));
+      if (sample_in < -26033) sample_in = (sample_in * -1 * ((float)MAX_16 / ((thresh + MAX_16) * 0.5f))) * -1;
       return sample_in;
     }
 
@@ -124,12 +124,12 @@ class FX {
       waveShaperStepInc = 65537.0 / shapeTableSize;
       shapeTable = new int16_t[shapeTableSize]; // create a new waveshape table
       for(int i=0; i<shapeTableSize; i++) {
-        shapeTable[i] = 20813.0 * atan(amount * ((MIN_16 + i * waveShaperStepInc) / (float)MAX_16));
+        shapeTable[i] = 20813.0 * atan(amount * ((MIN_16 + i * waveShaperStepInc) * (float)MAX_16_INV));
       }
     }
 
     /** Create a dedicated s-wave wave shaper
-    *  Distorts wave input by wave shaping function
+    *  Distorts wave input by the wave shaping function
     * @amount is the degree of distortion, from 0.0 to 1.0
     * Smaller values for amount may require gain increase compensation
     * It is not efficient to update this in real time,
@@ -142,10 +142,26 @@ class FX {
       waveShaperStepInc = 65537.0 / shapeTableSize;
       shapeTable = new int16_t[shapeTableSize]; // create a new waveshape table
       float tabInc = 1.0 / shapeTableSize * 2;
-      for(int i=0; i<shapeTableSize/2; i++) {
+      for(int i=0; i<shapeTableSize * 0.5f; i++) {
         float sVal = pow(i * tabInc, amount);
         shapeTable[i] = sVal * MAX_16 - MAX_16;
         shapeTable[TABLE_SIZE - i] = MAX_16 - sVal * MAX_16;
+      }
+    }
+
+    /** Create a randomly varied wave shaper
+    *  Distorts wave input by the wave shaping function
+    * @amount is the degree of distortion, from 0 to MAX_16;
+    * Because random values are static and looped, the sound is grainy rather than noisy.
+    */
+    inline
+    void setShapeTableJitter(float amount) {
+      delete[] shapeTable; // remove any previous memory allocation
+      shapeTableSize = TABLE_SIZE;
+      waveShaperStepInc = 65537.0 / shapeTableSize;
+      shapeTable = new int16_t[shapeTableSize]; // create a new waveshape table
+      for(int i=0; i<shapeTableSize; i++) {
+        shapeTable[i] = waveShaperStepInc * i + rand(amount * 2) - amount;
       }
     }
 
@@ -167,7 +183,7 @@ class FX {
       // update buffer
       int16_t output = audioIn + bufferRead;
       pluckBuffer[(int)pluck_buffer_write_index] = output; // divide?
-      int16_t aveOut = (output + prevPluckOutput) / 2;
+      int16_t aveOut = (output + prevPluckOutput) * 0.5f;
       prevPluckOutput = aveOut;
       // increment buffer phase
       pluck_buffer_write_index += 1;
@@ -250,7 +266,7 @@ class FX {
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
     int16_t * shapeTable;
     int shapeTableSize = 0;
-    float waveShaperStepInc = MAX_16 * 2.0 / TABLE_SIZE;
+    float waveShaperStepInc = MAX_16 * 2.0 * TABLE_SIZE_INV;
 
     void initPluckBuffer() {
       pluckBuffer = new int[PLUCK_BUFFER_SIZE]; // create a new array

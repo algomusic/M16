@@ -41,22 +41,22 @@ class SVF {
     */
     inline
     void setCentreFreq(int32_t centre_freq_val) {
-      int maxFreq = SAMPLE_RATE/4.5;
-      f = 2 * sin(3.1459 * max(0, min(maxFreq, centre_freq_val)) / SAMPLE_RATE);
+      int maxFreq = SAMPLE_RATE * 0.2222; ///4.5;
+      f = 2 * sin(3.1459 * max(0, min(maxFreq, centre_freq_val)) * SAMPLE_RATE_INV);
     }
 
     /** Set the cutoff or corner frequency of the filter.
     * @param cutoff_val 0.0 - 1.0 which equates to 40 - 10k Hz (SAMPLE_RATE/4).
-    * Sweeping the cutoff linearly is mapped to a non-linear frequency sweep
+    * Sweeping the cutoff value linearly is mapped to a non-linear frequency sweep
     */
     inline
     void setCutoff(float cutoff_val) {
       cutoff_val = max(0.0f, min(1.0f, cutoff_val));
       float cutoff_freq = 0;
       if (cutoff_val > 0.7) {
-        cutoff_freq = pow(cutoff_val, 3) * SAMPLE_RATE/4.5;
+        cutoff_freq = pow(cutoff_val, 3) * SAMPLE_RATE * 0.2222; ///4.5;
       } else cutoff_freq = pow(cutoff_val * 1.43, 2) * 3500 + 40;
-      f = 2 * sin(3.1459 * cutoff_freq / SAMPLE_RATE);
+      f = 2 * sin(3.1459 * cutoff_freq * SAMPLE_RATE_INV);
     }
 
     /** Calculate the next Lowpass filter sample, given an input signal.
@@ -139,7 +139,7 @@ class SVF {
       int32_t q = 255;
 //       float scale;
       int32_t scale = sqrt(1) * 255;
-      volatile float f = SAMPLE_RATE / 4;
+      volatile float f = SAMPLE_RATE * 0.25;
       int32_t centFreq = 10000;
 
       void calcFilter(int32_t input) {

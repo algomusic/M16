@@ -20,16 +20,19 @@
 #elif IS_ESP32()
 #include "driver/i2s.h"
 static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
+int i2sPins [] = {25, 27, 12}; // bck, ws, data_out
 #endif
 // ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)
 // ESP8266 I2S interface (D1 mini pins) BCLK->BCK (D8), I2SO->DOUT (RX), and LRCLK(WS)->LCK (D4) [SCK to GND on some boards]
 // #if not defined (SAMPLE_RATE)
 #define SAMPLE_RATE 48000
+const float SAMPLE_RATE_INV  = 1.0f / SAMPLE_RATE;
 #define MAX_16 32767
 #define MIN_16 -32767
 #define MAX_16_INV 0.00003052
 
 const int16_t TABLE_SIZE = 8192; // 2048 // 4096 // 8192 // 16384 //32768 // 65536 //uint16_t
+const float TABLE_SIZE_INV = 1.0f / TABLE_SIZE;
 const int16_t HALF_TABLE_SIZE = 4096; //TABLE_SIZE / 2;
 
 uint16_t prevWaveVal = 0;
@@ -95,10 +98,10 @@ static const i2s_config_t i2s_config = {
 
 /* ESP32 I2S pin allocation */
 static const i2s_pin_config_t pin_config = { // D1 mini, NodeMCU
-    .bck_io_num = 25, //25,  //C3 10   // 25    // 8   // 6                     // The bit clock connectiom, goes to pin 27 of ESP32
-    .ws_io_num = 27, //27,   //C3 8   //27    // 6   // 4                // Word select, also known as word select or left right clock
-    .data_out_num = 12, //12,  // C3 20   //26   // 7   // 5            // Data out from the ESP32, connect to DIN on 38357A
-    .data_in_num = I2S_PIN_NO_CHANGE                // we are not interested in I2S data into the ESP32
+    .bck_io_num = i2sPins[0], //25, //25,  //C3 10   // 25    // 8   // 6                     // The bit clock connectiom, goes to pin 27 of ESP32
+    .ws_io_num = i2sPins[1], //27, //27,   //C3 8   //27    // 6   // 4                // Word select, also known as word select or left right clock
+    .data_out_num = i2sPins[2], //12, //12,  // C3 20   //26   // 7   // 5            // Data out from the ESP32, connect to DIN on 38357A
+    .data_in_num = I2S_PIN_NO_CHANGE  // we are not interested in I2S data into the ESP32
 };
 
 /** Function for RTOS tasks to fill audio buffer */
@@ -122,6 +125,7 @@ void audioStart() {
   // RTOS callback
   xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback1Handle, 0); // 2048 = memory, 1 = priorty, 1 = core
   xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback2Handle, 1);
+  Serial.println("M16 is running");
 }
 
 /** Uninstall the audio driver and halt the audio callbacks */
@@ -147,12 +151,19 @@ bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
 }
 #endif // ESP32
 
+// void setI2sPins(int bck, int ws, int din) { // for ESP32 only
+//   i2sPins[0] = bck;
+//   i2sPins[1] = ws;
+//   i2sPins[2] = din;
+// }
+
 /** Return freq from a MIDI pitch */
+inline
 float mtof(float midival) {
-    midival = max(0.0f, min(127.0f, midival));
-    float f = 0.0;
-    if(midival) f = 8.1757989156 * pow(2.0, midival/12.0);
-    return f;
+  midival = max(0.0f, min(127.0f, midival));
+  float f = 0.0;
+  if (midival) f = 8.1757989156 * pow(2.0, midival * 0.0833); /// 12.0);
+  return f;
 }
 
 /** Return closest scale pitch to a given MIDI pitch
@@ -203,9 +214,9 @@ float panRight(float panVal) {
 inline
 float sigmoid(float inVal) { // 0.0 to 1.0
   if (inVal > 0.5) {
-    return 0.5 + pow((inVal - 0.5)* 2, 4) / 2.0f;
+    return 0.5 + pow((inVal - 0.5)* 2, 4) * 0.5f;
   } else {
-    return max(0.0, pow(inVal * 2, 0.25) / 2.0f);
+    return max(0.0, pow(inVal * 2, 0.25) * 0.5f);
   }
 }
 

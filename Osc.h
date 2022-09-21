@@ -129,7 +129,7 @@ public:
     // see https://dove-audio.com/wtf-module/
     int halfTable = HALF_TABLE_SIZE;
     int portion12 = halfTable * windowSize;
-    int quarterTable = TABLE_SIZE / 4;
+    int quarterTable = TABLE_SIZE * 0.25;
     int threeQuarterTable = quarterTable * 3;
     int portion14 = quarterTable * windowSize;
     int16_t sampVal = 0;
@@ -299,7 +299,7 @@ public:
         phase_increment_fractional_s1 = phase_increment_fractional;
         phase_increment_fractional_s2 = phase_increment_fractional;
       }
-      cycleLengthPerMS = frequency / 1000.0f;
+      cycleLengthPerMS = frequency * 0.001; /// 1000.0f;
     }
 	}
 
@@ -373,7 +373,7 @@ public:
   */
   static void cosGen(int16_t * theTable) {
     for(int i=0; i<TABLE_SIZE; i++) {
-      theTable[i] = (cos(2 * 3.1459 * i / TABLE_SIZE) * MAX_16); //32767, 16383
+      theTable[i] = (cos(2 * 3.1459 * i * TABLE_SIZE_INV) * MAX_16); //32767, 16383
     }
   }
 
@@ -382,7 +382,7 @@ public:
   */
   static void sinGen(int16_t * theTable) {
     for(int i=0; i<TABLE_SIZE; i++) {
-      theTable[i] = (sin(2 * 3.1459 * i / TABLE_SIZE) * MAX_16); //32767, 16383
+      theTable[i] = (sin(2 * 3.1459 * i * TABLE_SIZE_INV) * MAX_16); //32767, 16383
     }
   }
 
@@ -392,8 +392,8 @@ public:
   static void triGen(int16_t * theTable) {
     for (int i=0; i<TABLE_SIZE; i++) {
       if (i < HALF_TABLE_SIZE) {
-        theTable[i] = MAX_16 - i * (MAX_16 * 2.0f / TABLE_SIZE * 2.0f);
-      } else theTable[i] = MIN_16 + (i - (float)HALF_TABLE_SIZE) * (MAX_16 * 2.0f / TABLE_SIZE * 2.0f);
+        theTable[i] = MAX_16 - i * (MAX_16 * 2.0f * TABLE_SIZE_INV * 2.0f);
+      } else theTable[i] = MIN_16 + (i - (float)HALF_TABLE_SIZE) * (MAX_16 * 2.0f * TABLE_SIZE_INV * 2.0f);
     }
   }
 
@@ -421,7 +421,7 @@ public:
   */
   static void sawGen(int16_t * theTable) {
     for (int i=0; i<TABLE_SIZE; i++) {
-      theTable[i] = (MAX_16 - i * (MAX_16 * 2 / TABLE_SIZE));
+      theTable[i] = (MAX_16 - i * (MAX_16 * 2 * TABLE_SIZE_INV));
     }
   }
 
@@ -463,8 +463,8 @@ public:
   */
   static void brownNoiseGen(int16_t * theTable) {
     int val = 0;
-    int deviation = MAX_16 / 2;
-    int halfDev = deviation / 2;
+    int deviation = MAX_16>>1;
+    int halfDev = deviation>>1;
     for(int i=0; i<TABLE_SIZE; i++) {
       val += gaussRand(deviation) - halfDev;
       if (val > MAX_16) val = val - MAX_16;
@@ -518,7 +518,7 @@ private:
   float particleEnvReleaseRate = 0.92; // thresh and rate = number of apparent particles
   float feedback_phase_fractional = 0;
   float testVal = 1.3;
-  float cycleLengthPerMS = frequency / 1000.0f;
+  float cycleLengthPerMS = frequency * 0.001f; // / 1000.0f;
 
   /** Increments the phase of the oscillator without returning a sample.*/
 	inline

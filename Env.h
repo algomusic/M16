@@ -206,7 +206,7 @@ class Env {
     */
     inline
     float getMaxLevel() {
-      return MAX_ENV_LEVEL/ (float)MAX_16;
+      return MAX_ENV_LEVEL * (float)MAX_16_INV;
     }
 
   private:
