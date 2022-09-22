@@ -65,7 +65,7 @@ public:
 		table = TABLE_NAME;
 	}
 
-	/** Set the phase of the Oscil. phase ranges from 0 - TABLE_SIZE */
+	/** Set the phase of the Oscil. Phase ranges from 0.0 - 1.0 */
 	inline
   void setPhase(float phase) {
 		phase_fractional = phase;
