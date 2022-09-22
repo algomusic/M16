@@ -169,7 +169,9 @@ class Env {
         case 5:
           // release
           if (microsTime < releaseStartTime + jitEnvRelease && abs((int)envVal) > 1) {
-            float rPercent = pow(1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease, 4); // exp
+            // float rPercent = pow(1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease, 4); // exp
+            float rPercent = 1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease;
+            rPercent *= rPercent; // faster exp
             envVal = (JIT_MAX_ENV_LEVEL - releaseStartLevelDiff) * rPercent;
             return envVal;
           } else {
