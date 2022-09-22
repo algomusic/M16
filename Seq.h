@@ -222,6 +222,24 @@ class Seq {
       if (val > 0) seqSize = val;
     }
 
+    /** Fill sequence with a euclidean rhythm
+    * @param value The number to put into each euclidean step
+    * @param hits The number of onsets in the generated pattern (up to seq length)
+    * @param rotate The number of steps to rotate the pattern (up to seq length - 1)
+    */
+    inline
+    void euclideanGen(int value, int hits, int rotate) {
+      hits = max(0, min(seqSize, hits));
+      rotate = max(0, min(seqSize-1, rotate));
+      for (int i=0; i<seqSize; i++) {
+        if ((((i + rotate) * hits) % seqSize) < hits) {
+          setStepValue(i, value);
+        } else {
+          setStepValue(i, 0);
+        }
+      }
+    }
+
   private:
     int * seqValues;
     int seqMaxSize = 16;
