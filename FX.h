@@ -201,7 +201,7 @@ class FX {
     int16_t reverb(int16_t audioIn) {
       // set up first time called
       if (!reverbInitiated) {
-        initReverb();
+        initReverb(reverbSize);
       }
       processReverb(audioIn, audioIn);
       return ((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11) + ((revP2 * reverbMix)>>11);
@@ -219,7 +219,7 @@ class FX {
     void reverbStereo(int16_t audioInLeft, int16_t audioInRight, int16_t &audioOutLeft, int16_t &audioOutRight) {
       // set up first time called
       if (!reverbInitiated) {
-        initReverb();
+        initReverb(reverbSize);
       }
       processReverb(audioInLeft, audioInRight);
       audioOutLeft = ((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>10);
@@ -243,13 +243,13 @@ class FX {
     }
 
     /** Set the reverb memory size
-    * @newSize A multiple of the default, usually >= 1.0.
+    * @newSize A multiple of the default, >= 1.0
     * Larger sizes take up more memory
     */
     inline
     void setReverbSize(float newSize) {
-      reverbSize = newSize;
-      initReverb();
+      reverbSize = max(1.0f, newSize);
+      initReverb(reverbSize);
     }
 
   private:
@@ -259,9 +259,9 @@ class FX {
     int prevPluckOutput = 0;
     bool pluckBufferEstablished = false;
     bool reverbInitiated = false;
-    int reverbLength = 880; // 0 to 1024
+    int reverbLength = 980; // 0 to 1024
     int reverbMix = 270; // 0 to 1024
-    float reverbSize = 1.0;
+    float reverbSize = 1.0; // 0 to 1, memory allocated to delay lengths
     Del delay1, delay2, delay3, delay4;
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
     int16_t * shapeTable;
@@ -283,19 +283,19 @@ class FX {
 
 
     /** Set the reverb params
-    * Times are kept short to minise memeroy usage
-    * Better reverb can be achieved with extended reverb times (x2, x3, etc.)
+    * @size Bigger sizes increase delay line times for better quality but use more memory (x2, x3, x4, etc.)
     */
-    void initReverb(float size) {
-      delay1.setMaxDelayTime(31 * size); delay2.setMaxDelayTime(36 * size);
-      delay3.setMaxDelayTime(45 * size); delay4.setMaxDelayTime(49 * size);
-      delay1.setTime(30 * size); delay1.setLevel(reverbLength); delay1.setFeedback(true);
-      delay2.setTime(35.972 * size); delay2.setLevel(reverbLength); delay2.setFeedback(true);
-      delay3.setTime(43.377 * size); delay3.setLevel(reverbLength); delay3.setFeedback(true);
-      delay4.setTime(48.472 * size); delay4.setLevel(reverbLength); delay4.setFeedback(true);
+    void initReverb(float size) { // 1/8 of Pd values
+      delay1.setMaxDelayTime(8 * size); delay2.setMaxDelayTime(9 * size);
+      delay3.setMaxDelayTime(11 * size); delay4.setMaxDelayTime(13 * size);
+      delay1.setTime(7.5 * size); delay1.setLevel(reverbLength); delay1.setFeedback(true);
+      delay2.setTime(8.993 * size); delay2.setLevel(reverbLength); delay2.setFeedback(true);
+      delay3.setTime(10.844 * size); delay3.setLevel(reverbLength); delay3.setFeedback(true);
+      delay4.setTime(12.118 * size); delay4.setLevel(reverbLength); delay4.setFeedback(true);
       reverbInitiated = true;
     }
 
+    /** Compute reverb */
     void processReverb(int16_t audioInLeft, int16_t audioInRight) {
       revD1 = delay1.read(); revD2 = delay2.read(); revD3 = delay3.read(); revD4 = delay4.read();
       revP1 = audioInLeft + revD1; revP2 = audioInRight + revD2;
