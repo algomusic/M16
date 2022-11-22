@@ -157,13 +157,23 @@ bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
 //   i2sPins[2] = din;
 // }
 
-/** Return freq from a MIDI pitch */
+/** Return freq from a MIDI pitch 
+* @pitch The MIDI pitch to be converted
+*/
 inline
 float mtof(float midival) {
   midival = max(0.0f, min(127.0f, midival));
   float f = 0.0;
   if (midival) f = 8.1757989156 * pow(2.0, midival * 0.0833); /// 12.0);
   return f;
+}
+
+/** Return a MIDI pitch from a frequency 
+* @freq The frequency to be converted
+*/
+inline
+float ftom(float freq) {
+  return ( ( 12 * log(freq / 220.0) / log(2.0) ) + 57.01 );
 }
 
 /** Return closest scale pitch to a given MIDI pitch
