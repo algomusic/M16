@@ -13,7 +13,7 @@ ESP32-S2 - GPIO 35 -> BCLK, GPIO 36 -> LRCLK (WS), and GPIO 37 -> DOUT (to DIN)
 
 Some I2S DAC boards often require other terminals to be grounded.
 
-Always include the M16.h file and add a void audioUpdate() function that ends with a call to i2s_write_samples(leftVal, rightVal). For ESP32 (inc S2) programs, this function is automatically called in the background, for ESP8266 programs a call to audioUpdate() is explicitly required in the main loop() function. Call audioStart() at the end of the setup() function. To change I2S pins from the default values [not for ESP8266], call setI2sPins() prior to audioStart() 
+Always include the M16.h file and add a void audioUpdate() function that ends with a call to i2s_write_samples(leftVal, rightVal). For ESP32 (inc S2) programs, this function is automatically called in the background, for ESP8266 programs a call to audioUpdate() is explicitly required in the main loop() function. Call audioStart() at the end of the setup() function. To change I2S pins from the default values [not for ESP8266], call setI2sPins() with arguments for BCLK, WS, and DOUT pins, prior to audioStart().
 
 M16 prioritises audio processing and may not play well with other libraries where timing is critical, such as wifi, and file i/o. The temporary stopping of audio during these tasks may help coordination between them.
 
