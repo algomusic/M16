@@ -14,15 +14,21 @@
 // from "Hardware_defines.h" in Mozzi
 #define IS_ESP8266() (defined(ESP8266))
 #define IS_ESP32() (defined(ESP32))
+#define IS_ESP32S2() (defined(CONFIG_IDF_TARGET_ESP32S2))
 
 #if IS_ESP8266()
 #include <I2S.h>
 #elif IS_ESP32()
-#include "driver/i2s.h"
-static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
-int i2sPins [] = {25, 27, 12}; // bck, ws, data_out
+  #include "driver/i2s.h"
+  static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
+  #if IS_ESP32S2()
+    int i2sPins [] = {35, 36, 37}; // bck, ws, data_out
+  #elif
+    int i2sPins [] = {25, 27, 12}; // bck, ws, data_out
+  #endif
 #endif
-// ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)
+// ESP32 - GPIO 25 -> BCLK, GPIO 27 -> LRCLK (WS), and GPIO 12 -> DOUT (DIN on board)
+// ESP32-S2 - GPIO 35 -> BCLK, GPIO 36 -> LRCLK (WS), and GPIO 37 -> DOUT (DIN on board)
 // ESP8266 I2S interface (D1 mini pins) BCLK->BCK (D8), I2SO->DOUT (RX), and LRCLK(WS)->LCK (D4) [SCK to GND on some boards]
 // #if not defined (SAMPLE_RATE)
 #define SAMPLE_RATE 48000
@@ -113,7 +119,9 @@ void audioCallback(void * paramRequiredButNotUsed) {
 }
 
 TaskHandle_t auidioCallback1Handle = NULL;
-TaskHandle_t auidioCallback2Handle = NULL;
+// #if !IS_ESP32S2()
+  TaskHandle_t auidioCallback2Handle = NULL;
+// #endif
 
 /** Start the audio callback
  *  This function is typically called in setup() in the main file
@@ -124,7 +132,9 @@ void audioStart() {
   i2s_start(i2s_num); // not explicity necessary, called by install
   // RTOS callback
   xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback1Handle, 0); // 2048 = memory, 1 = priorty, 1 = core
-  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback2Handle, 1);
+  // #if !IS_ESP32S2() // only has one thread, but seems to 'ignore' calls to second thread
+    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback2Handle, 1);
+  // #endif
   Serial.println("M16 is running");
 }
 
@@ -134,9 +144,11 @@ void audioStop() {
   if(auidioCallback1Handle != NULL) {
     vTaskDelete(auidioCallback1Handle);
   }
-  if(auidioCallback2Handle != NULL) {
-    vTaskDelete(auidioCallback2Handle);
-  }
+  // #if !IS_ESP32S2()
+    if(auidioCallback2Handle != NULL) {
+      vTaskDelete(auidioCallback2Handle);
+    }
+  // #endif
 }
 
 /* Combine left and right samples and send out via I2S */
@@ -151,11 +163,12 @@ bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
 }
 #endif // ESP32
 
-// void setI2sPins(int bck, int ws, int din) { // for ESP32 only
-//   i2sPins[0] = bck;
-//   i2sPins[1] = ws;
-//   i2sPins[2] = din;
-// }
+// set non-default i2s pins. For ESP32 (and S2) only, put before audioStart() in setup()
+void setI2sPins(int bck, int ws, int dout) { 
+  i2sPins[0] = bck;
+  i2sPins[1] = ws;
+  i2sPins[2] = dout;
+}
 
 /** Return freq from a MIDI pitch 
 * @pitch The MIDI pitch to be converted
