@@ -19,8 +19,6 @@ int reverbMix = 300; // 0 - 1024 // 150
 
 void setup() {
   Serial.begin(115200);
-  delay(200);
-  Serial.println();Serial.println("M16 running");
   // tone
   Osc::sawGen(waveTable);
   osc1.setPitch(60);
@@ -32,6 +30,9 @@ void setup() {
   effect1.setReverbSize(16); // quality and memory >= 1
   effect1.setReverbLength(990); // 0-1024
   audioStart();
+  //
+  delay(2500);
+  Serial.println();Serial.println("M16 running");
 }
 
 void loop() {
