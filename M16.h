@@ -42,6 +42,7 @@ const float TABLE_SIZE_INV = 1.0f / TABLE_SIZE;
 const int16_t HALF_TABLE_SIZE = 4096; //TABLE_SIZE / 2;
 
 uint16_t prevWaveVal = 0;
+bool useAudioUpdateThread = true;
 
 /** Define function signature here only
 * audioUpdate function must be defined in your main file
@@ -52,6 +53,14 @@ uint16_t prevWaveVal = 0;
 */
 void audioUpdate();
 // uint16_t leftSample, rightSample;
+
+/* Specify the use of a background audio thread.
+*  Call this prior to audioStart()
+*  If not used then call audioUpdate() in the loop() function.
+*/
+void setUseAudioUpdateThread(bool val) {
+  useAudioUpdateThread = val;
+}
 
 #if IS_ESP8266()
 /** Setup audio output callback for ESP8266*/
@@ -118,10 +127,15 @@ void audioCallback(void * paramRequiredButNotUsed) {
   }
 }
 
+// if (useAudioUpdateThread) {
+//   TaskHandle_t auidioCallback1Handle = NULL;
+//   #if !IS_ESP32S2()
+//     TaskHandle_t auidioCallback2Handle = NULL;
+//   #endif
+// }
+
 TaskHandle_t auidioCallback1Handle = NULL;
-#if !IS_ESP32S2()
-  TaskHandle_t auidioCallback2Handle = NULL;
-#endif
+TaskHandle_t auidioCallback2Handle = NULL;
 
 /** Start the audio callback
  *  This function is typically called in setup() in the main file
@@ -131,24 +145,28 @@ void audioStart() {
   i2s_set_pin(i2s_num, &pin_config);                        // Tell it the pins you will be using
   i2s_start(i2s_num); // not explicity necessary, called by install
   // RTOS callback
-  xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback1Handle, 0); // 2048 = memory, 1 = priorty, 1 = core
-  #if !IS_ESP32S2() // only has one thread, but seems to 'ignore' calls to second thread
-    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback2Handle, 1);
-  #endif
+  if (useAudioUpdateThread) {
+    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback1Handle, 0); // 2048 = memory, 1 = priorty, 1 = core
+    #if !IS_ESP32S2() // only has one thread
+      xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback2Handle, 1);
+    #endif
+  }
   Serial.println("M16 is running");
 }
 
 /** Uninstall the audio driver and halt the audio callbacks */
 void audioStop() {
   i2s_driver_uninstall(i2s_num); //stop & destroy i2s driver
-  if(auidioCallback1Handle != NULL) {
-    vTaskDelete(auidioCallback1Handle);
-  }
-  #if !IS_ESP32S2()
-    if(auidioCallback2Handle != NULL) {
-      vTaskDelete(auidioCallback2Handle);
+  if (useAudioUpdateThread) {
+    if(auidioCallback1Handle != NULL) {
+      vTaskDelete(auidioCallback1Handle);
     }
-  #endif
+    #if !IS_ESP32S2()
+      if(auidioCallback2Handle != NULL) {
+        vTaskDelete(auidioCallback2Handle);
+      }
+    #endif
+  }
 }
 
 /* Combine left and right samples and send out via I2S */
