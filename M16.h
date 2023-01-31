@@ -126,13 +126,6 @@ void audioCallback(void * paramRequiredButNotUsed) {
   }
 }
 
-// if (useAudioUpdateThread) {
-//   TaskHandle_t auidioCallback1Handle = NULL;
-//   #if !IS_ESP32S2()
-//     TaskHandle_t auidioCallback2Handle = NULL;
-//   #endif
-// }
-
 TaskHandle_t auidioCallback1Handle = NULL;
 TaskHandle_t auidioCallback2Handle = NULL;
 
@@ -140,7 +133,7 @@ TaskHandle_t auidioCallback2Handle = NULL;
  *  This function is typically called in setup() in the main file
  */
 void audioStart() {
-  i2s_driver_install(i2s_num, &i2s_config, 0, NULL);        // ESP32 will allocated resources to run I2S
+  i2s_driver_install(i2s_num, &i2s_config, 0, NULL);        // ESP32 will be allocated resources to run I2S
   i2s_set_pin(i2s_num, &pin_config);                        // Tell it the pins you will be using
   i2s_start(i2s_num); // not explicity necessary, called by install
   // RTOS callback
