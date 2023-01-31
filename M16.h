@@ -21,10 +21,9 @@
 #elif IS_ESP32()
   #include "driver/i2s.h"
   static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
+  int i2sPins [] = {25, 27, 12}; // bck, ws, data_out
   #if IS_ESP32S2()
-    int i2sPins [] = {35, 36, 37}; // bck, ws, data_out
-  #elif
-    int i2sPins [] = {25, 27, 12}; // bck, ws, data_out
+    int i2sPins [] = {35, 36, 37}; // bck, ws, data_out 
   #endif
 #endif
 // ESP32 - GPIO 25 -> BCLK, GPIO 27 -> LRCLK (WS), and GPIO 12 -> DOUT (DIN on board)
@@ -152,6 +151,7 @@ void audioStart() {
     #endif
   }
   Serial.println("M16 is running");
+  // Serial.print(i2sPins[0]); Serial.print(" "); Serial.print(i2sPins[1]); Serial.print(" "); Serial.println(i2sPins[2]);
 }
 
 /** Uninstall the audio driver and halt the audio callbacks */
