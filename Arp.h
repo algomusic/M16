@@ -94,9 +94,9 @@ class Arp {
         return nextPitch;
       }
       if (arpDirection == ARP_RANDOM) {
-        arpIndex = random(12);
+        arpIndex = rand(12);
         while (pitchSet[arpIndex] == 0) {
-          arpIndex = random(12);
+          arpIndex = rand(12);
         }
         return pitchSet[arpIndex];
       }
