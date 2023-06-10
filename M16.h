@@ -11,175 +11,150 @@
  *
  * M16 is licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
  */
-// from "Hardware_defines.h" in Mozzi
+// based on "Hardware_defines.h" in Mozzi
 #define IS_ESP8266() (defined(ESP8266))
 #define IS_ESP32() (defined(ESP32))
 #define IS_ESP32S2() (defined(CONFIG_IDF_TARGET_ESP32S2))
+#define IS_ESP32C3() (defined(CONFIG_IDF_TARGET_ESP32C3))
 
-#if IS_ESP8266()
-#include <I2S.h>
-#elif IS_ESP32()
-  #include "driver/i2s.h"
-  static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
-  int i2sPins [] = {25, 27, 12}; // bck, ws, data_out
-  #if IS_ESP32S2()
-    int i2sPins [] = {35, 36, 37}; // bck, ws, data_out 
-  #endif
-#endif
-// ESP32 - GPIO 25 -> BCLK, GPIO 27 -> LRCLK (WS), and GPIO 12 -> DOUT (DIN on board)
-// ESP32-S2 - GPIO 35 -> BCLK, GPIO 36 -> LRCLK (WS), and GPIO 37 -> DOUT (DIN on board)
-// ESP8266 I2S interface (D1 mini pins) BCLK->BCK (D8), I2SO->DOUT (RX), and LRCLK(WS)->LCK (D4) [SCK to GND on some boards]
-// #if not defined (SAMPLE_RATE)
+// globals
 #define SAMPLE_RATE 48000
 const float SAMPLE_RATE_INV  = 1.0f / SAMPLE_RATE;
 #define MAX_16 32767
 #define MIN_16 -32767
 #define MAX_16_INV 0.00003052
 
-const int16_t TABLE_SIZE = 8192; // 2048 // 4096 // 8192 // 16384 //32768 // 65536 //uint16_t
+const int16_t TABLE_SIZE = 4096; //8192; // 2048 // 4096 // 8192 // 16384 //32768 // 65536 //uint16_t
 const float TABLE_SIZE_INV = 1.0f / TABLE_SIZE;
-const int16_t HALF_TABLE_SIZE = 4096; //TABLE_SIZE / 2;
+const int16_t HALF_TABLE_SIZE = 2048; //TABLE_SIZE / 2;
 
-uint16_t prevWaveVal = 0;
-bool useAudioUpdateThread = true;
+int16_t prevWaveVal = 0;
+int16_t leftAudioOuputValue = 0;
+int16_t rightAudioOuputValue = 0;
 
-/** Define function signature here only
-* audioUpdate function must be defined in your main file
-* In it, calulate the next sample data values for left and right channels
-* Typically using aOsc.next() or similar calls.
-* The function must end with i2s_write_lr(leftVal, rightVal);
-* Keep output vol to max 50% for mono MAX98357 which sums both channels!
-*/
-void audioUpdate();
-// uint16_t leftSample, rightSample;
-
-/* Specify the use of a background audio thread.
-*  Call this prior to audioStart()
-*  If not used then call audioUpdate() in the loop() function.
-*/
-void setUseAudioUpdateThread(bool val) {
-  useAudioUpdateThread = val;
-}
+// ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)
+// ESP8266 I2S interface (D1 mini pins) BCLK->BCK (D8 GPIO15), I2SO->DOUT (RX GPIO3), and LRCLK(WS)->LCK (D4 GPIO2) [SCK to GND on some boards]
 
 #if IS_ESP8266()
-/** Setup audio output callback for ESP8266*/
-/*
-void ICACHE_RAM_ATTR onTimerISR() { //Code needs to be in IRAM because its a ISR
-  while (!(i2s_is_full())) { //Don’t block the ISR if the buffer is full
-    audioUpdate();
-  }
-  timer1_write(1500);//Next callback in 2mS
-}
-*/
+  // to flash Wemos D1 R1 with I2S board connected, seems you need to disconnect D4 & RX???
+  #include <I2S.h>
 
-/** Start the audio callback
- *  This function is typically called in setup() in the main file
- */
-void audioStart() {
-  I2S.begin(I2S_PHILIPS_MODE, SAMPLE_RATE, 16);
+  void audioUpdate(); // overridden by function in program code
 
-  // delay(1);
-  // i2s_rxtx_begin(true, true); // Enable I2S RX only
-  // i2s_set_rate(SAMPLE_RATE);
-  // timer1_attachInterrupt(onTimerISR); //Attach our sampling ISR
-  // timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
-  // timer1_write(1500);
-
-}
-/* Combine left and right samples and send out via I2S */
-void IRAM_ATTR i2s_write_samples(int16_t leftSample, int16_t rightSample) {
-    i2s_write_lr(leftSample, rightSample);
-}
-
-// end ESP8266 specific setup
-
-#elif IS_ESP32()
-/* ESP32 I2S configuration structures */
-static const i2s_config_t i2s_config = {
-    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-    .sample_rate = SAMPLE_RATE,
-    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-    // .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB), //ESP32 Arduino version 1
-    .communication_format = I2S_COMM_FORMAT_STAND_I2S, // ESP32 Arduino version 2
-    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,       // high interrupt priority
-    .dma_buf_count = 8,                             // 8 buffers
-    .dma_buf_len = 64, //1024,                            // 1K per buffer, so 8K of buffer space
-    .use_apll = false,
-    .tx_desc_auto_clear= true,
-    .fixed_mclk = -1
-};
-
-/* ESP32 I2S pin allocation */
-static const i2s_pin_config_t pin_config = { // D1 mini, NodeMCU
-    .bck_io_num = i2sPins[0], //25, //25,  //C3 10   // 25    // 8   // 6                     // The bit clock connectiom, goes to pin 27 of ESP32
-    .ws_io_num = i2sPins[1], //27, //27,   //C3 8   //27    // 6   // 4                // Word select, also known as word select or left right clock
-    .data_out_num = i2sPins[2], //12, //12,  // C3 20   //26   // 7   // 5            // Data out from the ESP32, connect to DIN on 38357A
-    .data_in_num = I2S_PIN_NO_CHANGE  // we are not interested in I2S data into the ESP32
-};
-
-/** Function for RTOS tasks to fill audio buffer */
-void audioCallback(void * paramRequiredButNotUsed) {
-  for(;;) { // Looks ugly, but necesary. RTOS manages thread
-    audioUpdate();
-    yield();
-  }
-}
-
-TaskHandle_t auidioCallback1Handle = NULL;
-TaskHandle_t auidioCallback2Handle = NULL;
-
-/** Start the audio callback
- *  This function is typically called in setup() in the main file
- */
-void audioStart() {
-  i2s_driver_install(i2s_num, &i2s_config, 0, NULL);        // ESP32 will be allocated resources to run I2S
-  i2s_set_pin(i2s_num, &pin_config);                        // Tell it the pins you will be using
-  i2s_start(i2s_num); // not explicity necessary, called by install
-  // RTOS callback
-  if (useAudioUpdateThread) {
-    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback1Handle, 0); // 2048 = memory, 1 = priorty, 1 = core
-    #if !IS_ESP32S2() // only has one thread
-      xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 1024, NULL, configMAX_PRIORITIES - 1, &auidioCallback2Handle, 1);
-    #endif
-  }
-  Serial.println("M16 is running");
-  // Serial.print(i2sPins[0]); Serial.print(" "); Serial.print(i2sPins[1]); Serial.print(" "); Serial.println(i2sPins[2]);
-}
-
-/** Uninstall the audio driver and halt the audio callbacks */
-void audioStop() {
-  i2s_driver_uninstall(i2s_num); //stop & destroy i2s driver
-  if (useAudioUpdateThread) {
-    if(auidioCallback1Handle != NULL) {
-      vTaskDelete(auidioCallback1Handle);
+  /** Setup audio output callback for ESP8266*/
+  // void ICACHE_RAM_ATTR onTimerISR() { //Code needs to be in IRAM because its a ISR
+  void IRAM_ATTR onTimerISR() { //Code needs to be in IRAM because its a ISR
+    while (!(i2s_is_full())) { //Don’t block the ISR if the buffer is full
+      audioUpdate();
     }
-    #if !IS_ESP32S2()
-      if(auidioCallback2Handle != NULL) {
-        vTaskDelete(auidioCallback2Handle);
-      }
-    #endif
+    timer1_write(2000);//Next callback in 2mS
   }
-}
 
-/* Combine left and right samples and send out via I2S */
-bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
-  static size_t bytesWritten = 0;
-  uint32_t value32Bit = ((uint32_t)leftSample/2 <<16) | ((uint32_t)rightSample/2 & 0xffff); // Output both left and right channels
-  yield();
-  i2s_write(i2s_num, &value32Bit, 4, &bytesWritten, portMAX_DELAY);
-  if (bytesWritten > 0) {
-      return true;
-  } else return false;
-}
-#endif // ESP32
+  /** Start the audio callback
+   *  This function is typically called in setup() in the main file
+   */
+  void audioStart() {
+    I2S.begin(I2S_PHILIPS_MODE, SAMPLE_RATE, 16);
+    timer1_attachInterrupt(onTimerISR); //Attach our sampling ISR
+    timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
+    timer1_write(2000); //Service at 2mS intervall
+    Serial.println("M16 is running");
+  }
 
-// set non-default i2s pins. For ESP32 (and S2) only, put before audioStart() in setup()
-void setI2sPins(int bck, int ws, int dout) { 
-  i2sPins[0] = bck;
-  i2sPins[1] = ws;
-  i2sPins[2] = dout;
-}
+  void i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+    leftAudioOuputValue = leftSample;
+    rightAudioOuputValue = rightSample;
+    i2s_write_lr(leftSample * 0.98, rightSample * 0.98); // * 0.98 to avoid DAC distortion at extremes
+  }
+
+  void seti2sPinsOut(int bck, int ws, int dout) {
+    Serial.println("seti2sPinsOut() is not availible for the ESP8266 which has fixed i2s pins");
+  } // ignored for ESP8266
+#elif IS_ESP32()
+  #include "driver/i2s.h"
+
+  static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
+  int i2sPinsOut [] = {16, 17, 18, 21}; // bck, ws, data_out, data_in defaults for eProject board, ESP32 or ESP32-S3 or ESP32-S2
+  
+  /* ESP32 I2S pin allocation */
+  static i2s_pin_config_t pin_config_out = { 
+      .bck_io_num = i2sPinsOut[0],   // The bit clock connectiom, goes to pin 27 of ESP32
+      .ws_io_num = i2sPinsOut[1],    // Word select, also known as word select or left right clock
+      .data_out_num = i2sPinsOut[2], // Data out from the ESP32
+      .data_in_num = i2sPinsOut[3]   // Data in to the ESP32
+  };
+
+  void seti2sPinsOut(int bck, int ws, int dout) {
+    i2sPinsOut[0] = bck;
+    i2sPinsOut[1] = ws;
+    i2sPinsOut[2] = dout;
+    pin_config_out = { 
+      .bck_io_num = i2sPinsOut[0], 
+      .ws_io_num = i2sPinsOut[1], 
+      .data_out_num = i2sPinsOut[2],
+      .data_in_num = i2sPinsOut[3]
+    };
+    Serial.println("i2s output pins set");
+  }
+
+  // I2S configuration structures
+  static const int dmaBufferLength = 64;
+  
+  static const i2s_config_t i2s_config_out = {
+      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
+      // .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+      .sample_rate = SAMPLE_RATE,
+      .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+      .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+      // .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
+      .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,       // high interrupt priority
+      .dma_buf_count = 8,                             // buffers
+      .dma_buf_len = dmaBufferLength,                 // samples per buffer
+      .use_apll = 0,
+      .tx_desc_auto_clear = true, 
+      .fixed_mclk = -1    
+  };
+
+  void audioUpdate();
+
+  /** Function for RTOS tasks to fill audio buffer */
+  void audioCallback(void * paramRequiredButNotUsed) {
+    for(;;) { // Looks ugly, but necesary. RTOS manages thread
+      audioUpdate();
+      yield();
+    }
+  }
+
+  bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+    leftAudioOuputValue = leftSample;
+    rightAudioOuputValue = rightSample;
+    static size_t bytesWritten = 0;
+    uint32_t value32Bit = (leftSample << 16) | (rightSample & 0xffff); // Combine both left and right channels
+    i2s_write(i2s_num, &value32Bit, 4, &bytesWritten, portMAX_DELAY); 
+    yield();
+    if (bytesWritten > 0) {
+        return true;
+    } else return false;
+  }
+
+  TaskHandle_t audioCallback1Handle = NULL;
+  TaskHandle_t audioCallback2Handle = NULL;
+
+  /** Start the audio callback
+   *  This function is typically called in setup() in the main file
+   */
+  void audioStart() {
+    i2s_driver_install(i2s_num, &i2s_config_out, 0, NULL);        // ESP32 will allocated resources to run I2S
+    i2s_set_pin(i2s_num, &pin_config_out);                        // Tell it the pins you will be using
+    i2s_start(i2s_num); // not explicity necessary, called by install
+    // RTOS callback
+    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 2048, NULL, 2, &audioCallback1Handle, 0); // 1024 = memory, 1 = priorty, 0 = core
+    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 2048, NULL, configMAX_PRIORITIES - 1, &audioCallback2Handle, 1);
+    Serial.println("M16 is running");
+  }
+#endif
+
 
 /** Return freq from a MIDI pitch 
 * @pitch The MIDI pitch to be converted
@@ -188,7 +163,7 @@ inline
 float mtof(float midival) {
   midival = max(0.0f, min(127.0f, midival));
   float f = 0.0;
-  if (midival) f = 8.1757989156 * pow(2.0, midival * 0.0833); /// 12.0);
+  if (midival) f = 8.1757989156 * pow(2.0, midival * 0.083333); /// 12.0);
   return f;
 }
 
@@ -268,8 +243,7 @@ float slew(float curr, float target, float amt) {
 // Rand from Mozzi library
 static unsigned long randX=132456789, randY=362436069, randZ=521288629;
 
-unsigned long xorshift96()
-{ //period 2^96-1
+unsigned long xorshift96() { //period 2^96-1
   // static unsigned long x=123456789, y=362436069, z=521288629;
   unsigned long t;
 
@@ -290,8 +264,7 @@ Ranged random number generator, faster than Arduino's built-in random function, 
 @param maxval the maximum signed int value of the range to be chosen from.  Maxval-1 will be the largest value possibly returned by the function.
 @return a random int between 0 and maxval-1 inclusive.
 */
-int rand(int maxVal)
-{
+int rand(int maxVal) {
   return (int) (((xorshift96() & 0xFFFF) * maxVal)>>16);
 }
 
