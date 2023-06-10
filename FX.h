@@ -232,6 +232,7 @@ class FX {
     inline
     void setReverbLength(int rLen) {
       reverbLength = max(0, min(1024, rLen));
+      initReverb();
     }
 
     /** Set the reverb amount
