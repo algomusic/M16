@@ -36,6 +36,10 @@ public:
 	*/
 	Del() {};
 
+  /** 
+   * Set the maximum delay time in milliseconds
+   * @param maxDelayTime The maximum delay time in milliseconds
+   */
   void setMaxDelayTime(unsigned int maxDelayTime) {
     delete[] delayBuffer; // remove any previous memory allocation
     maxDelayTime_ms = max((unsigned int)0, maxDelayTime);
