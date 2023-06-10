@@ -23,9 +23,9 @@ void setup() {
   Osc::sawGen(waveTable);
   osc1.setPitch(60);
   ampEnv1.setAttack(30);
-  ampEnv1.setMaxLevel(0.5);
+  ampEnv1.setMaxLevel(0.8);
   filter1.setResonance(0);
-  filter1.setCentreFreq(3000);
+  filter1.setFreq(3000);
   // reverb
   effect1.setReverbSize(16); // quality and memory >= 1
   effect1.setReverbLength(990); // 0-1024
@@ -36,17 +36,13 @@ void setup() {
 }
 
 void loop() {
-  #if IS_ESP8266()
-    audioUpdate(); //for ESP8266
-  #endif 
-  
-  msNow = millis();
+ msNow = millis();
 
   if (msNow > noteTime) {
     noteTime = msNow + 1000;
     int p = pitchQuantize(random(25) + 48, scale, 0);
     osc1.setPitch(p);
-    filter1.setCentreFreq(min(3000.0f, mtof(p + 24)));
+    filter1.setFreq(min(3000.0f, mtof(p + 24)));
     ampEnv1.start();
   }
 

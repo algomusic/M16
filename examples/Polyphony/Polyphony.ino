@@ -6,7 +6,7 @@
 #include "FX.h"
 
 int16_t waveTable [TABLE_SIZE]; // empty array
-const int poly = 4; // change polyphony as desired, each MCU type will handle this differently
+const int poly = 2; // change polyphony as desired, each MCU type will handle this differently
 Osc osc[poly];
 Env env[poly];
 SVF filter[poly];
@@ -15,7 +15,7 @@ FX effect1;
 unsigned long msNow, noteTime, envTime, delTime;
 int scale [] = {0, 2, 4, 0, 7, 9, 0, 0, 0, 0, 0};
 int reverbSize = 16; // >= 1
-int reverbLength = 800; // 0 - 1024
+int reverbLength = 700; // 0 - 1024
 int reverbMix = 150; // 0 - 1024
 
 void setup() {
@@ -28,22 +28,17 @@ void setup() {
     env[i].setAttack(30);
     env[i].setMaxLevel(0.7);
     filter[i].setResonance(0);
-    filter[i].setCentreFreq(3000);
+    filter[i].setFreq(3000);
   }
   // reverb setup
   effect1.setReverbSize(reverbSize); // quality and memory >= 1
   effect1.setReverbLength(reverbLength); // 0-1024
   effect1.setReverbMix(reverbMix);
-  // setI2sPins(35, 36, 37);
-  // setUseAudioUpdateThread(false); // use audioUpdate() in loop() instead
+  // setI2sPins(25, 27, 12);
   audioStart();
 }
 
 void loop() {
-  #if IS_ESP8266()
-    audioUpdate(); //for ESP8266
-  #endif 
-  
   msNow = millis();
 
   if (msNow > noteTime) {
@@ -52,7 +47,7 @@ void loop() {
       if (random(10) < 5) {
         int p = pitchQuantize(random(36) + 48, scale, 0);
         osc[i].setPitch(p);
-        filter[i].setCentreFreq(min(3000.0f, mtof(p + 24)));
+        filter[i].setFreq(min(3000.0f, mtof(p + 24)));
         env[i].start();
       }
     }

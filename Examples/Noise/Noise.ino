@@ -17,12 +17,11 @@ Env ampEnvW, ampEnvP, ampEnvB, ampEnvC; // envelopes
 
 // handle control rate updates for envelope and notes
 unsigned long msNow, stepTime, envTime = millis();
-byte vol = 125; // 0 - 255, 8 bit // keep to max 50% for MAX98357 which sums both channels!
+int vol = 1000; // 0 - 1023, 10 bit // keep to max 50% for MAX98357 which sums both channels!
 byte color = 0;
 
 void setup() {
   Serial.begin(115200);
-  Serial.println();Serial.println("M16 running");
   Osc::noiseGen(whiteTable); // fill wavetable
   Osc::pinkNoiseGen(pinkTable);
   Osc::brownNoiseGen(brownTable);
@@ -30,24 +29,20 @@ void setup() {
   whiteOsc.setNoise(true);
   pinkOsc.setNoise(true);
   brownOsc.setNoise(true);
-  // set initial env values
-  ampEnvW.setRelease(1000);
-  ampEnvP.setRelease(1000);
-  ampEnvB.setRelease(1000);
-  ampEnvC.setRelease(1000);
+  crackleOsc.setCrackle(true, MAX_16 * 0.5);
+  //set initial env values
+  ampEnvW.setRelease(2000);
+  ampEnvP.setRelease(2000);
+  ampEnvB.setRelease(2000);
+  ampEnvC.setRelease(2000);
   //
   audioStart();
 }
 
 void loop() {
-  #if IS_ESP8266()
-    audioUpdate(); //for ESP8266
-  #endif
-  
   msNow = millis();
-
   if (msNow > stepTime) {
-    stepTime += 1000;
+    stepTime += 2000;
     if (color == 0) {
       ampEnvW.start();
       Serial.println("White Noise");
@@ -78,11 +73,15 @@ void loop() {
 
 // This function required in all M16 programs to specify the samples to be played
 void audioUpdate() {
-  int16_t whiteVal = whiteOsc.next() * ampEnvW.getValue() >> 16;
-  int16_t pinkVal = pinkOsc.next() * ampEnvP.getValue() >> 16;
-  int16_t brownVal = brownOsc.next() * ampEnvB.getValue() >> 16;
-  int16_t crackleVal = crackleOsc.next() * ampEnvC.getValue() >> 16;
-  int16_t leftVal = ((whiteVal + pinkVal + brownVal + crackleVal) * vol)>>8; // master volume
+  int16_t whiteVal = (whiteOsc.next() * ampEnvW.getValue())>>16;
+  // i2s_write_samples(whiteVal, whiteVal);
+  int16_t pinkVal = pinkOsc.next() * ampEnvP.getValue()>>16;
+  // i2s_write_samples(pinkVal, pinkVal);
+  int16_t brownVal = brownOsc.next() * ampEnvB.getValue()>>16;
+  // i2s_write_samples(brownVal, brownVal);
+  int16_t crackleVal = crackleOsc.next() * ampEnvC.getValue()>>16;
+  // i2s_write_samples(crackleVal, crackleVal);
+  int16_t leftVal = ((whiteVal + pinkVal + brownVal + crackleVal) * vol)>>10; // master volume
   int16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

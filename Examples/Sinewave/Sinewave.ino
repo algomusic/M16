@@ -2,25 +2,21 @@
 #include "M16.h" 
 #include "Osc.h"
 
-int16_t sineTable [TABLE_SIZE]; // empty wavetable
-Osc aOsc1(sineTable);
+int16_t waveTable [TABLE_SIZE]; // empty wavetable
+Osc aOsc1(waveTable);
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow, pitchTime;
 
 void setup() {
   Serial.begin(115200);
-  Osc::sinGen(sineTable); // fill the wavetable
+  delay(200);
+  Osc::sinGen(waveTable); // fill the wavetable
   aOsc1.setPitch(69);
+  //setI2sPins(25, 27, 12); // bck, ws, data_out // optional for ESP32
   audioStart();
-  //
-  delay(2500);
-  Serial.println();Serial.println("M16 running");
 }
 
 void loop() {
-  #if IS_ESP8266()
-    audioUpdate(); //for ESP8266
-  #endif 
   msNow = millis();
   if (msNow > pitchTime) {
     pitchTime = msNow + 1000;
@@ -33,8 +29,6 @@ void loop() {
 /* The audioUpdate function is required in all M16 programs 
 * to specify the audio sample values to be played.
 * Always finish with i2s_write_samples()
-* For ESP32 programs this function is called in teh background
-* for ESP8266 programs a call to audioUpdate() is required in the loop() function.
 */
 void audioUpdate() {
   uint16_t leftVal = (aOsc1.next() * vol)>>10;
