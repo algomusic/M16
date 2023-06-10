@@ -314,7 +314,7 @@ public:
   */
 	inline
 	void setPitch(float midi_pitch) {
-		setFreq(mtof(min(127.0f, max(0.0f, midi_pitch * (1 + (random(6)) * 0.00001f)))));
+		setFreq(mtof(min(127.0f, max(0.0f, midi_pitch * (1 + (rand(6) * 0.00001f))))));
     prevFrequency = frequency;
 	}
 
@@ -359,6 +359,10 @@ public:
 	void setPulseWidth(float width) {
     pulseWidthOn = true;
     pulseWidth = max(0.05f, min(0.95f, width));
+    float pwInv = 1.0f / pulseWidth;
+    float halfPhaseInc = phase_increment_fractional * 0.5f;
+    phase_increment_fractional_w1 = halfPhaseInc * pwInv;
+    phase_increment_fractional_w2 = halfPhaseInc / (1.0f - pulseWidth);
   }
 
  /** Below are helper methods for generating waveforms into existing arrays.
@@ -430,7 +434,7 @@ public:
   */
   static void noiseGen(int16_t * theTable) {
     for(int i=0; i<TABLE_SIZE; i++) {
-      theTable[i] = random(MAX_16 * 2) - MAX_16;
+      theTable[i] = rand(MAX_16 * 2) - MAX_16;
     }
   }
 
@@ -440,11 +444,11 @@ public:
   */
   static void noiseGen(int16_t * theTable, int grainSize) {
     int grainCnt = 0;
-    int randVal = random(MAX_16 * 2) - MAX_16;
+    int randVal = rand(MAX_16 * 2) - MAX_16;
     for(int i=0; i<TABLE_SIZE; i++) {
       theTable[i] = randVal;
       grainCnt++;
-      if (grainCnt % grainSize == 0) randVal = random(MAX_16 * 2) - MAX_16;
+      if (grainCnt % grainSize == 0) randVal = rand(MAX_16 * 2) - MAX_16;
     }
   }
 
@@ -452,9 +456,13 @@ public:
   * @theTable The the wavetable to be filled
   */
   static void crackleGen(int16_t * theTable) {
-    theTable[0] = MAX_16;
-    for(int i=1; i<TABLE_SIZE; i++) {
+    // theTable[0] = MAX_16;
+    for(int i=0; i<TABLE_SIZE; i++) {
       theTable[i] = 0;
+    }
+    for(int i=0; i<2; i++) {
+      theTable[(int)rand(TABLE_SIZE)] = MAX_16;
+      theTable[(int)rand(TABLE_SIZE)] = MIN_16;
     }
   }
 
@@ -480,7 +488,7 @@ public:
   static void pinkNoiseGen(int16_t * theTable) {
     float b0, b1, b2, b3, b4, b5, b6;
     for (int i=0; i<TABLE_SIZE; i++) {
-      float white = (random(20000) - 10000) * 0.001;
+      float white = (rand(5000) - 2500) * 0.001; // 20000, 10000
       b0 = 0.99886 * b0 + white * 0.0555179;
       b1 = 0.99332 * b1 + white * 0.0750759;
       b2 = 0.969 * b2 + white * 0.153852;
@@ -509,7 +517,7 @@ private:
   int16_t prevSampVal = 0;
   bool isNoise = false;
   bool isCrackle = false;
-  int crackleAmnt = 0;
+  int crackleAmnt = MAX_16 * 0.5; //0; //MAX_16 * 0.5;
   float frequency = 440;
   float prevFrequency = 440;
   float pulseWidth = 0.5;
@@ -530,11 +538,11 @@ private:
     } else phase_fractional += phase_increment_fractional;
 		if (phase_fractional > TABLE_SIZE) {
 		  if (isNoise) {
-        phase_fractional = random(TABLE_SIZE);
+        phase_fractional = rand(TABLE_SIZE);
 		  } else if (isCrackle) {
-        if (rand(MAX_16) < crackleAmnt) {
-          phase_fractional = random(TABLE_SIZE);
-        } else phase_fractional = 1;
+        if (rand(MAX_16) > crackleAmnt) {
+          phase_fractional = 1; //rand(TABLE_SIZE);
+        } else phase_fractional = rand(TABLE_SIZE); //= 1;
       } else {
 		    phase_fractional -= TABLE_SIZE;
         // randomness destabilises pitch at the expense of some CPU load
