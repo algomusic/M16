@@ -199,7 +199,7 @@ class Env {
     */
     inline
     void setMaxLevel(float level) {
-      MAX_ENV_LEVEL = MAX_16 * level;
+      MAX_ENV_LEVEL = (MAX_16 * 2 - 1) * level;
       JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
     }
 
@@ -208,11 +208,11 @@ class Env {
     */
     inline
     float getMaxLevel() {
-      return MAX_ENV_LEVEL * (float)MAX_16_INV;
+      return MAX_ENV_LEVEL * 0.5 * (float)MAX_16_INV;
     }
 
   private:
-    uint32_t MAX_ENV_LEVEL = MAX_16 - 1;
+    uint32_t MAX_ENV_LEVEL = MAX_16 * 2 - 1;
     uint32_t JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
     uint32_t jitEnvAttack, envAttack, envHold, envDecay, jitEnvDecay, envSustain = 0;
     uint32_t envRelease = 600 * 1000; // ms to micros
