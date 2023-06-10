@@ -9,12 +9,12 @@ Default I2S DAC board connections are:
 ESP8266 - GPIO 15 -> BCLK, GPIO 2 -> LRCLK (WS), and GPIO 3 (RX) -> DOUT (to DIN) [DIN not yet supported]
 ESP32 - GPIO 16 -> BCLK, GPIO 17 -> LRCLK (WS), GPIO 18 -> DOUT (to DIN), and GPIO 21 -> DOUT (to DIN)
 
-To chnage the default pins for ESP32 use: seti2sPinsOut(); 
+To change the default pins for ESP32 use: seti2sPinsOut(); 
 e.g. seti2sPinsOut(25, 27, 12, 21);
 
-Some I2S DAC boards often require other terminals to be grounded.
+Some I2S DAC and microphone boards require other terminals to be grounded.
 
-Always include the M16.h file and add a void audioUpdate() function that ends with a call to i2s_write_samples(leftVal, rightVal). For ESP32 (inc S2) programs, this function is automatically called in the background.
+Always include the M16.h file and add a void audioUpdate() function that ends with a call to i2s_write_samples(leftVal, rightVal). This function is automatically called in the background.
 
 M16 prioritises audio processing and may not play well with other libraries where timing is critical, such as wifi, and file i/o. The temporary stopping of audio during these tasks may help coordination between them.
 
