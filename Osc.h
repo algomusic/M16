@@ -47,7 +47,7 @@ public:
 
   /** Returns the sample at for the oscillator phase at specified time in milliseconds.
   * Used for LFOs. Assumes the Osc started at time = 0;
-	* @return outSamp The sample value at the calulated phase position.
+	* @return outSamp The sample value at the calculated phase position - range MIN_16 to MAX_16.
 	*/
 	inline
 	int16_t atTime(unsigned long ms) {
@@ -55,6 +55,16 @@ public:
     int index = indexAtTime % TABLE_SIZE;
     int16_t outSamp = readTableIndex(index);
     return outSamp;
+  }
+
+  /** Returns the normalised oscillator value at specified time in milliseconds.
+  * Used for LFOs. Assumes the Osc started at time = 0;
+	* @return outVal The osc value at the calculated phase position normalised between 0.0 and 1.0.
+	*/
+	inline
+	float atTimeNormal(unsigned long ms) {
+    int16_t outSamp = atTime(ms);
+    return max(0.0, outSamp * MAX_16_INV * 0.5 + 0.5);
   }
 
 	/** Change the sound table which will be played by the Oscil.
