@@ -12,7 +12,7 @@ void setup() {
   delay(200);
   Osc::sinGen(waveTable); // fill the wavetable
   aOsc1.setPitch(69);
-  //setI2sPins(25, 27, 12); // bck, ws, data_out // optional for ESP32
+  //setI2sPins(25, 27, 12, 16); // bck, ws, data_out, data_in // change ESP32 defaults
   audioStart();
 }
 
