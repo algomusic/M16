@@ -75,7 +75,7 @@ int16_t rightAudioOuputValue = 0;
 
   static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
   int i2sPinsOut [] = {16, 17, 18, 21}; // bck, ws, data_out, data_in defaults for eProject board, ESP32 or ESP32-S3 or ESP32-S2
-  // there seems to be an issue on the S2 sharing bck (GPIO 16) with the MEMS microphone
+  // there seems to be an issue on the S2 sharing bck (GPIO 16) with the MEMS microphone.
 
   /* ESP32 I2S pin allocation */
   static i2s_pin_config_t pin_config = { 
