@@ -111,8 +111,7 @@ class FX {
       if (shapeTableSize > 0) index = (sample_in + MAX_16) / waveShaperStepInc;
       int16_t sampVal = shapeTable[index];
       if (amount >= 0 && amount < 1.0) sampVal = (sampVal * amount) + (sample_in * (1.0 - amount));
-      return sampVal; //((int32_t)sampVal + (int32_t)prevSampVal)>>1;//shapeTable[index];
-    }
+      return sampVal; 
 
     /** Create a dedicated soft clip wave shaper
     *  Distorts wave input by wave shaping function
