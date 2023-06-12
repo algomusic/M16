@@ -75,20 +75,22 @@ int16_t rightAudioOuputValue = 0;
 
   static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
   int i2sPinsOut [] = {16, 17, 18, 21}; // bck, ws, data_out, data_in defaults for eProject board, ESP32 or ESP32-S3 or ESP32-S2
-  
+  // there seems to be an issue on the S2 sharing bck (GPIO 16) with the MEMS microphone
+
   /* ESP32 I2S pin allocation */
-  static i2s_pin_config_t pin_config_out = { 
+  static i2s_pin_config_t pin_config = { 
       .bck_io_num = i2sPinsOut[0],   // The bit clock connectiom, goes to pin 27 of ESP32
       .ws_io_num = i2sPinsOut[1],    // Word select, also known as word select or left right clock
       .data_out_num = i2sPinsOut[2], // Data out from the ESP32
       .data_in_num = i2sPinsOut[3]   // Data in to the ESP32
   };
 
-  void seti2sPinsOut(int bck, int ws, int dout) {
+  void seti2sPinsOut(int bck, int ws, int dout, int din) {
     i2sPinsOut[0] = bck;
     i2sPinsOut[1] = ws;
     i2sPinsOut[2] = dout;
-    pin_config_out = { 
+    i2sPinsOut[3] = din;
+    pin_config = { 
       .bck_io_num = i2sPinsOut[0], 
       .ws_io_num = i2sPinsOut[1], 
       .data_out_num = i2sPinsOut[2],
@@ -100,9 +102,8 @@ int16_t rightAudioOuputValue = 0;
   // I2S configuration structures
   static const int dmaBufferLength = 64;
   
-  static const i2s_config_t i2s_config_out = {
+  static const i2s_config_t i2s_config = {
       .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
-      // .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
       .sample_rate = SAMPLE_RATE,
       .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
       .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
@@ -145,8 +146,8 @@ int16_t rightAudioOuputValue = 0;
    *  This function is typically called in setup() in the main file
    */
   void audioStart() {
-    i2s_driver_install(i2s_num, &i2s_config_out, 0, NULL);        // ESP32 will allocated resources to run I2S
-    i2s_set_pin(i2s_num, &pin_config_out);                        // Tell it the pins you will be using
+    i2s_driver_install(i2s_num, &i2s_config, 0, NULL);        // ESP32 will allocated resources to run I2S
+    i2s_set_pin(i2s_num, &pin_config);                        // Tell it the pins you will be using
     i2s_start(i2s_num); // not explicity necessary, called by install
     // RTOS callback
     xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 2048, NULL, 2, &audioCallback1Handle, 0); // 1024 = memory, 1 = priorty, 0 = core

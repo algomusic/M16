@@ -101,14 +101,17 @@ class FX {
     }
 
     /** Wave Shaper
-    *  Distorts wave input by wave shaping function
-    *  Shaping wave is, like osc wavetables, WAVE_TABLE wide from MIN_16 to MAX_16 values
+    * Distorts wave input by wave shaping function
+    * Shaping wave is, like osc wavetables, WAVE_TABLE wide from MIN_16 to MAX_16 values
+    * @sample_in is the input sample value from the carrier wave
     */
     inline
-    int16_t waveShaper(int32_t sample_in) {
+    int16_t waveShaper(int16_t sample_in, float amount) {
       int index = sample_in;
       if (shapeTableSize > 0) index = (sample_in + MAX_16) / waveShaperStepInc;
-      return shapeTable[index];
+      int16_t sampVal = shapeTable[index];
+      if (amount >= 0 && amount < 1.0) sampVal = (sampVal * amount) + (sample_in * (1.0 - amount));
+      return sampVal; //((int32_t)sampVal + (int32_t)prevSampVal)>>1;//shapeTable[index];
     }
 
     /** Create a dedicated soft clip wave shaper
