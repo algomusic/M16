@@ -111,7 +111,8 @@ class FX {
       if (shapeTableSize > 0) index = (sample_in + MAX_16) / waveShaperStepInc;
       int16_t sampVal = shapeTable[index];
       if (amount >= 0 && amount < 1.0) sampVal = (sampVal * amount) + (sample_in * (1.0 - amount));
-      return sampVal; 
+      return sampVal;
+    }
 
     /** Create a dedicated soft clip wave shaper
     *  Distorts wave input by wave shaping function
@@ -178,7 +179,7 @@ class FX {
     int16_t pluck(int16_t audioIn, float pluckFreq, float depth) {
       if (!pluckBufferEstablished) initPluckBuffer();
       // read
-//      float read_index_fractional = SAMPLE_RATE / pluckFreq;
+      //float read_index_fractional = SAMPLE_RATE / pluckFreq;
       int pluck_buffer_read_index = pluck_buffer_write_index - SAMPLE_RATE / pluckFreq + 1;
       if (pluck_buffer_read_index < 0) pluck_buffer_read_index += PLUCK_BUFFER_SIZE;
       int bufferRead = pluckBuffer[pluck_buffer_read_index] * depth;
