@@ -43,7 +43,7 @@ void loop() {
     noteTime = msNow + 1000;
     int p = pitchQuantize(random(25) + 48, scale, 0);
     osc1.setPitch(p);
-    filter1.setFreq(min(3000.0f, mtof(p + 24)));
+    filter1.setFreq(min(4000.0f, mtof(p + 32)));
     float pan = rand(1000) * 0.001;
     leftPan = panLeft(pan);
     rightPan = panRight(pan);
