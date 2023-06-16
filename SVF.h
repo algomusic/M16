@@ -61,7 +61,6 @@ class SVF {
 
     /** Calculate the next Lowpass filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
-     *  Needs to use int rather than uint16_t for some reason(?)
      */
     inline
     int16_t nextLPF(int32_t input) {
@@ -71,7 +70,6 @@ class SVF {
 
     /** Calculate the next Highpass filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
-     *  Needs to use int rather than uint16_t for some reason(?)
      */
     inline
     int16_t nextHPF(int32_t input) {
@@ -81,7 +79,6 @@ class SVF {
 
     /** Calculate the next Bandpass filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
-     *  Needs to use int rather than uint16_t for some reason(?)
      */
     inline
     int16_t nextBPF(int32_t input) {
@@ -125,7 +122,6 @@ class SVF {
 
     /** Calculate the next Notch filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
-     *  Needs to use int rather than uint16_t for some reason(?)
      */
     inline
     int16_t nextNotch(int32_t input) {
@@ -133,11 +129,19 @@ class SVF {
       return max(-MAX_16, (int)min((int32_t)MAX_16, notch));
     }
 
+    /** Calculate the next averaged filter sample, given an input signal.
+     *  Input is an output from an oscillator or other audio element.
+     *  Perhaps not technically a state variable filter, but useful for low power CPUs like ESP8266
+     */
+    inline
+    int16_t simpleLPF(int32_t input) {
+      simplePrev = (input + simplePrev) >> 1;
+      return simplePrev;
+    }
+
   private:
-    int32_t low, band, high, notch, allpassPrevIn, allpassPrevOut;
-//       float q = 1.0;
+    int32_t low, band, high, notch, allpassPrevIn, allpassPrevOut, simplePrev;
     int32_t q = 255;
-//       float scale;
     int32_t scale = sqrt(1) * 255;
     volatile float f = SAMPLE_RATE * 0.25;
     int32_t centFreq = 10000;
