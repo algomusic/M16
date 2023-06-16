@@ -7,7 +7,7 @@ M16 is a 16-bit audio synthesis library for ESP microprocessors and I2S audio DA
 Default I2S DAC board connections are:
 
 ESP8266 - GPIO 15 -> BCLK, GPIO 2 -> LRCLK (WS), and GPIO 3 (RX) -> DOUT (to DIN) [DIN not yet supported]
-ESP32 - GPIO 16 -> BCLK, GPIO 17 -> LRCLK (WS), GPIO 18 -> DOUT (to DIN), and GPIO 21 -> DIN (to DOUT)
+ESP32 - GPIO 16 -> BCLK, GPIO 17 -> LRCLK (WS), GPIO 18 -> DOUT (to DAC DIN), and GPIO 21 -> DIN (from Mic/ADC DOUT)
 
 To change the default pins for ESP32 use: seti2sPins(); 
 e.g. seti2sPins(25, 27, 12, 21);
