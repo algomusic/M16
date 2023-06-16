@@ -15,6 +15,7 @@ unsigned long msNow, noteTime, envTime, delTime;
 int scale [] = {0, 2, 4, 5, 7, 9, 0, 0, 0, 0, 0};
 int reverbLength = 900; // 0 - 1024
 int reverbMix = 300; // 0 - 1024 // 150
+float leftPan, rightPan;
 
 void setup() {
   Serial.begin(115200);
@@ -43,7 +44,11 @@ void loop() {
     int p = pitchQuantize(random(25) + 48, scale, 0);
     osc1.setPitch(p);
     filter1.setFreq(min(3000.0f, mtof(p + 24)));
+    float pan = rand(1000) * 0.001;
+    leftPan = panLeft(pan);
+    rightPan = panRight(pan);
     ampEnv1.start();
+    Serial.print("Pitch: ");Serial.print(p);Serial.print(" Pan: ");Serial.println(pan);
   }
 
   if (msNow > envTime) {
@@ -53,14 +58,13 @@ void loop() {
 }
 
 void audioUpdate() {
+  int16_t leftVal, rightVal;
   #if IS_ESP8266()
     int16_t oscVal = (osc1.next() * ampEnv1.getValue())>>16;
+    effect1.reverbStereo(oscVal, oscVal, leftVal, rightVal);
   #elif IS_ESP32()
     int16_t oscVal = filter1.nextLPF((osc1.next() * ampEnv1.getValue())>>16);
+    effect1.reverbStereo(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
   #endif
-  
-  // stereo
-  int16_t leftVal, rightVal;
-  effect1.reverbStereo(oscVal, oscVal, leftVal, rightVal);
   i2s_write_samples(leftVal, rightVal);
 }
