@@ -1,4 +1,5 @@
 // M16 Spread example
+// ESP8266 struggles with spread, try using window transform or osc morph instead
 #include "M16.h" 
 #include "Osc.h"
 #include "SVF.h"

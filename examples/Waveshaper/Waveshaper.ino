@@ -6,9 +6,10 @@
 int16_t sineTable [TABLE_SIZE]; // empty wavetable
 Osc aOsc1(sineTable);
 Osc lfo1(sineTable);
+FX effect1;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow, pitchTime, mixTime;
-FX effect1;
+
 int16_t waveShapeTable [TABLE_SIZE]; // empty wave shaping table
 float stepInc = (MAX_16 * 2.0 - 1) / TABLE_SIZE;
 float shapeMixVal = 1.0;
@@ -33,9 +34,6 @@ void setup() {
   audioStart();
 }
 
-// float morphVal = 1.0;
-bool morphUp = false;
-
 void loop() {
   msNow = millis();
   if (msNow > pitchTime) {
@@ -46,10 +44,12 @@ void loop() {
     generateTransferFunction();
   }
 
-  if (msNow > mixTime) {
-    mixTime = msNow + 32;
-    shapeMixVal = lfo1.atTimeNormal(msNow);
-  }
+  #if IS_ESP32() // 8266 can't manage waveshaping morphing
+    if (msNow > mixTime) {
+      mixTime = msNow + 32;
+      shapeMixVal = lfo1.atTimeNormal(msNow);
+    }
+  #endif
 }
 
 /* The audioUpdate function is required in all M16 programs 

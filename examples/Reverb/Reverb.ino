@@ -1,4 +1,3 @@
-
 // M16 Reverb Example 
 #include "M16.h"
 #include "Osc.h"
@@ -27,16 +26,17 @@ void setup() {
   filter1.setResonance(0);
   filter1.setFreq(3000);
   // reverb
-  effect1.setReverbSize(16); // quality and memory >= 1
-  effect1.setReverbLength(990); // 0-1024
+  #if IS_ESP8266()
+    effect1.setReverbSize(8); // quality and memory >= 1 
+  #elif IS_ESP32()
+    effect1.setReverbSize(16); // quality and memory >= 1 
+  #endif
+  effect1.setReverbLength(970); // 0-1024
   audioStart();
-  //
-  delay(2500);
-  Serial.println();Serial.println("M16 running");
 }
 
 void loop() {
- msNow = millis();
+  msNow = millis();
 
   if (msNow > noteTime) {
     noteTime = msNow + 1000;
@@ -53,7 +53,12 @@ void loop() {
 }
 
 void audioUpdate() {
-  int16_t oscVal = filter1.nextLPF((osc1.next() * ampEnv1.getValue())>>16);
+  #if IS_ESP8266()
+    int16_t oscVal = (osc1.next() * ampEnv1.getValue())>>16;
+  #elif IS_ESP32()
+    int16_t oscVal = filter1.nextLPF((osc1.next() * ampEnv1.getValue())>>16);
+  #endif
+  
   // stereo
   int16_t leftVal, rightVal;
   effect1.reverbStereo(oscVal, oscVal, leftVal, rightVal);

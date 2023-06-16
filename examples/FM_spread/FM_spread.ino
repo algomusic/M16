@@ -33,12 +33,16 @@ void loop() {
       if (random(2) == 0) {
         float spreadVal = random(1000) * 0.00001;
         Serial.print("Detune spread ");Serial.print(spreadVal);
-        aOsc1.setSpread(spreadVal); // close phase mod
+        #if IS_ESP32() // 8266 can't manage spread as well as phMod
+          aOsc1.setSpread(spreadVal); // close phase mod
+        #endif
       } else { // chordal, up to one octave above or below
         int i1 = random(25) - 12;
         int i2 = random(25) - 12;
-        Serial.print("Chord spread ");Serial.print(i1);Serial.print(" ");Serial.println(i2);
-        aOsc1.setSpread(i1, i2);
+        #if IS_ESP32() // 8266 can't manage spread as well as phMod
+          Serial.print("Chord spread ");Serial.print(i1);Serial.print(" ");Serial.println(i2);
+          aOsc1.setSpread(i1, i2);
+        #endif
         modIndex = random(20) * 0.1 + 0.2;
         modVal = modIndex;
         Serial.print("Mod index ");Serial.print(modIndex);
@@ -63,7 +67,12 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  uint16_t leftVal = (filter.nextLPF(aOsc1.phMod(modOsc.next(), modVal)) * vol)>>10;
-  uint16_t rightVal = leftVal;
+  #if IS_ESP8266() // 8266 can't manage filter as well as phMod
+    int16_t leftVal = (aOsc1.phMod(modOsc.next(), modVal) * vol)>>10;
+  #elif IS_ESP32()
+    int16_t leftVal = (filter.nextLPF(aOsc1.phMod(modOsc.next(), modVal)) * vol)>>10;
+  #endif
+  // 
+  int16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

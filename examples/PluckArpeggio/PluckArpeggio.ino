@@ -1,32 +1,26 @@
 // M16 plucked string and arpeggiator example
-
 #include "M16.h"
 #include "Osc.h"
 #include "Env.h"
-#include "FX.h"
 #include "Arp.h"
 #include "SVF.h"
+#include "FX.h"
 
 int16_t noiseTable [TABLE_SIZE]; // empty wavetable
 Osc aOsc1(noiseTable);
 Env ampEnv1;
-FX aEffect1;
 Arp arp1;
 SVF filter;
+FX effect1;
 int bpm = 120;
 double stepTime, stepDelta;
 unsigned long msNow, envTime = millis();
 int16_t vol = 1000; // 0 - 1024, 10 bit
 float feedback = 0.9;
 
-float floatMap(float x, float in_min, float in_max, float out_min, float out_max) {
-  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
-
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.println();Serial.println("M16 running");
   Osc::noiseGen(noiseTable); aOsc1.setNoise(true); // fill wavetable and set noise flag
   ampEnv1.setAttack(0);
   ampEnv1.setRelease(2);
@@ -67,7 +61,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  int16_t leftVal = (filter.nextLPF(aEffect1.pluck((aOsc1.next() * ampEnv1.getValue() >> 16), aOsc1.getFreq(), feedback)) * vol)>>10;;
+  int16_t leftVal = (filter.nextLPF(effect1.pluck((aOsc1.next() * ampEnv1.getValue() >> 16), aOsc1.getFreq(), feedback)) * vol)>>10;
   int16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }
