@@ -9,8 +9,8 @@ Default I2S DAC board connections are:
 ESP8266 - GPIO 15 -> BCLK, GPIO 2 -> LRCLK (WS), and GPIO 3 (RX) -> DOUT (to DIN) [DIN not yet supported]
 ESP32 - GPIO 16 -> BCLK, GPIO 17 -> LRCLK (WS), GPIO 18 -> DOUT (to DIN), and GPIO 21 -> DIN (to DOUT)
 
-To change the default pins for ESP32 use: seti2sPinsOut(); 
-e.g. seti2sPinsOut(25, 27, 12, 21);
+To change the default pins for ESP32 use: seti2sPins(); 
+e.g. seti2sPins(25, 27, 12, 21);
 
 Some I2S DAC and microphone boards require other terminals to be grounded.
 
