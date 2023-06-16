@@ -220,6 +220,13 @@ float panRight(float panVal) {
   return max(0.0, min(1.0, cos(6.219 * (panVal * 0.25 + 0.75))));
 }
 
+/** Return scaled floating point value 
+* Arduino map() function for floats
+*/
+float floatMap(float x, float in_min, float in_max, float out_min, float out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
 /** Return sigmond distributed value for value between 0.0-1.0 */
 inline
 float sigmoid(float inVal) { // 0.0 to 1.0
