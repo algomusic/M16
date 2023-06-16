@@ -67,8 +67,8 @@ int16_t rightAudioOuputValue = 0;
     i2s_write_lr(leftSample * 0.98, rightSample * 0.98); // * 0.98 to avoid DAC distortion at extremes
   }
 
-  void seti2sPinsOut(int bck, int ws, int dout) {
-    Serial.println("seti2sPinsOut() is not availible for the ESP8266 which has fixed i2s pins");
+  void seti2sPins(int bck, int ws, int dout, int din) {
+    Serial.println("seti2sPins() is not availible for the ESP8266 which has fixed i2s pins");
   } // ignored for ESP8266
 #elif IS_ESP32()
   #include "driver/i2s.h"
@@ -85,7 +85,7 @@ int16_t rightAudioOuputValue = 0;
       .data_in_num = i2sPinsOut[3]   // Data in to the ESP32
   };
 
-  void seti2sPinsOut(int bck, int ws, int dout, int din) {
+  void seti2sPins(int bck, int ws, int dout, int din) {
     i2sPinsOut[0] = bck;
     i2sPinsOut[1] = ws;
     i2sPinsOut[2] = dout;
