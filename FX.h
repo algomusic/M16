@@ -230,20 +230,21 @@ class FX {
     }
 
     /** Set the reverb length
-    * @rLen The amount of feedback that effects reverb decay time. Values from 0 to 1024.
+    * @rLen The amount of feedback that effects reverb decay time. Values from 0.0 to 1.0.
     */
     inline
-    void setReverbLength(int rLen) {
-      reverbLength = max(0, min(1024, rLen));
+    void setReverbLength(float rLen) {
+      reverbFeedbackLevel = max(0.0f, min(1.0f, rLen));
       initReverb();
     }
 
     /** Set the reverb amount
-    * @rMix The balance between dry and wet signal. Amount of wet signal, from 0 to 1024.
+    * @rMix The balance between dry and wet signal, as the amount of wet signal, from 0.0 to 1.0.
     */
     inline
-    void setReverbMix(int rMix) {
-      reverbMix = max(0, min(1024, rMix));
+    void setReverbMix(float rMix) {
+      reverbMix = max(0, min(1024, (int)(rMix * 1204.0f)));
+      // Serial.print("reverbMix ");Serial.println(reverbMix);
     }
 
     /** Set the reverb memory size
@@ -263,9 +264,9 @@ class FX {
     int prevPluckOutput = 0;
     bool pluckBufferEstablished = false;
     bool reverbInitiated = false;
-    int reverbLength = 980; // 0 to 1024
+    float reverbFeedbackLevel = 0.980; // 0.0 to 1.0
     int reverbMix = 270; // 0 to 1024
-    float reverbSize = 1.0; // 0 to 1, memory allocated to delay lengths
+    float reverbSize = 1.0; // >= 1, memory allocated to delay lengths
     Del delay1, delay2, delay3, delay4;
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
     int16_t * shapeTable;
@@ -292,10 +293,10 @@ class FX {
     void initReverb(float size) { // 1/8 of Pd values
       delay1.setMaxDelayTime(8 * size); delay2.setMaxDelayTime(9 * size);
       delay3.setMaxDelayTime(11 * size); delay4.setMaxDelayTime(13 * size);
-      delay1.setTime(7.5 * size); delay1.setLevel(reverbLength); delay1.setFeedback(true);
-      delay2.setTime(8.993 * size); delay2.setLevel(reverbLength); delay2.setFeedback(true);
-      delay3.setTime(10.844 * size); delay3.setLevel(reverbLength); delay3.setFeedback(true);
-      delay4.setTime(12.118 * size); delay4.setLevel(reverbLength); delay4.setFeedback(true);
+      delay1.setTime(7.5 * size); delay1.setLevel(reverbFeedbackLevel); delay1.setFeedback(true);
+      delay2.setTime(8.993 * size); delay2.setLevel(reverbFeedbackLevel); delay2.setFeedback(true);
+      delay3.setTime(10.844 * size); delay3.setLevel(reverbFeedbackLevel); delay3.setFeedback(true);
+      delay4.setTime(12.118 * size); delay4.setLevel(reverbFeedbackLevel); delay4.setFeedback(true);
       reverbInitiated = true;
     }
 
