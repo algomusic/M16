@@ -32,7 +32,7 @@ void setup() {
   #elif IS_ESP32()
     effect1.setReverbSize(16); // quality and memory >= 1 
   #endif
-  effect1.setReverbLength(970); // 0-1024
+  effect1.setReverbLength(0.9); // 0.0 - 1.0
   audioStart();
 }
 
