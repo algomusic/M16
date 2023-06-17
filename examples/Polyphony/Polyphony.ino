@@ -23,7 +23,7 @@ void setup() {
     osc[i].setTable(waveTable);
     osc[i].setPitch(60);
     env[i].setAttack(30);
-    env[i].setMaxLevel(0.7 - poly * 0.03);
+    env[i].setMaxLevel(max(0.1, 0.7 - poly * 0.042));
     filter[i].setResonance(0);
     filter[i].setFreq(3000);
   }
