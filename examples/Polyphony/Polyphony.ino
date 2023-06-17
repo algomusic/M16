@@ -14,9 +14,6 @@ FX effect1;
 
 unsigned long msNow, noteTime, envTime, delTime;
 int scale [] = {0, 2, 4, 0, 7, 9, 0, 0, 0, 0, 0};
-int reverbSize = 16; // >= 1
-int reverbLength = 700; // 0 - 1024
-int reverbMix = 150; // 0 - 1024
 
 void setup() {
   Serial.begin(115200);
@@ -26,15 +23,15 @@ void setup() {
     osc[i].setTable(waveTable);
     osc[i].setPitch(60);
     env[i].setAttack(30);
-    env[i].setMaxLevel(0.7);
+    env[i].setMaxLevel(0.7 - poly * 0.03);
     filter[i].setResonance(0);
     filter[i].setFreq(3000);
   }
   // reverb setup
   #if IS_ESP32() //8266 can't manage reverb as well
-    effect1.setReverbSize(reverbSize); // quality and memory >= 1
-    effect1.setReverbLength(reverbLength); // 0-1024
-    effect1.setReverbMix(reverbMix);
+    effect1.setReverbSize(16); // quality and memory >= 1
+    effect1.setReverbLength(0.6); // 0-1
+    effect1.setReverbMix(0.7); // 0-1
   #endif
   // setI2sPins(25, 27, 12, 21);
   audioStart();
@@ -72,7 +69,7 @@ void audioUpdate() {
       mix += filter[i].nextLPF((osc[i].next() * env[i].getValue())>>16);
     #endif
   }
-  mix = min(MAX_16, max(MIN_16, mix>>1));
+  mix = effect1.clip(mix);
   // stereo
   int16_t leftVal = mix; 
   int16_t rightVal = mix;
