@@ -25,7 +25,7 @@ private:
   int16_t delayLevel = 1024; // 0 to 1024
   float maxDelayTime_ms = 0;
   unsigned int delayBufferSize_samples = 0;
-  bool delayFeedback = 0;
+  bool delayFeedback = false;
   int16_t prevOutValue = 0;
   byte filtered = 1;
 
@@ -86,12 +86,13 @@ public:
     // Serial.print("delayTime_samples "); Serial.println(delayTime_samples);
   }
 
-  /** Specify the delay feedback level, from 0 to 1024 */
-  void setLevel(int level) {
-    delayLevel = min(1024, max(0, level));
+  /** Specify the delay feedback level, from 0.0 to 1.0 */
+  void setLevel(float level) {
+    delayLevel = min(1024, max(0, (int)(level * 1024)));
+    Serial.print("delayLevel "); Serial.println(delayLevel);
   }
 
-  /** Specify the delay feedback level, from 0 to 1024 */
+  /** Turn delay feedback on or off */
   void setFeedback(bool state) {
     delayFeedback = state;
   }
