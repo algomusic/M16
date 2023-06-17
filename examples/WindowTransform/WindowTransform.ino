@@ -15,7 +15,6 @@ bool expanding = true;
 
 void setup() {
   Serial.begin(115200);
-  Serial.println();Serial.println("M16 running");
   Osc::sinGen(sineWave); // fill
   // Osc::sqrGen(squareWave); // fill
   // Osc::triGen(triangleWave); // fill
@@ -44,7 +43,7 @@ void loop() {
 */
 void audioUpdate() {
   // nextWTrans args: second wave, amount of second wave, duel window?, invert second wave?
-  uint16_t leftVal = osc1.nextWTrans(sawtoothWave, windowSize, false, false); 
-  uint16_t rightVal = leftVal;
+  int16_t leftVal = osc1.nextWTrans(sawtoothWave, windowSize, false, false); 
+  int16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }
