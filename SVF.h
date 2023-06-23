@@ -22,17 +22,19 @@ class SVF {
   public:
     /** Constructor. */
     SVF() {
-      setResonance(0.2);
+      setRes(0.2);
     }
 
     /** Set how resonant the filter will be.
     * 0.01 > res < 1.0
     */
     inline
-    void setResonance(float resonance) {
-      q = (1.0 - max(0.1f, min(0.98f, resonance))) * 255;
+    void setRes(float resonance) {
+      resOffset = max(0.2f, min(0.98f, resonance));
+      q = (1.0 - resOffset) * 255;
       // q = sqrt(1.0 - atan(sqrt(resonance * 255)) * 2.0 / 3.1459); // alternative
-      scale = sqrt(max(0.1f, resonance)) * 255;
+      scale = sqrt(max(0.1f, resOffset)) * 255;
+      resOffset = 1.2 - resOffset * 1.6;
       // scale = sqrt(q) * 255; // alternative
     }
 
@@ -65,7 +67,16 @@ class SVF {
     inline
     int16_t nextLPF(int32_t input) {
       calcFilter(input);
-      return max(-MAX_16, (int)min((int32_t)MAX_16, low)); // 65534, 32767
+      low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
+      return low; 
+    }
+
+    /** Calculate the next Lowpass filter sample, given an input signal.
+     *  Input is an output from an oscillator or other audio element.
+     */
+    inline
+    int16_t next(int32_t input) {
+      return nextLPF(input);
     }
 
     /** Calculate the next Highpass filter sample, given an input signal.
@@ -145,8 +156,10 @@ class SVF {
     int32_t scale = sqrt(1) * 255;
     volatile float f = SAMPLE_RATE * 0.25;
     int32_t centFreq = 10000;
+    float resOffset;
 
     void calcFilter(int32_t input) {
+      input *= resOffset;
       low += f * band;
       high = ((scale * input) >> 7) - low - ((q * band) >> 8);
       band += f * high;
