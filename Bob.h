@@ -10,6 +10,7 @@
  * Ported from the moogLadder implementation by Nick Donaldson
  * which in turn is based on the DaisySP implemtation by Electrosmith LLC 
  * based on the version in SoundPipe by Paul Batchelor
+ * based on the non-linear digital implementation by Antti Huovilainen
  * all derrived from cSound implementations by Perry Cook, John ffitch, and Victor Lazzarini
  *
  * This file is part of the M16 audio library.
