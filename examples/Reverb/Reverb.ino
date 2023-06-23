@@ -24,7 +24,7 @@ void setup() {
   osc1.setPitch(60);
   ampEnv1.setAttack(30);
   ampEnv1.setMaxLevel(0.8);
-  filter1.setResonance(0);
+  filter1.setRes(0);
   filter1.setFreq(3000);
   // reverb
   #if IS_ESP8266()

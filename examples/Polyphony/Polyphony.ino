@@ -23,8 +23,7 @@ void setup() {
     osc[i].setTable(waveTable);
     osc[i].setPitch(60);
     env[i].setAttack(30);
-    env[i].setMaxLevel(max(0.1, 0.7 - poly * 0.042));
-    filter[i].setResonance(0);
+    filter[i].setRes(0);
     filter[i].setFreq(3000);
   }
   // reverb setup
@@ -68,11 +67,11 @@ void audioUpdate() {
     #elif IS_ESP32()
       mix += filter[i].nextLPF((osc[i].next() * env[i].getValue())>>16);
     #endif
+    mix *= 0.65;
   }
-  mix = effect1.clip(mix);
   // stereo
   int16_t leftVal = mix; 
-  int16_t rightVal = mix;
+  int16_t rightVal = leftVal;
   #if IS_ESP32() //8266 can't manage reverb as well
     effect1.reverbStereo(mix, mix, leftVal, rightVal);
   #endif
