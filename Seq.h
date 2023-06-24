@@ -18,7 +18,12 @@ class Seq {
 
   public:
     /** Constructor. */
-    Seq() {}
+    Seq() {
+      seqValues = new int[seqMaxSize];
+      for(int i=0; i<seqMaxSize; i++) {
+        seqValues[i] = 0;
+      }
+    }
 
      /** Constructor.
     * @param VALUES the array of integers the sequencer will start with
