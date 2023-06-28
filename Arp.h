@@ -1,7 +1,7 @@
 /*
  * Arp.h
  *
- * Arppegiator class. Based on MIDI note numbers
+ * Arppegiator class. Integer based for MIDI note numbers.
  *
  * by Andrew R. Brown 2021
  *
@@ -28,101 +28,110 @@ class Arp {
     Arp() {}
 
     /** Constructor.
-    * @param PITCH_CLASS the array of pitch classes the arpeggiator will be using.
-    * @param OCTAVE the base range for the arpeggiator
-    * @param ARP_DIRECTION the playback order
+    * @param values the array of values (MIDI values usually) the arpeggiator will be using, max of 12 values.
+    * @param number_values the max size for the arpeggiator up to a maximum of 12.
+    * @param octaves the base range for the arpeggiator
+    * @param arp_direction the playback order
     */
-    Arp(int * PITCHES, int NUMBER_PITCHES):initPitches(PITCHES), initSize(NUMBER_PITCHES) {
-      setPitches(initPitches, initSize);
+    Arp(int * values, int number_values, int octaves, int arp_direction):arpSize(number_values), octaveRange(octaves), arpDirection(arp_direction) {
+      for (int i=0; i<arpSize; i++) {
+          initValues[i] = values[i];
+          sortedValues[i] = values[i];
+      }
+      sort(sortedValues, arpSize);
+      if (arpDirection == ARP_DOWN) {
+        arpIndex = arpSize-1;
+        currOctave = octaveRange - 1;
+        upDownDirection == ARP_UP;
+      }
     }
 
+    /* Reset and restart the arpeggiator values*/
     inline
     void start() {
-      arpIndex = 0;
-      currOctave = 0;
-      // upDownDirection = ARP_UP;
+      if (arpDirection == ARP_DOWN) {
+        arpIndex = arpSize-1;
+        currOctave = octaveRange - 1;
+        upDownDirection == ARP_UP;
+      } else {
+        arpIndex = 0;
+        currOctave = 0;
+      }
     }
 
+    /* Return the next arpeggitor value */
     inline
     int next() {
-      int nextPitch;
+      int nextValue;
       // in order
       if (arpDirection == ARP_ORDER) {
-          while (pitchSet[arpIndex] == 0) {
-            arpIndex = (arpIndex+1)%12;
-            updateOctaveUp();
-          }
-          nextPitch = pitchSet[arpIndex] + (currOctave * 12);
-          arpIndex = (arpIndex+1)%12;
-          updateOctaveUp();
-          return nextPitch;
-//        }
+        nextValue = initValues[arpIndex++] + (currOctave * 12);
+        updateUpIndex();
+        return nextValue;
       }
       if (arpDirection == ARP_UP) {
-        while (pitchSetUp[arpIndex] == 0) {
-          arpIndex = (arpIndex+1)%12;
-          updateOctaveUp();
-        }
-        nextPitch = pitchSetUp[arpIndex] + (currOctave * 12);
-        arpIndex = (arpIndex+1)%12;
-        updateOctaveUp();
-        return nextPitch;
+        nextValue = sortedValues[arpIndex++] + (currOctave * 12);
+        updateUpIndex();
+        return nextValue;
       }
       if (arpDirection == ARP_UP_DOWN) {
-//        Serial.print(arpIndex);
-        if (pitchSetUp[arpIndex] == 0) updateOctaveUpDown();
         if (upDownDirection == ARP_UP) {
-          nextPitch = pitchSetUp[arpIndex] + (currOctave * 12);
-          arpIndex = (arpIndex+1)%12;
-          return nextPitch;
+          nextValue = sortedValues[arpIndex++] + (currOctave * 12);
+          if (arpIndex >= arpSize) {
+            if (currOctave >= octaveRange - 1) {
+              upDownDirection = ARP_DOWN;
+              Serial.println("down");
+              arpIndex = max(0, arpSize-2);
+              currOctave = octaveRange - 1;
+            } else {
+              currOctave++;
+              arpIndex = 0;
+            }
+          }
+        } else if (upDownDirection == ARP_DOWN) {
+          nextValue = sortedValues[arpIndex--] + (currOctave * 12);
+          if (arpIndex < 0) {
+            if (currOctave > 0) {
+              currOctave--;
+              arpIndex = arpSize-1;
+            } else {
+              upDownDirection = ARP_UP;
+              Serial.println("up");
+              arpIndex = 1;
+            }
+          }
         }
-        if (upDownDirection == ARP_DOWN) {
-          nextPitch = pitchSetDown[arpIndex] + (currOctave * 12);
-          arpIndex = (arpIndex+1)%12;
-          return nextPitch;
-        }
+        return nextValue;
       }
       if (arpDirection == ARP_DOWN) {
-//        Serial.println("arp down");
-        while (pitchSetDown[arpIndex] == 0) {
-          arpIndex = (arpIndex+1)%12;
-          updateOctaveDown();
-        }
-        nextPitch = pitchSetDown[arpIndex] - (currOctave * 12);
-        arpIndex = (arpIndex+1)%12;
-        updateOctaveDown();
-        return nextPitch;
-      }
-      if (arpDirection == ARP_RANDOM) {
-        arpIndex = rand(12);
-        while (pitchSet[arpIndex] == 0) {
-          arpIndex = rand(12);
-        }
-        return pitchSet[arpIndex];
+        nextValue = sortedValues[arpIndex--] + (currOctave * 12);
+        updateDownIndex();
+        return nextValue;
       }
       return 0; // in case it ever gets here
     }
 
+    /* Update the arp values and size (max 12 values)*/
     inline
-    void setPitches(int * pitches, int size) {
+    void setValues(int * values, int size) {
       if (size > 12) return;
-//      Serial.println("set pitches");
-      for (int i=0; i<size; i++) {
-          pitchSet[i] = pitches[i];
+      arpSize = size;
+      for (int i=0; i<arpSize; i++) {
+          initValues[i] = values[i];
+          sortedValues[i] = values[i];
       }
-      for (int i=size; i<12; i++) {
-          pitchSet[i] = 0;
-      }
+      sort(sortedValues, size);
     }
 
+    /* Specify the arpeggiation direction
+    *  Choices are: ARP_ORDER, ARP_UP, ARP_UP_DOWN, ARP_DOWN, ARP_RANDOM
+    */
     inline
     void setDirection(int newDir) {
       arpDirection = newDir; // add checks
-      if (newDir == ARP_UP) sortUp();
-      if (newDir == ARP_UP_DOWN) sortUpDown();
-      if (newDir == ARP_DOWN) sortDown();
     }
 
+    /* Specify the number of octaves to span */
     inline
     void setRange(int range) {
       octaveRange = min(8, max(1, range));
@@ -147,22 +156,42 @@ class Arp {
     inline
     double calcStepDelta(float bpm) {
       if (bpm > 0) {
-	return 60.0 / bpm * 1000.0;
+	      return 60.0 / bpm * 1000.0;
       } else return 250;
     }
 
   private:
-    int * initPitches;
-    int initSize;
-    int pitchSet [12] = {60, 64, 67, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    int pitchSetUp [12] = {60, 64, 67, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    int pitchSetDown [12] = {67, 64, 60, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    int initValues [12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    int arpSize = 12;
+    int sortedValues [12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     int arpDirection = ARP_ORDER;
-    int octaveRange = 1; // number of octaves
+    int octaveRange = 1; // number of osctave
     int currOctave = 0;
     int arpIndex = 0;
     int upDownDirection = ARP_UP;
     int stepDiv = 1;
+
+    void updateUpIndex() {
+      if (arpIndex >= arpSize) {
+        if (currOctave >= octaveRange - 1) {
+          currOctave = 0;
+        } else {
+          currOctave++;
+        }
+        arpIndex = 0;
+      }
+    }
+
+    void updateDownIndex() {
+      if (arpIndex < 0) {
+        if (currOctave > 0) {
+          currOctave--;
+        } else {
+          currOctave = octaveRange - 1;
+        }
+        arpIndex = arpSize - 1;
+      }
+    }
 
     void sort(int a[], int size) {
       for(int i=0; i<(size-1); i++) {
@@ -175,70 +204,6 @@ class Arp {
         }
       }
     }
-
-    void reverseSort(int a[], int size) {
-      for(int i=0; i<(size-1); i++) {
-        for(int o=0; o<(size-(i+1)); o++) {
-          if(a[o] != 0 && a[o+1] !=0 && a[o] < a[o+1]) {
-            int t = a[o+1];
-            a[o+1] = a[o];
-            a[o] = t;
-          }
-        }
-      }
-    }
-
-    void sortUp() {
-      for (int i=0; i<12; i++) {
-        pitchSetUp[i] = pitchSet[i];
-      }
-      sort(pitchSetUp, 12);
-    }
-
-    void sortUpDown() {
-      sortUp();
-      sortDown();
-    }
-
-    void sortDown() {
-      for (int i=0; i<12; i++) {
-        pitchSetDown[i] = pitchSet[i];
-      }
-      reverseSort(pitchSetDown, 12);
-    }
-
-    void updateOctaveUp() {
-      if (arpIndex == 0) {
-        if (currOctave < octaveRange - 1) {
-          currOctave++;
-        } else currOctave = 0;
-      }
-    }
-
-    void updateOctaveDown() {
-      if (arpIndex == 0) {
-        if (currOctave < octaveRange - 1) {
-          currOctave++;
-        } else currOctave = 0;
-      }
-    }
-
-    void updateOctaveUpDown() {
-      if (upDownDirection == ARP_UP && currOctave == octaveRange - 1) {
-        upDownDirection = ARP_DOWN;
-        arpIndex = 1;
-      } else if (upDownDirection == ARP_UP && currOctave < octaveRange - 1) {
-        currOctave++;
-        arpIndex = 0;
-      } else if (upDownDirection == ARP_DOWN && currOctave > 0) {
-         currOctave--;
-         arpIndex = 0;
-      } else if (upDownDirection == ARP_DOWN && currOctave == 0) {
-         upDownDirection = ARP_UP;
-         arpIndex = 1;
-      }
-    }
-
 };
 
 #endif /* Arp_H_ */
