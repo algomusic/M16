@@ -167,6 +167,10 @@ float mtof(float midival) {
   if (midival) f = 8.1757989156 * pow(2.0, midival * 0.083333); /// 12.0);
   return f;
 }
+// inline
+// float mtof(int midiNote) {
+//   return 440.0 * pow(2.0, (midiNote - 69.0) / 12.0);
+// }
 
 /** Return a MIDI pitch from a frequency 
 * @freq The frequency to be converted
@@ -195,6 +199,21 @@ int pitchQuantize(int pitch, int * pitchClassSet, int key) {
   }
   return pitch;
 }
+
+// int pitchQuantize(int pitch, int * pitchClassSet, int key) {
+//   int pitchClass = pitch%12;
+//   int pitchClassSetIndex = 0;
+//   for (int i=0; i < 12; i++) {
+//     if (pitchClass == pitchClassSet[i] + key) {
+//       pitchClassSetIndex = i;
+//     }
+//   }
+//   int octave = pitch/12;
+//   int pitchClassSetOctave = pitchClassSetIndex/12;
+//   int pitchClassSetIndexMod = pitchClassSetIndex%12;
+//   int pitchClassSetIndexModOctave = pitchClassSetIndexMod + pitchClassSetOctave*12;
+//   return pitchClassSetIndexModOctave + octave*12;
+// }
 
 /** Return freq a chromatic interval away from base
 * @freqVal The base frequency in Htz
