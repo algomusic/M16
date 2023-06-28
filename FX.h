@@ -94,18 +94,16 @@ class FX {
     inline
     int16_t compression(int16_t sample, float threshold, float ratio) {
       int16_t thresh = threshold * MAX_16;
-      float invRatio = 1 / ratio;
-      float gainCompensationRatio = 1 + (1 - threshold * (1 + 1 * invRatio));
+      float invRatio = 1.0f / ratio;
+      float gainCompensationRatio = 1.0f + (1.0f - threshold * (1.0f + 1.0f * invRatio));
       if (sample >= thresh || sample <= -thresh) {
-          int16_t compressed_sample;
+          int32_t compressed_sample;
           if (sample > 0) {
-              compressed_sample = (int16_t)((sample - thresh) * invRatio + thresh);
-              if (compressed_sample > MAX_16)
-                  compressed_sample = MAX_16;
+              compressed_sample = (int32_t)((sample - thresh) * invRatio + thresh);
+              if (compressed_sample > MAX_16) compressed_sample = MAX_16;
           } else {
-              compressed_sample = (int16_t)((sample + thresh) * invRatio - thresh);
-              if (compressed_sample < MIN_16)
-                  compressed_sample = MIN_16;
+              compressed_sample = (int32_t)((sample + thresh) * invRatio - thresh);
+              if (compressed_sample < MIN_16) compressed_sample = MIN_16;
           }
           return compressed_sample * gainCompensationRatio;
       }
