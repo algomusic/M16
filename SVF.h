@@ -43,7 +43,6 @@ class SVF {
     */
     inline
     void setFreq(int32_t freq_val) {
-      int32_t maxFreq = SAMPLE_RATE * 0.2222; ///4.5;
       f = 2 * sin(3.1459 * max(0, (int)min(maxFreq, freq_val)) * SAMPLE_RATE_INV);
     }
 
@@ -157,6 +156,7 @@ class SVF {
     volatile float f = SAMPLE_RATE * 0.25;
     int32_t centFreq = 10000;
     float resOffset;
+    int32_t maxFreq = SAMPLE_RATE * 0.2222;
 
     void calcFilter(int32_t input) {
       input *= resOffset;
