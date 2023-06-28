@@ -25,7 +25,7 @@ void setup() {
   ampEnv1.setAttack(0);
   ampEnv1.setRelease(2);
   int newSet [] = {48, 52, 55, 58, 60, 64};
-  arp1.setPitches(newSet, 6);
+  arp1.setValues(newSet, 6);
   arp1.setDirection(ARP_UP_DOWN);
   arp1.setRange(3);
   stepDelta = arp1.calcStepDelta(120, 2); // ms between steps at bpm sliced into 2
