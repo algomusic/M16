@@ -86,6 +86,32 @@ class FX {
       return clip(sample_in);
     }
 
+    /** Compressor with gain compensation
+    *  @param sample is the input sample value
+    *  @param threshold is the threshold value between 0.0 and 1.0
+    *  @param ratio is the ratio value, > 1.0, typically 2 to 4
+    */
+    inline
+    int16_t compression(int16_t sample, float threshold, float ratio) {
+      int16_t thresh = threshold * MAX_16;
+      float invRatio = 1 / ratio;
+      float gainCompensationRatio = 1 + (1 - threshold * (1 + 1 * invRatio));
+      if (sample >= thresh || sample <= -thresh) {
+          int16_t compressed_sample;
+          if (sample > 0) {
+              compressed_sample = (int16_t)((sample - thresh) * invRatio + thresh);
+              if (compressed_sample > MAX_16)
+                  compressed_sample = MAX_16;
+          } else {
+              compressed_sample = (int16_t)((sample + thresh) * invRatio - thresh);
+              if (compressed_sample < MIN_16)
+                  compressed_sample = MIN_16;
+          }
+          return compressed_sample * gainCompensationRatio;
+      }
+      return sample * gainCompensationRatio;
+    }    
+
     /** Update the wave shaping table
   	* @param TABLE_NAME is the name of the array. Filled with 16bit values.
     * @param tableSize the length in samples, typically a power of 2.
