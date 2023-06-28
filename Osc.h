@@ -90,7 +90,7 @@ public:
 	}
 
   /** Set the spread value of the Oscil.
-  * @newVal A multiplyer of the base freq, from 0 to 1.0, values near zero are best
+  * @newVal A multiplyer of the base freq, from 0 to 1.0, values near zero are best for phasing effects
   */
 	inline
   void setSpread(float newVal) {
@@ -100,7 +100,7 @@ public:
     setFreq(getFreq());
 	}
 
-  /** Set the spread value of the Oscil. Ranges from 0 to 1.0 */
+  /** Set the spread value of the Oscil. Ranges > 0 */
 	inline
   void setSpread(int val1, int val2) {
 		spread1 = intervalRatios[val1 + 12]; //intervalFreq(frequency, val1);
@@ -182,8 +182,6 @@ public:
     sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
     prevSampVal = sampVal;
     incrementPhase();
-
-
     return sampVal;
   }
 
@@ -244,13 +242,6 @@ public:
   inline
   int16_t particle() {
     return particle(particleThreshold);
-    // int32_t noiseVal = readTable();
-  	// if (noiseVal > particleThreshold) {
-  	// 	particleEnv = noiseVal - (MAX_16 - noiseVal) - (MAX_16 - noiseVal);
-  	// } else particleEnv *= particleEnvReleaseRate;
-  	// incrementPhase();
-  	// noiseVal = (prevParticle + noiseVal + noiseVal)/3;
-    // return (noiseVal * particleEnv) >> 16;
   }
 
   /** Frequency Modulation Feedback
