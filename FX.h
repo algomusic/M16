@@ -83,7 +83,7 @@ class FX {
       int16_t thresh = 26033;
       if (sample_in > thresh) sample_in *= ((float)MAX_16 / ((thresh + MAX_16) * 0.5f));
       if (sample_in < -26033) sample_in = (sample_in * -1 * ((float)MAX_16 / ((thresh + MAX_16) * 0.5f))) * -1;
-      return sample_in;
+      return clip(sample_in);
     }
 
     /** Update the wave shaping table
