@@ -245,10 +245,26 @@ class Seq {
       }
     }
 
+    /** Fill sequence with a euclidean rhythm
+     * @param startVal The starting value for the sequence
+     * @param maxDev The maximum amount to deviate from the previous value
+     * @param minVal The minimum value for the sequence
+     * @param maxVal The maximum value for the sequence
+     */
+    inline
+    void randWalkGen(int startVal, int maxDev, int minVal, int maxVal) {
+      int currVal = startVal;
+      for (int i=0; i<seqMaxSize; i++) {
+        setStepValue(i, currVal);
+        currVal += rand(maxDev*2) - maxDev;
+        currVal = max(minVal, min(maxVal, currVal));
+      }
+    }
+
   private:
     int * seqValues;
-    int seqMaxSize = 16;
-    int seqSize = 16;
+    int seqMaxSize = 16; // 0 - 1024
+    int seqSize = 16; // 0 - 1024
     int stepDiv = 4;
     int seqIndex = 0;
     int sliceVal = 1;
