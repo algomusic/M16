@@ -164,9 +164,10 @@ inline
 float mtof(float midival) {
   midival = max(0.0f, min(127.0f, midival));
   float f = 0.0;
-  if (midival) f = 8.1757989156 * pow(2.0, midival * 0.083333); /// 12.0);
+  if (midival) f = 8.1757989156 * pow(2.0, midival * 0.083333); // / 12.0);
   return f;
 }
+
 // inline
 // float mtof(int midiNote) {
 //   return 440.0 * pow(2.0, (midiNote - 69.0) / 12.0);
@@ -187,7 +188,7 @@ float ftom(float freq) {
 */
 inline
 int pitchQuantize(int pitch, int * pitchClassSet, int key) {
-  for (int j=0; j<3; j++) {
+  for (int j=0; j<12; j++) {
     int pitchClass = pitch%12;
     bool adjust = true;
     for (int i=0; i < 12; i++) {
@@ -195,9 +196,11 @@ int pitchQuantize(int pitch, int * pitchClassSet, int key) {
         adjust = false;
       }
     }
-    if (adjust) pitch -= 1;
+    if (adjust) {
+      pitch -= 1;
+    } else return pitch;
   }
-  return pitch;
+  return pitch; // just in case?
 }
 
 // int pitchQuantize(int pitch, int * pitchClassSet, int key) {
