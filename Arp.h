@@ -80,7 +80,7 @@ class Arp {
           if (arpIndex >= arpSize) {
             if (currOctave >= octaveRange - 1) {
               upDownDirection = ARP_DOWN;
-              Serial.println("down");
+              // Serial.println("down");
               arpIndex = max(0, arpSize-2);
               currOctave = octaveRange - 1;
             } else {
@@ -96,7 +96,7 @@ class Arp {
               arpIndex = arpSize-1;
             } else {
               upDownDirection = ARP_UP;
-              Serial.println("up");
+              // Serial.println("up");
               arpIndex = 1;
             }
           }
