@@ -36,7 +36,7 @@ public:
 	inline
 	int16_t next() {
     int32_t sampVal = readTable();
-    sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
+    sampVal = (sampVal + prevSampVal)>>1; // smooth
     incrementPhase();
     if (spread1 != 1) {
       sampVal = doSpread(sampVal);
@@ -114,11 +114,11 @@ public:
 	inline
   int16_t nextMorph(int16_t * secondWaveTable, float morphAmount) {
     int intMorphAmount = max(0, min (1024, (int)(1024 * morphAmount)));
-    int16_t sampVal = readTable();
-    int16_t sampVal2 = secondWaveTable[(int)phase_fractional];
-    if (morphAmount > 0) sampVal = (((int32_t)(sampVal2 * intMorphAmount) >> 10) +
-      ((int32_t)(sampVal * (1024 - intMorphAmount)) >> 10));
-    sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
+    int32_t sampVal = readTable();
+    int32_t sampVal2 = secondWaveTable[(int)phase_fractional];
+    if (morphAmount > 0) sampVal = (((sampVal2 * intMorphAmount) >> 10) +
+      ((sampVal * (1024 - intMorphAmount)) >> 10));
+    sampVal = (sampVal + prevSampVal)>>1; // smooth
     prevSampVal = sampVal;
     incrementPhase();
     if (spread1 != 1) {
@@ -142,7 +142,7 @@ public:
     int quarterTable = TABLE_SIZE * 0.25;
     int threeQuarterTable = quarterTable * 3;
     int portion14 = quarterTable * windowSize;
-    int16_t sampVal = 0;
+    int32_t sampVal = 0;
     if (duel) {
       if (phase_fractional < (quarterTable - portion14) || (phase_fractional > (quarterTable + portion14) &&
           phase_fractional < (threeQuarterTable - portion14)) || phase_fractional > (threeQuarterTable + portion14)) {
@@ -179,7 +179,7 @@ public:
         }
       }
     }
-    sampVal = ((int32_t)sampVal + (int32_t)prevSampVal)>>1; // smooth
+    sampVal = (sampVal + prevSampVal)>>1; // smooth
     prevSampVal = sampVal;
     incrementPhase();
     return sampVal;
@@ -515,7 +515,7 @@ private:
   float phase_increment_fractional_w1 = phase_increment_fractional;
   float phase_increment_fractional_w2 = phase_increment_fractional;
 	const int16_t * table;
-  int16_t prevSampVal = 0;
+  int32_t prevSampVal = 0;
   bool isNoise = false;
   bool isCrackle = false;
   int crackleAmnt = MAX_16 * 0.5; //0; //MAX_16 * 0.5;
