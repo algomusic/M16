@@ -46,6 +46,12 @@ class SVF {
       f = 2 * sin(3.1459 * max(0, (int)min(maxFreq, freq_val)) * SAMPLE_RATE_INV);
     }
 
+    /** Return the cutoff or centre frequency of the filter.*/
+    inline
+    int16_t getFreq() {
+      return f;
+    }
+
     /** Set the cutoff or corner frequency of the filter.
     * @param cutoff_val 0.0 - 1.0 which equates to 40 - 10k Hz (SAMPLE_RATE/4).
     * Sweeping the cutoff value linearly is mapped to a non-linear frequency sweep
