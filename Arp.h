@@ -101,6 +101,7 @@ class Arp {
             }
           }
         }
+        prevValue = nextValue;
         return nextValue;
       }
       if (arpDirection == ARP_DOWN) {
@@ -109,6 +110,12 @@ class Arp {
         return nextValue;
       }
       return 0; // in case it ever gets here
+    }
+
+    /** Return the prev arp value */
+    inline
+    int again() {
+      return prevValue;
     }
 
     /* Update the arp values and size (max 12 values)*/
@@ -170,6 +177,7 @@ class Arp {
     int arpIndex = 0;
     int upDownDirection = ARP_UP;
     int stepDiv = 1;
+    int prevValue = 0;
 
     void updateUpIndex() {
       if (arpIndex >= arpSize) {
