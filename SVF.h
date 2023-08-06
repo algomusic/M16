@@ -113,7 +113,7 @@ class SVF {
       int lpfAmnt = 0;
       if (mix < 0.5) lpfAmnt = low * (1 - mix * 2);
       int bpfAmnt = 0;
-      if (mix != 0 || mix != 1) {
+      if (mix > 0.25 || mix < 0.75) {
         if (mix < 0.5) {
           lpfAmnt = band * mix * 2;
         } else lpfAmnt = band * (2 - mix * 2);
