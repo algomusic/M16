@@ -366,12 +366,20 @@ public:
     phase_increment_fractional_w2 = halfPhaseInc / (1.0f - pulseWidth);
   }
 
- /** Below are helper methods for generating waveforms into existing arrays.
- * Call from class not instance. e.g. Osc::triGen(myWaveTableArray);
- * While it might be simpler to have each instance have its own wavetable,
- * it's more memory effcient for wavetables to be shared. So create them in the
- * main program file and reference them from instances of this class.
- */
+  /** Set using pulse width for the waveform
+  * @width The cycle amount for the first half of the wave - 0.0 to 1.0
+  */
+	inline
+	float getPulseWidth() {
+    return pulseWidth;
+  }
+
+  /** Below are helper methods for generating waveforms into existing arrays.
+   * Call from class not instance. e.g. Osc::triGen(myWaveTableArray);
+   * While it might be simpler to have each instance have its own wavetable,
+   * it's more memory effcient for wavetables to be shared. So create them in the
+   * main program file and reference them from instances of this class.
+   */
 
   /** Generate a cosine wave
   * @theTable The the wavetable to be filled
