@@ -49,8 +49,8 @@ class Env {
     /** Set envSustain level as a value from 0.0 - 1.0 */
     void setSustain(float val) {
       if (val >= 0 && val <= 1) {
-        envSustain = val * MAX_ENV_LEVEL;
-//        releaseState = false;
+        envSustain = val;
+        sustainLevel = val * MAX_ENV_LEVEL;
       }
     }
 
@@ -88,7 +88,6 @@ class Env {
     inline
     void startRelease() {
       if (envState > 0 && envState < 5) {
-//        Serial.print("release - envVal is ");Serial.println(envVal);
         releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
         releaseStartTime = micros(); //millis();
         envState = 5; // release
@@ -142,7 +141,7 @@ class Env {
           if (jitEnvDecay > 0 && elapsedTime <= jitEnvAttack + envHold + jitEnvDecay) { // decay
             //calulate and return envDecay value
             float dPercent = pow((microsTime - envStartTime - jitEnvAttack) / (float)jitEnvDecay, delayExp); // exp
-            envVal = (JIT_MAX_ENV_LEVEL - envSustain) * (1 - dPercent) + envSustain;
+            envVal = (JIT_MAX_ENV_LEVEL - sustainLevel) * (1 - dPercent) + sustainLevel;
             return envVal;
           } else {
             if (currDelayRepeats > 0) {
@@ -150,15 +149,16 @@ class Env {
               envStartTime += jitEnvDecay;
             } else {
               envState = 4; // go to sustain
-              if (delayRepeats > 0 && envSustain == 0) envVal = JIT_MAX_ENV_LEVEL;
+              if (delayRepeats > 0 && sustainLevel == 0) envVal = JIT_MAX_ENV_LEVEL;
             }
             return envVal;
           }
           break;
         case 4:
           // sustain
-          if (envSustain > 0) {// sustain
-            return envSustain;
+          if (sustainLevel > 0) {// sustain
+            envVal = sustainLevel; 
+            return envVal;
           } else {
             releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
             releaseStartTime = microsTime;
@@ -201,6 +201,8 @@ class Env {
     void setMaxLevel(float level) {
       MAX_ENV_LEVEL = (MAX_16 * 2 - 1) * level;
       JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
+      sustainLevel = envSustain * MAX_ENV_LEVEL;
+      // Serial.println("setting sus level to " + String(sustainLevel));
     }
 
     /** Return the current maximum envelope value
@@ -214,7 +216,8 @@ class Env {
   private:
     uint32_t MAX_ENV_LEVEL = MAX_16 * 2 - 1;
     uint32_t JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
-    uint32_t jitEnvAttack, envAttack, envHold, envDecay, jitEnvDecay, envSustain = 0;
+    uint32_t jitEnvAttack, envAttack, envHold, envDecay, jitEnvDecay, sustainLevel;
+    float envSustain = 0.0f;
     uint32_t envRelease = 600 * 1000; // ms to micros
     uint32_t jitEnvRelease = envRelease;
     bool peaked = false;
