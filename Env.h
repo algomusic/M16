@@ -133,15 +133,18 @@ class Env {
             return envVal;
           } else {
             envState = 3; // go to decay
+            decayStartLevel = envVal; 
+            decayStartTime = microsTime;
+            decayStartLevelDiff = decayStartLevel - sustainTriggerLevel;
             return envVal;
           }
           break;
         case 3:
           // decay
-          if (jitEnvDecay > 0 && elapsedTime <= jitEnvAttack + envHold + jitEnvDecay) { // decay
-            //calulate and return envDecay value
-            float dPercent = pow((microsTime - envStartTime - jitEnvAttack) / (float)jitEnvDecay, delayExp); // exp
-            envVal = (JIT_MAX_ENV_LEVEL - sustainLevel) * (1 - dPercent) + sustainLevel;
+          if (jitEnvDecay > 0 && envVal > sustainLevel) { // decay
+            float dPercent = 1.0f - (microsTime - decayStartTime) / (float)jitEnvDecay;
+            dPercent = dPercent * dPercent; // exp
+            envVal = sustainTriggerLevel + decayStartLevelDiff * dPercent;
             return envVal;
           } else {
             if (currDelayRepeats > 0) {
@@ -216,14 +219,15 @@ class Env {
   private:
     uint32_t MAX_ENV_LEVEL = MAX_16 * 2 - 1;
     uint32_t JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
-    uint32_t jitEnvAttack, envAttack, envHold, envDecay, jitEnvDecay, sustainLevel;
+    uint32_t jitEnvAttack, envAttack, envHold, envDecay, jitEnvDecay, sustainLevel, sustainTriggerLevel;
     float envSustain = 0.0f;
     uint32_t envRelease = 600 * 1000; // ms to micros
     uint32_t jitEnvRelease = envRelease;
     bool peaked = false;
-    unsigned long envStartTime, releaseStartTime;
+    unsigned long envStartTime, releaseStartTime, decayStartTime;
     uint32_t envVal = 0;
     uint32_t releaseStartLevelDiff = MAX_ENV_LEVEL;
+    uint32_t decayStartLevel, decayStartLevelDiff;
     uint32_t prevEnvVal = 0;
     int delayRepeats = 0;
     int currDelayRepeats = 0;
