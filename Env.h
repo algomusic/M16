@@ -33,9 +33,7 @@ class Env {
 
     /** Set envDecay time in ms. */
     void setDecay(int val) {
-      if (val > 0) {
-        envDecay = val * 1000;
-      } else envDecay = 0;
+      if (val >= 0) envDecay = max(10, val) * 1000;
     }
 
     /** Set the number of times to repeat the decay segment.
@@ -58,7 +56,7 @@ class Env {
 
     /** Set releaseState time in ms. */
     void setRelease(int val) {
-      if (val >= 0) envRelease = val * 1000;
+      if (val >= 0) envRelease = max(10, val) * 1000;
     }
 
     /** Begin the current envelope */
@@ -91,7 +89,8 @@ class Env {
     void startRelease() {
       if (envState > 0 && envState < 5) {
         releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
-        releaseStartTime = micros(); //millis();
+        releaseStartlevel = envVal;
+        releaseStartTime = micros();
         envState = 5; // release
       }
     }
@@ -143,7 +142,7 @@ class Env {
           break;
         case 3:
           // decay
-          if (jitEnvDecay > 0 && microsTime < decayStartTime + jitEnvDecay && envVal > sustainLevel) { // decay
+          if (jitEnvDecay > 0 && microsTime < decayStartTime + jitEnvDecay && envVal > sustainLevel && abs((int)envVal) > 1) { // decay
             float dPercent = 1.0f - (microsTime - decayStartTime) / (float)jitEnvDecay;
             dPercent = dPercent * dPercent; // exp
             envVal = sustainTriggerLevel + decayStartLevelDiff * dPercent;
