@@ -33,7 +33,9 @@ class Env {
 
     /** Set envDecay time in ms. */
     void setDecay(int val) {
-      if (val >= 0) envDecay = val * 1000;
+      if (val > 0) {
+        envDecay = val * 1000;
+      } else envDecay = 0;
     }
 
     /** Set the number of times to repeat the decay segment.
@@ -69,7 +71,7 @@ class Env {
       releaseStartLevelDiff = JIT_MAX_ENV_LEVEL; // 0
       jitEnvRelease = envRelease + rand(envRelease * 0.2);
       jitEnvAttack = envAttack + rand(envAttack * 0.2);
-      jitEnvDecay = envDecay + rand(envDecay * 0.2);
+      jitEnvDecay = envDecay; // + rand(envDecay * 0.2);
       envStartTime = micros(); //millis();
       prevEnvVal = 0;
       currDelayRepeats = delayRepeats;
@@ -141,7 +143,7 @@ class Env {
           break;
         case 3:
           // decay
-          if (jitEnvDecay > 0 && envVal > sustainLevel) { // decay
+          if (jitEnvDecay > 0 && microsTime < decayStartTime + jitEnvDecay && envVal > sustainLevel) { // decay
             float dPercent = 1.0f - (microsTime - decayStartTime) / (float)jitEnvDecay;
             dPercent = dPercent * dPercent; // exp
             envVal = sustainTriggerLevel + decayStartLevelDiff * dPercent;
@@ -164,6 +166,7 @@ class Env {
             return envVal;
           } else {
             releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
+            releaseStartlevel = envVal; //JIT_MAX_ENV_LEVEL - releaseStartLevelDiff;
             releaseStartTime = microsTime;
             envState = 5; // go to release
             return envVal;
@@ -175,7 +178,7 @@ class Env {
             // float rPercent = pow(1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease, 4); // exp
             float rPercent = 1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease;
             rPercent = rPercent * rPercent * rPercent; // faster exp
-            envVal = (JIT_MAX_ENV_LEVEL - releaseStartLevelDiff) * rPercent;
+            envVal = releaseStartlevel * rPercent;
             return envVal;
           } else {
             envState = 0; // go to complete
@@ -227,7 +230,7 @@ class Env {
     unsigned long envStartTime, releaseStartTime, decayStartTime;
     uint32_t envVal = 0;
     uint32_t releaseStartLevelDiff = MAX_ENV_LEVEL;
-    uint32_t decayStartLevel, decayStartLevelDiff;
+    uint32_t decayStartLevel, decayStartLevelDiff, releaseStartlevel;
     uint32_t prevEnvVal = 0;
     int delayRepeats = 0;
     int currDelayRepeats = 0;
