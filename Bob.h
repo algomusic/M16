@@ -65,6 +65,10 @@ class Bob {
       compute_coeffs(Fbase_);
     }
 
+    float getFreq() {
+      return Fbase_;
+    }
+
   private:
     float PI_F = 3.1415927410125732421875f;
     static const uint8_t kInterpolation = 2;
