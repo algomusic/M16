@@ -133,19 +133,22 @@ class Env {
           if (envHold > 0 && elapsedTime <= jitEnvAttack + envHold) { // hold
             return envVal;
           } else {
-            envState = 3; // go to decay
             decayStartLevel = envVal; 
             decayStartTime = microsTime;
             decayStartLevelDiff = decayStartLevel - sustainTriggerLevel;
+            envState = 3; // go to decay
             return envVal;
           }
           break;
         case 3:
           // decay
-          if (jitEnvDecay > 0 && microsTime < decayStartTime + jitEnvDecay && envVal > sustainLevel && abs((int)envVal) > 1) { // decay
-            float dPercent = 1.0f - (microsTime - decayStartTime) / (float)jitEnvDecay;
-            dPercent = dPercent * dPercent; // exp
-            envVal = sustainTriggerLevel + decayStartLevelDiff * dPercent;
+          // if (jitEnvDecay > 0 && microsTime < decayStartTime + jitEnvDecay && envVal > sustainLevel && abs((int)envVal) > 1) { // decay
+          if (jitEnvDecay > 0 && envVal > sustainLevel) { // decay
+            float dPercent = max(0.0f, 1.0f - (microsTime - decayStartTime) / (float)jitEnvDecay);
+            dPercent = dPercent * dPercent * dPercent; // exp
+            // envVal = sustainTriggerLevel + decayStartLevelDiff * dPercent;
+            // envVal *= dPercent;
+            envVal = decayStartLevel * dPercent;
             return envVal;
           } else {
             if (currDelayRepeats > 0) {
@@ -153,7 +156,7 @@ class Env {
               envStartTime += jitEnvDecay;
             } else {
               envState = 4; // go to sustain
-              if (delayRepeats > 0 && sustainLevel == 0) envVal = JIT_MAX_ENV_LEVEL;
+              // if (delayRepeats > 0 && sustainLevel == 0) envVal = JIT_MAX_ENV_LEVEL;
             }
             return envVal;
           }
@@ -173,9 +176,10 @@ class Env {
           break;
         case 5:
           // release
-          if (microsTime < releaseStartTime + jitEnvRelease && abs((int)envVal) > 1) {
+          // if (microsTime < releaseStartTime + jitEnvRelease && envVal > 10) {
+          if (envVal > 10) {
             // float rPercent = pow(1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease, 4); // exp
-            float rPercent = 1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease;
+            float rPercent = max(0.0f, 1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease);
             rPercent = rPercent * rPercent * rPercent; // faster exp
             envVal = releaseStartlevel * rPercent;
             return envVal;
