@@ -99,8 +99,9 @@ public:
       if (message[0] >= 0x90 && message[0] <= 0x9F && message[2] == 0) {
         message[0] = 0x80 | (message[0] & 0x0F); // Convert to note off
       }
-        return message[0] - (message[0] & 0x0F);
-      }
+      if (message[0] < 240) {
+        return message[0] - (message[0] & 0x0F); // return the status byte as ch 0
+      } else return message[0]; // return non-channel status byte
     }
     return 0;
   }
