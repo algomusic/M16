@@ -10,7 +10,7 @@
  * M16 is licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
  */
 
-#ifndef MIDI_H_
+#ifndef MIDI16_H_
 #define MIDI16_H_
 
 class MIDI16 {
