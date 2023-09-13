@@ -89,25 +89,56 @@ public:
     writeByte(0xFC);
   }
 
+/*
+  void readMIDI() { // temp
+  while(Serial2.available() > 2) {
+    byte sVal = Serial2.read();
+    if (sVal > 127 && sVal < 247) {
+      byte message[3];
+      // Serial.println(sVal);
+      message[0] = sVal;
+      sVal = Serial2.read();
+      while (sVal > 127) {
+        sVal = Serial2.read();
+      }
+      message[1] = sVal;
+      sVal = Serial2.read();
+      while (sVal > 127) {
+        sVal = Serial2.read();
+      }
+      message[2] = sVal;
+      if (message[0] == 144 && message[1] > 0) handleNoteOn(0, message[1], message[2]);
+      if (message[0] == 128 || (message[0] == 144 && message[1] == 0)) handleNoteOff(0, message[1], message[2]);
+    }
+  }
+}
+*/
+
   // recieve MIDI messages
+  #if IS_ESP32()
   uint16_t read() {
-    int inByte;
-    #if IS_ESP32()
-    if (Serial2.available() > 2) {
-      inByte = Serial2.read();
-    }
-    #endif
-    #if IS_ESP8266()
-    if (Serial.available() > 2) {
-      inByte = Serial.read();
-    }
-    #endif
-    // handle status byte or clock data
-    if ((inByte > 127 && inByte < 240) || (inByte > 248 && inByte < 252)) { 
-      return handleRead(inByte);
+    // Serial.println("midi read " + millis());
+    while(Serial2.available() > 2) {
+      int inByte = readByte();
+      // handle status byte or clock data
+      if ((inByte > 127 && inByte < 240) || (inByte > 248 && inByte < 252)) { 
+        return handleRead(inByte);
+      }
     }
     return 0;
   }
+  #elif IS_ESP8266()
+  uint16_t read() {
+    while(Serial.available() > 2) {
+      int inByte = readByte();
+      // handle status byte or clock data
+      if ((inByte > 127 && inByte < 240) || (inByte > 248 && inByte < 252)) { 
+        return handleRead(inByte);
+      }
+    }
+    return 0;
+  }
+  #endif
 
   // access current MIDI message data
   uint8_t getStatus() {
@@ -131,23 +162,25 @@ private:
   int transmitPin;
   uint8_t * message;
 
+  #if IS_ESP32()
   uint8_t readByte() {
-    #if IS_ESP32()
     return Serial2.read();
-    #endif
-    #if IS_ESP8266()
-    return Serial.read();
-    #endif
   }
 
   uint8_t writeByte(uint8_t val) {
-    #if IS_ESP32()
     Serial2.write(val);
-    #endif
-    #if IS_ESP8266()
-    Serial.write(val);
-    #endif
   }
+  #endif
+
+  #if IS_ESP8266()
+  uint8_t readByte() {
+    return Serial.read();
+  }
+
+  uint8_t writeByte(uint8_t val) {
+    Serial.write(val);
+  }
+  #endif
 
   uint8_t handleRead(uint8_t inByte) { 
     message[0] = inByte;
