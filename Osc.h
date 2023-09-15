@@ -188,9 +188,9 @@ public:
   /** Phase Modulation (FM)
    *  Pass in a second oscillator and multiply its value to change mod depth
    * @param modulator - The next sample from the modulating waveform
-   * @param modIndex - The depth value to amplify the modulator by.
+   * @param modIndex - The depth value to amplify the modulator by, from 0.0 to 1.0
    * ModIndex values between 0.0 - 1.0 are normally enough, higher values are possible
-   * In Phase Mod, typically values 1/10th of FM ModIndex values provide equvalemnt change.
+   * In Phase Mod, typically values 1/10th of FM ModIndex values provide equvalent change.
    */
   inline
   int16_t phMod(int32_t modulator, float modIndex) {
@@ -315,9 +315,16 @@ public:
   */
 	inline
 	void setPitch(float midi_pitch) {
+    midiPitch = midi_pitch;
 		setFreq(mtof(min(127.0f, max(0.0f, midi_pitch * (1 + (rand(6) * 0.00001f))))));
     prevFrequency = frequency;
 	}
+
+  /** Return the pitch as a MIDI pitch */
+	inline
+	float getPitch(float midi_pitch) {
+    return midiPitch;
+  }
 
 	/** Set a specific phase increment.
   * phaseinc_fractional, value between 0.0 to 1.0
@@ -536,6 +543,7 @@ private:
   float feedback_phase_fractional = 0;
   float testVal = 1.3;
   float cycleLengthPerMS = frequency * 0.001f; // / 1000.0f;
+  float midiPitch = 69;
 
   /** Increments the phase of the oscillator without returning a sample.*/
 	inline
