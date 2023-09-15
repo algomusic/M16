@@ -26,6 +26,11 @@ class Env {
       if (val >= 0) envAttack = val * 1000; // micros
     }
 
+    /** Get attack time in ms. */
+    int getAttack() {
+      return envAttack * 0.001;
+    }
+
     /** Set envHold time in ms. */
     void setHold(int val) {
       if (val >= 0) envHold = val * 1000;
@@ -46,6 +51,11 @@ class Env {
       }
     }
 
+    /** Get decay time in ms. */
+    int getDecay() {
+      return envDecay * 0.001;
+    }
+
     /** Set envSustain level as a value from 0.0 - 1.0 */
     void setSustain(float val) {
       if (val >= 0 && val <= 1) {
@@ -54,9 +64,19 @@ class Env {
       }
     }
 
+    /** Get sustain time, 0.0 to 1.0. */
+    float getSustain() {
+      return envSustain;
+    }
+
     /** Set releaseState time in ms. */
     void setRelease(int val) {
       if (val >= 0) envRelease = max(10, val) * 1000;
+    }
+
+    /** Get release time in ms. */
+    int getRelease() {
+      return envRelease * 0.001;
     }
 
     /** Begin the current envelope */
