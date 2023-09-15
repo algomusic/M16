@@ -36,6 +36,20 @@ public:
 	*/
 	Del() {};
 
+  /** Constructor.
+	* Create and setup delay.
+  * @param maxDelayTime The maximum delay time in milliseconds
+  * @param msDur The initial delay time in milliseconds, up to maxDelayTime
+  * @param level The delay feedback level, from 0.0 to 1.0 
+  * @param feedback Multitap delay feedback on or off, true or false
+	*/
+	Del(unsigned int maxDelayTime, int msDur, float level, bool feedback) {
+    setMaxDelayTime(maxDelayTime);
+    setTime(msDur);
+    setLevel(level);
+    setFeedback(feedback);
+  }
+
   /** 
    * Set the maximum delay time in milliseconds
    * @param maxDelayTime The maximum delay time in milliseconds
@@ -89,7 +103,7 @@ public:
   /** Specify the delay feedback level, from 0.0 to 1.0 */
   void setLevel(float level) {
     delayLevel = min(1024, max(0, (int)(level * 1024)));
-    Serial.print("delayLevel "); Serial.println(delayLevel);
+    // Serial.print("delayLevel "); Serial.println(delayLevel);
   }
 
   /** Turn delay feedback on or off */

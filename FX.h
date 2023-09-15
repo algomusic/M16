@@ -70,7 +70,7 @@ class FX {
       int16_t samp = 20831 * atan(amount * (sample_in * (float)MAX_16_INV)); // 20831
       // int16_t samp = (sample_in / (float)MAX_16) * MAX_16;
       // if (samp > MAX_16 || samp < MIN_16) Serial.println(samp);
-      return samp;
+      return clip(samp);
     }
 
     /** Soft Saturation
