@@ -11,6 +11,9 @@
  *
  * M16 is licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
  */
+
+#include "Arduino.h"
+
 // based on "Hardware_defines.h" in Mozzi
 #define IS_ESP8266() (defined(ESP8266))
 #define IS_ESP32() (defined(ESP32))
@@ -266,6 +269,7 @@ float sigmoid(float inVal) { // 0.0 to 1.0
 */
 inline
 float slew(float curr, float target, float amt) {
+  if (curr == target) return target;
   float dist = target - curr;
   return curr + dist * amt;
 }
@@ -334,4 +338,4 @@ float chaosRand(float range) {
   return chaosRandVal * 0.5 + range * 0.5;
 }
 
-// #endif /* M16_H_ */
+// #endif #endif /* M16_H_ */
