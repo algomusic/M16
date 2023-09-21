@@ -71,7 +71,10 @@ class Env {
 
     /** Set releaseState time in ms. */
     void setRelease(int val) {
-      if (val >= 0) envRelease = max(10, val) * 1000;
+      if (val >= 0) {
+        envRelease = max(10, val) * 1000;
+        jitEnvRelease = envRelease;
+      }
     }
 
     /** Get release time in ms. */
