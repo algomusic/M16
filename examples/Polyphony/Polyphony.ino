@@ -5,14 +5,18 @@
 #include "SVF.h"
 #include "FX.h"
 
-int16_t waveTable [TABLE_SIZE]; // empty array
-const int poly = 2; // change polyphony as desired, each MCU type will handle this differently
+int16_t waveTable[TABLE_SIZE]; // empty array
+const int poly = 2; // change polyphony as desired, each MCU type will handle particular amounts
 Osc osc[poly];
 Env env[poly];
 SVF filter[poly];
 FX effect1;
 
-unsigned long msNow, noteTime, envTime, delTime;
+unsigned long msNow = millis();
+unsigned long noteTime = msNow;
+unsigned long envTime = msNow;
+int noteDelta = 250;
+int envDelta = 4;
 int scale [] = {0, 2, 4, 0, 7, 9, 0, 0, 0, 0, 0};
 
 void setup() {
@@ -39,8 +43,9 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow > noteTime) {
-    noteTime = msNow + 250;
+  // Serial.print(msNow);Serial.print(" ");Serial.print(noteTime);Serial.print(" ");Serial.println(msNow - noteTime);
+  if (msNow - noteTime > noteDelta || msNow - noteTime < 0) {
+    noteTime = msNow;
     for (int i=0; i<poly; i++){
       if (random(10) < 5) {
         int p = pitchQuantize(random(36) + 48, scale, 0);
@@ -51,8 +56,8 @@ void loop() {
     }
   }
 
-  if (msNow > envTime) {
-    envTime = msNow + 4;
+  if (msNow - envTime > envDelta || msNow - envTime < 0) {
+    envTime = msNow;
     for (int i=0; i<poly; i++) {
       env[i].next();
     }
@@ -67,7 +72,7 @@ void audioUpdate() {
     #elif IS_ESP32()
       mix += filter[i].nextLPF((osc[i].next() * env[i].getValue())>>16);
     #endif
-    mix *= 0.65;
+    mix *= 0.6;
   }
   // stereo
   int16_t leftVal = mix; 

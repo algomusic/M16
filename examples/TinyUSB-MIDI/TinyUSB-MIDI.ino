@@ -1,5 +1,17 @@
 // Velocity sensitive monophonic MIDI synth and MIDI data generator
-// Requires and ESP32 with support for TinyUSB - tested with the ESP32-S2
+// Requires an ESP32 with support for TinyUSB 
+// MIDI data is sent via the USB cable to/from attached computer
+// - tested with the ESP32-S2
+// - tested with ESP32-S3 
+// The following changes from the default Arduino IDE setting for S3 boards are required:
+//  USB CDC On Boot: Enabled
+//  Upload Mode: "USB OTG CDC (TinyUSB)"
+//  USB Mode: "USB-OTG (TinyUSB)"
+// Also, on some boards it may be necessary to;
+//  Put ESP32-S3 into boot mode to (re)upload the code
+//  Press RST on ESP after loading
+// After resetting the Arduino IDE port will need to be resablished to see print statements in the Serial Monitor
+
 #include "M16.h"
 #include "Osc.h"
 #include "Env.h"
@@ -12,12 +24,19 @@ Osc osc1(sineWave);
 Env ampEnv1;
 SVF filter1;
 Del delay1(500); // max delay time in ms
-unsigned long msNow, envTime, glideTime, noteOnTime, noteOffTime;
+unsigned long msNow = millis();
+unsigned long envTime = msNow;
+unsigned long glideTime = msNow;
+unsigned long noteOnTime = msNow;
+unsigned long noteOffTime = msNow;
+unsigned long ccTime = msNow;
+int noteDelta = 500;
 float windowSize = 0;
 float nextFreq = 440;
 int outPitch = 60;
 int pitchClass [] = {0, 2, 4, 5, 7, 9, 11};
 int volume = 127; // 0 - 127
+bool notePlaying = false;
 
 #include <Adafruit_TinyUSB.h>
 // - MIDI Library by Forty Seven Effects
@@ -27,6 +46,22 @@ int volume = 127; // 0 - 127
 // // USB MIDI object
 Adafruit_USBD_MIDI usb_midi;
 MIDI_CREATE_INSTANCE(Adafruit_USBD_MIDI, usb_midi, MIDI);
+
+
+void handleNoteOn(byte channel, byte pitch, byte velocity) {
+  // Serial.print("Recieved Pitch: ");Serial.print(pitch);Serial.print(" Vel: ");Serial.println(velocity);
+  nextFreq = mtof(pitch); // glide target
+  windowSize = velocity / 127.0f;
+  ampEnv1.start();
+}
+
+void handleNoteOff(byte channel, byte pitch, byte velocity) {
+  ampEnv1.startRelease();
+}
+
+void handleCC(byte channel, byte controller, byte value) {
+  volume = value;
+}
 
 
 void setup() {
@@ -56,44 +91,37 @@ void loop() {
   MIDI.read();
 
   msNow = millis();
-  if (msNow > noteOnTime) {
-    noteOnTime += 500;
+
+  if (msNow - noteOnTime > noteDelta || msNow - noteOnTime < 0) {
+    noteOnTime = msNow;
     noteOffTime = noteOnTime + 100;
+    notePlaying = true;
     outPitch = pitchQuantize(rand(24) + 48, pitchClass, 0);
     MIDI.sendNoteOn(outPitch, 100, 1); // pitch, vel, chan
-    MIDI.sendControlChange(7, outPitch, 1); // CC, value, chan
+    // Serial.print("Sent Pitch: ");Serial.print(outPitch);  
   }
 
-  if (msNow > noteOffTime) {
+  if (notePlaying && msNow > noteOffTime) {
     MIDI.sendNoteOff(outPitch, 0, 1);
+    notePlaying = false;
+  }
+
+  if (msNow - ccTime > 800 || msNow - ccTime < 0) {
+    ccTime = msNow;
+    int ccVal = rand(127);
+    MIDI.sendControlChange(7, ccVal, 1); // CC, value, chan
+    Serial.print(" Sent CC 7 value: ");Serial.print(ccVal);Serial.println();
   }
    
-  if (msNow > envTime) {
-    envTime += 4;
+  if (msNow - envTime > 4 || msNow - envTime < 0) {
+    envTime = msNow;
     ampEnv1.next();
   }
 
-  msNow = millis();
-  if (msNow > glideTime) {
-    glideTime += 21;
+  if (msNow - glideTime > 21 || msNow - glideTime < 0) {
+    glideTime = msNow;
     osc1.slewFreq(nextFreq, 0.8);
   }
-}
-
-void handleNoteOn(byte channel, byte pitch, byte velocity) {
-  // Serial.print("Pitch: ");Serial.print(pitch);Serial.print(" Vel: ");Serial.println(velocity);
-  // osc1.setPitch(pitch);
-  nextFreq = mtof(pitch); // glide target
-  windowSize = velocity / 127.0f;
-  ampEnv1.start();
-}
-
-void handleNoteOff(byte channel, byte pitch, byte velocity) {
-  ampEnv1.startRelease();
-}
-
-void handleCC(byte channel, byte controller, byte value) {
-  volume = value;
 }
 
 /* The audioUpdate function is required in all M16 programs 

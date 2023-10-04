@@ -1,11 +1,13 @@
 // M16 Window Transform example
+// Inspired by the Window Transform Function by Dove Audio
+// This example morphs between sine and sawtooth waveshapes
 #include "M16.h"
 #include "Osc.h"
 
-int16_t sineWave [TABLE_SIZE]; // empty wavetable
+int16_t sineWave[TABLE_SIZE]; // empty wavetable
 // int16_t squareWave [TABLE_SIZE]; // empty wavetable
 // int16_t triangleWave [TABLE_SIZE]; // empty wavetable
-int16_t sawtoothWave [TABLE_SIZE]; // empty wavetable
+int16_t sawtoothWave[TABLE_SIZE]; // empty wavetable
 Osc osc1(sineWave); // experiment with different waveform combinations
 Osc lfo(sineWave);
 
@@ -16,8 +18,8 @@ bool expanding = true;
 void setup() {
   Serial.begin(115200);
   Osc::sinGen(sineWave); // fill
-  // Osc::sqrGen(squareWave); // fill
-  // Osc::triGen(triangleWave); // fill
+  // Osc::sqrGen(squareWave); // try other waveshapes
+  // Osc::triGen(triangleWave); 
   Osc::sawGen(sawtoothWave); // fill
   osc1.setPitch(48);
   lfo.setFreq(0.1); // Hertz
@@ -27,8 +29,9 @@ void setup() {
 
 void loop() { 
   msNow = millis();
-  if (msNow > windowTime) {
-    windowTime = msNow + 10;
+
+  if (msNow - windowTime > 10 || msNow - windowTime < 0) {
+      windowTime = msNow;
     int lfoVal = lfo.atTime(msNow);
     windowSize = lfoVal / (float)MAX_16 / 2.0f + 0.5f;
     if (random(1000) == 0) {

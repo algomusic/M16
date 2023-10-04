@@ -41,8 +41,9 @@ void setup() {
 
 void loop() {
   msNow = millis();
-  if (msNow > stepTime) {
-    stepTime += 2000;
+  
+  if (msNow - stepTime > 2000 || msNow - stepTime < 0) {
+      stepTime = msNow;
     if (color == 0) {
       ampEnvW.start();
       Serial.println("White Noise");
@@ -62,8 +63,8 @@ void loop() {
     color = (color + 1) % 4;
   }
 
-  if (msNow > envTime) {
-    envTime += 1; // in ms
+  if (msNow - envTime > 4 || msNow - envTime < 0) {
+    envTime = msNow;
     ampEnvW.next();
     ampEnvP.next();
     ampEnvB.next();

@@ -14,9 +14,10 @@ unsigned long stepTime = msNow;
 unsigned long envTime = msNow;
 
 int stepDelta = 250;
+int envDelta = 4;
 int stepCnt = 0;
 int pent [] = {0, 2, 4, 7, 9};
-const int voices = 4; // change to alter texture and adjust for different CPU campabilities
+const int voices = 4; // change to alter texture and adjust for different CPU capabilities
 
 Osc oscillators[voices];
 Env ampEnvs[voices];
@@ -48,15 +49,15 @@ void setup() {
   seqGen();
   effect1.setReverbSize(16);
   effect1.setReverbLength(0.7);
-  seti2sPins(25, 27, 12, 21);
+  // seti2sPins(25, 27, 12, 21); // or similar if required
   audioStart();
 }
 
 void loop() {
   msNow = millis();
-
-  if (msNow > stepTime) {
-    stepTime += stepDelta;
+ 
+  if (msNow - stepTime > stepDelta || msNow - stepTime < 0) {
+    stepTime = msNow;
     if (stepCnt%64 == 0) seqGen();
     for (int i=0; i<voices; i++) {
       int p = sequences[i].next();
@@ -69,8 +70,8 @@ void loop() {
     stepCnt++;
   }
 
-  if (msNow > envTime) {
-    envTime = msNow + 4;
+  if (msNow - envTime > envDelta || msNow - envTime < 0) {
+    envTime = msNow;
     for (int i=0; i<voices; i++) {
       ampEnvs[i].next();
     }
@@ -84,6 +85,6 @@ void audioUpdate() {
     leftVal += (filters[i].nextLPF(oscillators[i].next()) * ampEnvs[i].getValue())>>18;
   }
   leftVal = effect1.clip(leftVal);
-  effect1.reverbStereo(leftVal, leftVal, leftOut, rightOut);
+  effect1.reverbStereo(leftVal, leftVal, leftOut, rightOut); // bypass for ESP8266
   i2s_write_samples(leftOut, rightOut);
 }

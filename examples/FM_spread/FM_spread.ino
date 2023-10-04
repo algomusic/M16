@@ -1,4 +1,8 @@
 // M16 Spread example
+// Spread reads the oscillator 3 times, each at a different frequency and sums the output
+// Useful for oscillator detune or chordal effects
+// For fun, this example frequency modulates then filters the spread oscillator output.
+// ESP8266 struggles with spread, try using window transform or osc morph instead
 #include "M16.h" 
 #include "Osc.h"
 #include "SVF.h"
@@ -10,7 +14,9 @@ Osc modOsc(waveTable);
 SVF filter;
 Env modEnv;
 int16_t vol = 1000; // 0 - 1024, 10 bit
-unsigned long msNow, pitchTime, envTime;
+unsigned long msNow = millis();
+unsigned long pitchTime = msNow;
+unsigned long envTime = msNow;
 int noteCnt = 0;
 float modVal, modIndex = 0.5;
 
@@ -27,8 +33,8 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if (msNow > pitchTime) {
-    pitchTime = msNow + 2000;
+  if (msNow - pitchTime > 2000 || msNow - pitchTime < 0) {
+      pitchTime = msNow;
     if (noteCnt++ % 4 == 0) {
       if (random(2) == 0) {
         float spreadVal = random(1000) * 0.00001;
@@ -55,8 +61,8 @@ void loop() {
     modEnv.start();
   }
 
-  if (msNow > envTime) {
-    envTime = msNow + 11;
+  if (msNow - envTime > 11 || msNow - envTime < 0) {
+    envTime = msNow;
     modEnv.next();
     modVal = modIndex * modEnv.getValue() / MAX_16;
   }

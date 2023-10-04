@@ -1,4 +1,6 @@
 // M16 Spread example
+// Spread reads the oscillator 3 times, each at a different frequency and sums the output
+// Useful for oscillator detune or chordal effects
 // ESP8266 struggles with spread, try using window transform or osc morph instead
 #include "M16.h" 
 #include "Osc.h"
@@ -21,8 +23,9 @@ void setup() {
 
 void loop() {
   msNow = millis();
-  if (msNow > pitchTime) {
-    pitchTime = msNow + 1000;
+
+  if (msNow - pitchTime > 1000 || msNow - pitchTime < 0) {
+      pitchTime = msNow;
     if (noteCnt++ % 4 == 0) {
       if (random(2) == 0) {
         float detSpread = random(1000) * 0.00001;
@@ -46,7 +49,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  uint16_t leftVal = (filter.nextLPF(aOsc1.next()) * vol)>>10;
-  uint16_t rightVal = leftVal;
+  int16_t leftVal = (filter.nextLPF(aOsc1.next()) * vol)>>10;
+  int16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

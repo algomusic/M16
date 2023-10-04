@@ -6,7 +6,9 @@
 int16_t waveTable [TABLE_SIZE]; // empty wavetable
 Osc osc1(waveTable);
 int16_t vol = 1000; // 0 - 1024, 10 bit
-unsigned long msNow, pitchTime;
+unsigned long msNow = millis();
+unsigned long pitchTime = msNow;
+int pitchDelta = 250;
 int arpPitches [] = {64, 60, 67, 69};
 Arp arp1(arpPitches, 4, 2, ARP_UP_DOWN); // ARP_ORDER, ARP_UP, ARP_DOWN, ARP_UP_DOWN
 // Arp arp1;
@@ -25,8 +27,8 @@ void setup() {
 
 void loop() {
   msNow = millis();
-  if (msNow > pitchTime) {
-    pitchTime = msNow + 250;
+  if (msNow - pitchTime > pitchDelta || msNow - pitchTime < 0) {
+    pitchTime = msNow;
     int pitch = arp1.next();
     Serial.println(pitch);
     osc1.setPitch(pitch);

@@ -1,33 +1,37 @@
 // M16 Oscillator morphing example
+// Waveform morphing can be a bit noisy, explore Window Transform as an alternative
 #include "M16.h"
 #include "Osc.h"
 
-int16_t sawTable [TABLE_SIZE]; // empty wavetable
-int16_t triTable [TABLE_SIZE]; // empty wavetable
+int16_t sawTable[TABLE_SIZE]; // empty wavetable
+int16_t triTable[TABLE_SIZE]; // empty wavetable
 Osc aOsc1(sawTable);
 int16_t vol = 1000; // 0 - 1024, 10 bit
 float morphVal = 0;
 bool morphUp = true;
-unsigned long ms, noteTime, morphTime;
+unsigned long msNow = millis();
+unsigned long noteTime = msNow;
+unsigned long morphTime = msNow;
 
 void setup() {
   Serial.begin(115200);
   Osc::sawGen(sawTable); // fill the wavetable
   Osc::triGen(triTable); // fill the wavetable
-  aOsc1.setPitch(440);
+  aOsc1.setPitch(60);
   audioStart();
 }
 
 void loop() {
-  ms = millis();
-  if (ms > noteTime) {
-    noteTime = ms + 5000;
-   int pitch = random(36) + 48;
-   aOsc1.setPitch(pitch);
+  msNow = millis();
+
+  if (msNow - noteTime > 5000 || msNow - noteTime < 0) {
+    noteTime = msNow;
+    int pitch = random(24) + 36;
+    aOsc1.setPitch(pitch);
   }
 
-  if (ms > morphTime) {
-    morphTime = ms + 32;
+  if (msNow - morphTime > 32 || msNow - morphTime < 0) {
+    morphTime = msNow;
     if (morphUp) {
       morphVal += 0.01;
       if (morphVal > 1.0) {
@@ -49,7 +53,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  uint16_t leftVal = (aOsc1.nextMorph(triTable, morphVal) * vol)>>10;
-  uint16_t rightVal = leftVal;
+  int16_t leftVal = (aOsc1.nextMorph(triTable, morphVal) * vol)>>10;
+  int16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

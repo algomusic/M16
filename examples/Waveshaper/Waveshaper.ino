@@ -1,14 +1,17 @@
 // M16 waveshaper example
+// Using a randomly generated noisy waveshape function
 #include "M16.h" 
 #include "Osc.h"
 #include "FX.h"
 
-int16_t sineTable [TABLE_SIZE]; // empty wavetable
+int16_t sineTable[TABLE_SIZE]; // empty wavetable
 Osc aOsc1(sineTable);
 Osc lfo1(sineTable);
 FX effect1;
 int16_t vol = 1000; // 0 - 1024, 10 bit
-unsigned long msNow, pitchTime, mixTime;
+unsigned long msNow = millis();
+unsigned long pitchTime = msNow;
+unsigned long mixTime = msNow;
 
 int16_t waveShapeTable [TABLE_SIZE]; // empty wave shaping table
 float stepInc = (MAX_16 * 2.0 - 1) / TABLE_SIZE;
@@ -36,8 +39,9 @@ void setup() {
 
 void loop() {
   msNow = millis();
-  if (msNow > pitchTime) {
-    pitchTime = msNow + 2000;
+
+  if (msNow - pitchTime > 2000 || msNow - pitchTime < 0) {
+      pitchTime = msNow;
     int pitch = 36 + random(24);
     Serial.println(pitch);
     aOsc1.setPitch(pitch);
@@ -45,8 +49,8 @@ void loop() {
   }
 
   #if IS_ESP32() // 8266 can't manage waveshaping morphing
-    if (msNow > mixTime) {
-      mixTime = msNow + 32;
+    if (msNow - mixTime > 32 || msNow - mixTime < 0) {
+      mixTime = msNow;
       shapeMixVal = lfo1.atTimeNormal(msNow);
     }
   #endif
@@ -57,7 +61,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  uint16_t leftVal = (effect1.waveShaper(aOsc1.next(), shapeMixVal) * vol)>>10;
-  uint16_t rightVal = leftVal;
+  int16_t leftVal = (effect1.waveShaper(aOsc1.next(), shapeMixVal) * vol)>>10;
+  int16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

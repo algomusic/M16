@@ -2,13 +2,14 @@
 #include "M16.h"
 #include "Osc.h"
 
-int16_t sineWave [TABLE_SIZE]; // empty wavetable
-int16_t squareWave [TABLE_SIZE]; // empty wavetable
-int16_t triangleWave [TABLE_SIZE]; // empty wavetable
+int16_t sineWave[TABLE_SIZE]; // empty wavetable
+int16_t squareWave[TABLE_SIZE]; // empty wavetable
+int16_t triangleWave[TABLE_SIZE]; // empty wavetable
 Osc osc1(squareWave); // experiment with different waveform combinations
 Osc osc2(triangleWave);
 
-unsigned long msNow, modTime;
+unsigned long msNow = millis();
+unsigned long modTime = msNow;
 float freqRatio = 0;
 
 void setup() {
@@ -21,8 +22,9 @@ void setup() {
 
 void loop() {
   msNow = millis();
-  if (msNow > modTime) {
-    modTime = msNow + 10;
+
+  if (msNow - modTime > 10 || msNow - modTime < 0) {
+      modTime = msNow;
     float freq1 = mtof(60);
     osc1.setFreq(freq1);
     float freq2 = freq1 * freqRatio;
@@ -42,7 +44,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  uint16_t leftVal = osc1.ringMod(osc2.next());
-  uint16_t rightVal = leftVal;
+  int16_t leftVal = osc1.ringMod(osc2.next());
+  int16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

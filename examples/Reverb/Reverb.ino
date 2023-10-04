@@ -11,7 +11,10 @@ Env ampEnv1;
 SVF filter1;
 FX effect1;
 
-unsigned long msNow, noteTime, envTime, delTime;
+unsigned long msNow = millis();
+unsigned long noteTime = msNow;
+unsigned long envTime = msNow;
+unsigned long delTime = msNow;
 int scale [] = {0, 2, 4, 5, 7, 9, 0, 0, 0, 0, 0};
 int reverbLength = 900; // 0 - 1024
 int reverbMix = 300; // 0 - 1024 // 150
@@ -39,8 +42,8 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow > noteTime) {
-    noteTime = msNow + 1000;
+  if (msNow - noteTime > 1000 || msNow - noteTime < 0) {
+    noteTime = msNow;
     int p = pitchQuantize(random(25) + 48, scale, 0);
     osc1.setPitch(p);
     filter1.setFreq(min(4000.0f, mtof(p + 32)));
@@ -51,8 +54,8 @@ void loop() {
     Serial.print("Pitch: ");Serial.print(p);Serial.print(" Pan: ");Serial.println(pan);
   }
 
-  if (msNow > envTime) {
-    envTime = msNow + 4;
+  if (msNow - envTime > 4 || msNow - envTime < 0) {
+    envTime = msNow;
     ampEnv1.next();
   }
 }

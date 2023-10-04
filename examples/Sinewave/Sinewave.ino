@@ -2,10 +2,11 @@
 #include "M16.h" 
 #include "Osc.h"
 
-int16_t waveTable [TABLE_SIZE]; // empty wavetable
+int16_t waveTable[TABLE_SIZE]; // empty wavetable
 Osc aOsc1(waveTable);
 int16_t vol = 1000; // 0 - 1024, 10 bit
-unsigned long msNow, pitchTime;
+unsigned long msNow = millis();
+unsigned long pitchTime = msNow;
 
 void setup() {
   Serial.begin(115200);
@@ -18,8 +19,9 @@ void setup() {
 
 void loop() {
   msNow = millis();
-  if (msNow > pitchTime) {
-    pitchTime = msNow + 1000;
+
+  if (msNow - pitchTime > 1000 || msNow - pitchTime < 0) {
+    pitchTime = msNow;
     int pitch = random(24) + 58;
     Serial.println(pitch);
     aOsc1.setPitch(pitch);

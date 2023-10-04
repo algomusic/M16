@@ -19,16 +19,16 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if (msNow > changeTime) {
-    changeTime = msNow + 1000;
+  if (msNow - changeTime > 1000 || msNow - changeTime < 0) {
+      changeTime = msNow;
     int grain = random(500)+1;
     Osc::noiseGen(waveTable, grain);
     Serial.println(grain);
     ampEnv.start();
   }
 
-  if (msNow > envTime) {
-    envTime += 4;
+  if (msNow - envTime > 4 || msNow - envTime < 0) {
+      envTime = msNow;
     ampEnv.next();
   }
 }
@@ -38,7 +38,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  uint16_t leftVal = (aOsc1.next() * ampEnv.getValue())>>16;
-  uint16_t rightVal = leftVal;
+  int16_t leftVal = (aOsc1.next() * ampEnv.getValue())>>16;
+  int16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

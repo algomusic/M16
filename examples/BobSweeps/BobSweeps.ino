@@ -11,7 +11,11 @@ Osc osc1(waveTable);
 Osc lfo1(sineTable);
 Osc lfo2(sineTable);
 Bob lpf;
-unsigned long msNow, lfoTime, pitchTime;
+unsigned long msNow = millis();
+unsigned long lfoTime = msNow;
+unsigned long pitchTime = msNow;
+int lfoDelta = 24;
+int pitchDelta = 4000;
 
 void setup() {
   Serial.begin(115200);
@@ -27,14 +31,14 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow > lfoTime) {
-    lfoTime = msNow + 24;
+  if (msNow - lfoTime > lfoDelta || msNow - lfoTime < 0) {
+    lfoTime = msNow;
     lpf.setFreq(lfo1.atTimeNormal(msNow) * 20000);
     lpf.setRes(lfo2.atTimeNormal(msNow));
   }
 
-  if (msNow > pitchTime) {
-    pitchTime = msNow + 4000;
+  if (msNow - pitchTime > pitchDelta || msNow - pitchTime < 0) {
+    pitchTime = msNow;
     osc1.setPitch(rand(36) + 24);
   }
 }

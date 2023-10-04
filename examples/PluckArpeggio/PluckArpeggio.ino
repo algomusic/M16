@@ -14,7 +14,8 @@ SVF filter;
 FX effect1;
 int bpm = 120;
 double stepTime, stepDelta;
-unsigned long msNow, envTime = millis();
+unsigned long msNow = millis();
+unsigned long envTime = msNow;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 float feedback = 0.9;
 
@@ -39,8 +40,8 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if (msNow > stepTime) {
-    stepTime += stepDelta;
+  if (msNow - stepTime > stepDelta || msNow - stepTime < 0) {
+    stepTime = msNow;
     int pitch = arp1.next(); 
     Serial.println(pitch);
     aOsc1.setPitch(pitch);
@@ -50,8 +51,8 @@ void loop() {
     ampEnv1.start();
   }
 
-  if (msNow > envTime) {
-    envTime += 4;
+  if (msNow - envTime > 4 || msNow - envTime < 0) {
+    envTime = msNow;
     ampEnv1.next();
   }
 }
