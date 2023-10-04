@@ -30,7 +30,7 @@ class FX {
     * @param amount The degree of amplifcation with is then folded; 1.0 +
     */
     inline
-    int16_t waveFold(int sample_in, float amount) {
+    int16_t waveFold(int32_t sample_in, float amount) {
       if (amount > 1.0) {
         sample_in *= amount;
         while(abs(sample_in) > MAX_16) {
