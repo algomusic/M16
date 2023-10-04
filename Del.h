@@ -77,11 +77,6 @@ public:
     return maxDelayTime_ms;
   }
 
-  /** Return the delay length in milliseconds */
-  float getTime() {
-    return delayTime_ms;
-  }
-
   /** Return the delay length in samples */
   unsigned int getDelayLength() {
     return delayTime_samples;
@@ -100,10 +95,20 @@ public:
     // Serial.print("delayTime_samples "); Serial.println(delayTime_samples);
   }
 
+  /** Return the delay duration in milliseconds */
+  float getTime() {
+    return delayTime_ms;
+  }
+
   /** Specify the delay feedback level, from 0.0 to 1.0 */
   void setLevel(float level) {
     delayLevel = min(1024, max(0, (int)(level * 1024)));
     // Serial.print("delayLevel "); Serial.println(delayLevel);
+  }
+
+  /** Return the delay feedback level, from 0.0 to 1.0 */
+  float getLevel() {
+    return delayLevel;
   }
 
   /** Turn delay feedback on or off */
