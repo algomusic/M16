@@ -96,7 +96,7 @@ public:
   void setSpread(float newVal) {
 		// spread = newVal;
     spread1 = 1.0f + newVal;
-    spread2 = 1.0f - newVal;
+    spread2 = 1.0f - newVal * 0.5;
     setFreq(getFreq());
 	}
 
