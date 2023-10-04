@@ -38,7 +38,7 @@ class FX {
           if (sample_in < 0) sample_in = -MAX_16 - (sample_in + MAX_16);
         }
       }
-      return sample_in;
+      return clip(sample_in);
     }
 
     /** Clipping
@@ -128,6 +128,7 @@ class FX {
     * Distorts wave input by wave shaping function
     * Shaping wave is, like osc wavetables, WAVE_TABLE wide from MIN_16 to MAX_16 values
     * @sample_in is the input sample value from the carrier wave
+    * @amount is the degree of distortion, from 0.0 to 1.0
     */
     inline
     int16_t waveShaper(int16_t sample_in, float amount) {
@@ -225,13 +226,13 @@ class FX {
     * Inspired by reverb example G08 in Pure Data.
     */
     inline
-    int16_t reverb(int16_t audioIn) {
+    int16_t reverb(int32_t audioIn) {
       // set up first time called
       if (!reverbInitiated) {
         initReverb(reverbSize);
       }
       processReverb(audioIn, audioIn);
-      return ((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11) + ((revP2 * reverbMix)>>11);
+      return clip(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11) + ((revP2 * reverbMix)>>11));
     }
 
     /** A simple reverb using recursive delay lines.
@@ -243,14 +244,14 @@ class FX {
     * Inspired by reverb example G08 in Pure Data.
     */
     inline
-    void reverbStereo(int16_t audioInLeft, int16_t audioInRight, int16_t &audioOutLeft, int16_t &audioOutRight) {
+    void reverbStereo(int32_t audioInLeft, int32_t audioInRight, int16_t &audioOutLeft, int16_t &audioOutRight) {
       // set up first time called
       if (!reverbInitiated) {
         initReverb(reverbSize);
       }
       processReverb(audioInLeft, audioInRight);
-      audioOutLeft = ((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>10);
-      audioOutRight = ((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>10);
+      audioOutLeft = clip(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>10));
+      audioOutRight = clip(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>10));
     }
 
     /** Set the reverb length
