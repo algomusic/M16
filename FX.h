@@ -232,7 +232,7 @@ class FX {
         initReverb(reverbSize);
       }
       processReverb(audioIn, audioIn);
-      return clip(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11) + ((revP2 * reverbMix)>>11));
+      return clip(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>13) + ((revP2 * reverbMix)>>13));
     }
 
     /** A simple reverb using recursive delay lines.
@@ -250,8 +250,8 @@ class FX {
         initReverb(reverbSize);
       }
       processReverb(audioInLeft, audioInRight);
-      audioOutLeft = clip(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>10));
-      audioOutRight = clip(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>10));
+      audioOutLeft = clip(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12));
+      audioOutRight = clip(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>12));
     }
 
     /** Set the reverb length
@@ -292,6 +292,7 @@ class FX {
     float reverbFeedbackLevel = 0.980; // 0.0 to 1.0
     int reverbMix = 270; // 0 to 1024
     float reverbSize = 1.0; // >= 1, memory allocated to delay lengths
+    // float reverbTime = 0.49999; // 0 to 0.5
     Del delay1, delay2, delay3, delay4;
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
     int16_t * shapeTable;
@@ -331,7 +332,9 @@ class FX {
       revP1 = audioInLeft + revD1; revP2 = audioInRight + revD2;
       revP3 = (revP1 + revP2); revM3 = (revP1 - revP2); revP4 = (revD3 + revD4); revM4 = (revD3 - revD4);
       revP5 = (revP3 + revP4)>>1; revP6 = (revM3 + revM4)>>1; revM5 = (revP3 - revP4)>>1; revM6 = (revM3 - revM4)>>1;
+      // revP5 = (revP3 + revP4); revP6 = (revM3 + revM4); revM5 = (revP3 - revP4); revM6 = (revM3 - revM4);
       delay1.write(revP5); delay2.write(revP6); delay3.write(revM5); delay4.write(revM6);
+      // delay1.write(revP5 * reverbTime); delay2.write(revP6 * reverbTime); delay3.write(revM5 * reverbTime); delay4.write(revM6 * reverbTime);
     }
 };
 
