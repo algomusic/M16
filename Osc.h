@@ -94,7 +94,6 @@ public:
   */
 	inline
   void setSpread(float newVal) {
-		// spread = newVal;
     spread1 = 1.0f + newVal;
     spread2 = 1.0f - newVal * 0.5;
     setFreq(getFreq());
@@ -186,7 +185,7 @@ public:
   }
 
   /** Phase Modulation (FM)
-   *  Pass in a second oscillator and multiply its value to change mod depth
+   * Pass in a second oscillator and multiply its value to change mod depth
    * @param modulator - The next sample from the modulating waveform
    * @param modIndex - The depth value to amplify the modulator by, from 0.0 to 1.0
    * ModIndex values between 0.0 - 1.0 are normally enough, higher values are possible
@@ -205,7 +204,7 @@ public:
 
   /** Ring Modulation
   *  Pass in a second oscillator and multiply its value to change mod depth
-  *  Multiplying incomming oscillator Depth between 0.5 - 2.0 is best.
+  *  Multiplying incomming oscillator amplitude between 0.5 - 2.0 is best.
   */
   inline
   int16_t ringMod(int16_t audioIn) {
@@ -283,7 +282,9 @@ public:
     }
   }
 
-	/** Set the frequency of the oscillator in Hz. */
+	/** Set the frequency of the oscillator. 
+   * @freq The desired frequency in Hz
+  */
 	inline
 	void setFreq(float freq) {
 		if (freq > 0) {
@@ -311,7 +312,7 @@ public:
 	}
 
 	/** Set the frequency via a MIDI pitch
-  * @ midiPitch The pitch, value 0 - 127
+  * @midiPitch The pitch, value 0 - 127
   */
 	inline
 	void setPitch(float midi_pitch) {
@@ -320,14 +321,16 @@ public:
     prevFrequency = frequency;
 	}
 
-  /** Return the pitch as a MIDI pitch */
+  /** Return the pitch as a MIDI pitch 
+   * @midiPitch The pitch, value 0 - 127
+  */
 	inline
 	float getPitch(float midi_pitch) {
     return midiPitch;
   }
 
 	/** Set a specific phase increment.
-  * phaseinc_fractional, value between 0.0 to 1.0
+  * @phaseinc_fractional, value between 0.0 to 1.0
   */
 	inline
 	void setPhaseInc(float phaseinc_fractional) {
