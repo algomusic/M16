@@ -5,9 +5,8 @@
  *
  * by Andrew R. Brown 2021
  *
+ * This file is part of the M16 audio library 
  * Inspired by the Mozzi audio library by Tim Barrass 2012
- *
- * This file is part of the M16 audio library.
  *
  * M16 is licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
  */
@@ -16,6 +15,7 @@
 #define FX_H_
 
 #include "Del.h"
+#include "APF.h"
 
 class FX {
 
@@ -294,6 +294,11 @@ class FX {
     float reverbSize = 1.0; // >= 1, memory allocated to delay lengths
     // float reverbTime = 0.49999; // 0 to 0.5
     Del delay1, delay2, delay3, delay4;
+    APF apf1, apf2, apf3, apf4;
+    // APF apf1 = APF(0.4494, 0.9);
+    // APF apf2 = APF(0.7214, 0.9);
+    // APF apf3 = APF(3.875, 0.9);
+    // APF apf4 = APF(11.125, 0.9);
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
     int16_t * shapeTable;
     int shapeTableSize = 0;
@@ -312,7 +317,6 @@ class FX {
       initReverb(reverbSize);
     }
 
-
     /** Set the reverb params
     * @size Bigger sizes increase delay line times for better quality but use more memory (x2, x3, x4, etc.)
     */
@@ -323,12 +327,25 @@ class FX {
       delay2.setTime(8.993 * size); delay2.setLevel(reverbFeedbackLevel); delay2.setFeedback(true);
       delay3.setTime(10.844 * size); delay3.setLevel(reverbFeedbackLevel); delay3.setFeedback(true);
       delay4.setTime(12.118 * size); delay4.setLevel(reverbFeedbackLevel); delay4.setFeedback(true);
+      apf1.setTime(0.4494 * size); apf1.setLevel(0.8);
+      apf3.setTime(0.5964 * size); apf3.setLevel(0.8);
+      apf4.setTime(3.875 * size); apf4.setLevel(0.8);
+      // apf4.setTime(11.125 * size); apf4.setLevel(0.95);
+      // apf1.setTime(3.857 * size); apf1.setLevel(0.9);
+      // apf2.setTime(11.125 * size); apf2.setLevel(0.9);
+      apf2.setTime(2.875 * size); apf2.setLevel(0.8);
+      // apf4.setTime(7.5 * size); apf4.setLevel(0.9);
       reverbInitiated = true;
     }
 
     /** Compute reverb */
     void processReverb(int16_t audioInLeft, int16_t audioInRight) {
-      revD1 = delay1.read(); revD2 = delay2.read(); revD3 = delay3.read(); revD4 = delay4.read();
+      // revD1 = delay1.read(); revD2 = delay2.read();
+      revD1 = apf1.next(delay1.read()); revD2 = apf2.next(delay2.read());
+      // revD1 = apf1.next(delay1.read()); revD2 = delay2.read(); 
+      // revD3 = delay3.read(); revD4 = delay4.read();
+      revD3 = apf3.next(delay3.read()); revD4 = apf4.next(delay4.read());
+      // revD3 = apf3.next(delay3.read()); revD4 = delay4.read();
       revP1 = audioInLeft + revD1; revP2 = audioInRight + revD2;
       revP3 = (revP1 + revP2); revM3 = (revP1 - revP2); revP4 = (revD3 + revD4); revM4 = (revD3 - revD4);
       revP5 = (revP3 + revP4)>>1; revP6 = (revM3 + revM4)>>1; revM5 = (revP3 - revP4)>>1; revM6 = (revM3 - revM4)>>1;
