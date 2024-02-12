@@ -17,7 +17,7 @@ unsigned long envTime = msNow;
 unsigned long delTime = msNow;
 int scale [] = {0, 2, 4, 5, 7, 9, 0, 0, 0, 0, 0};
 int reverbLength = 900; // 0 - 1024
-int reverbMix = 300; // 0 - 1024 // 150
+int reverbMix = 400; // 0 - 1024
 float leftPan, rightPan;
 
 void setup() {
@@ -25,13 +25,14 @@ void setup() {
   // tone
   Osc::sawGen(waveTable);
   osc1.setPitch(60);
-  ampEnv1.setAttack(30);
-  ampEnv1.setMaxLevel(0.8);
+  ampEnv1.setAttack(30); 
+  ampEnv1.setRelease(300);
+  ampEnv1.setMaxLevel(1.0);
   filter1.setRes(0);
   filter1.setFreq(3000);
   // reverb
   #if IS_ESP8266()
-    effect1.setReverbSize(8); // quality and memory >= 1 
+    effect1.setReverbSize(4); // quality and memory >= 1 
   #elif IS_ESP32()
     effect1.setReverbSize(16); // quality and memory >= 1 
   #endif
@@ -50,6 +51,8 @@ void loop() {
     float pan = rand(1000) * 0.001;
     leftPan = panLeft(pan);
     rightPan = panRight(pan);
+    ampEnv1.setAttack(30 + rand(30));
+    ampEnv1.setMaxLevel(rand(5) * 0.1 + 0.5);
     ampEnv1.start();
     Serial.print("Pitch: ");Serial.print(p);Serial.print(" Pan: ");Serial.println(pan);
   }
