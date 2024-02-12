@@ -61,6 +61,7 @@ public:
     delayBuffer = new int16_t[delayBufferSize_samples]; // create a new audio buffer
     empty();
   }
+
   /** Constructor.
 	@param maxDelayTime The size of the delay buffer, in milliseconds.
 	*/
@@ -141,10 +142,10 @@ public:
       inValue = (inValue + outValue)>>1;
     }
     if (inValue > MAX_16) inValue = MAX_16;
-    if (inValue < -MAX_16) inValue = -MAX_16;
+    if (inValue < MIN_16) inValue = MIN_16;
     write(inValue);
     if (outValue > MAX_16) outValue = MAX_16;
-    if (outValue < -MAX_16) outValue = -MAX_16;
+    if (outValue < MIN_16) outValue = MIN_16;
     return outValue;
   }
 
