@@ -17,7 +17,7 @@ unsigned long envTime = msNow;
 unsigned long delTime = msNow;
 int scale [] = {0, 2, 4, 5, 7, 9, 0, 0, 0, 0, 0};
 int reverbLength = 900; // 0 - 1024
-int reverbMix = 400; // 0 - 1024
+int reverbMix = 800; // 0 - 1024
 float leftPan, rightPan;
 
 void setup() {
@@ -32,9 +32,9 @@ void setup() {
   filter1.setFreq(3000);
   // reverb
   #if IS_ESP8266()
-    effect1.setReverbSize(4); // quality and memory >= 1 
+    effect1.setReverbSize(4); // room size, quality and memory >= 1 
   #elif IS_ESP32()
-    effect1.setReverbSize(16); // quality and memory >= 1 
+    effect1.setReverbSize(16); // room size, quality and memory >= 1 
   #endif
   effect1.setReverbLength(0.9); // 0.0 - 1.0
   audioStart();
