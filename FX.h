@@ -250,6 +250,7 @@ class FX {
         initReverb(reverbSize);
       }
       processReverb(audioInLeft, audioInRight);
+      // processReverb(apf1.next(audioInLeft), apf2.next(audioInRight));
       audioOutLeft = clip(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12));
       audioOutRight = clip(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>12));
     }
@@ -327,26 +328,27 @@ class FX {
       delay2.setTime(8.993 * size); delay2.setLevel(reverbFeedbackLevel); delay2.setFeedback(true);
       delay3.setTime(10.844 * size); delay3.setLevel(reverbFeedbackLevel); delay3.setFeedback(true);
       delay4.setTime(12.118 * size); delay4.setLevel(reverbFeedbackLevel); delay4.setFeedback(true);
-      apf1.setTime(0.4494 * size); apf1.setLevel(0.8);
-      apf3.setTime(0.5964 * size); apf3.setLevel(0.8);
-      apf4.setTime(3.875 * size); apf4.setLevel(0.8);
+      apf1.setTime(0.4494 * size); apf1.setPhase(0.1); // apf1.setLevel(0.8);
+      apf3.setTime(0.5964 * size); apf3.setPhase(0.3); // apf3.setLevel(0.8);
+      apf4.setTime(3.875 * size);  apf4.setPhase(0.4); // apf4.setLevel(0.8);
       // apf4.setTime(11.125 * size); apf4.setLevel(0.95);
       // apf1.setTime(3.857 * size); apf1.setLevel(0.9);
       // apf2.setTime(11.125 * size); apf2.setLevel(0.9);
-      apf2.setTime(2.875 * size); apf2.setLevel(0.8);
+      apf2.setTime(2.875 * size); apf2.setPhase(0.2); // apf2.setLevel(0.8);
       // apf4.setTime(7.5 * size); apf4.setLevel(0.9);
       reverbInitiated = true;
     }
 
     /** Compute reverb */
     void processReverb(int16_t audioInLeft, int16_t audioInRight) {
-      // revD1 = delay1.read(); revD2 = delay2.read();
-      revD1 = apf1.next(delay1.read()); revD2 = apf2.next(delay2.read());
+      revD1 = delay1.read(); revD2 = delay2.read();
+      // revD1 = apf1.next(delay1.read()); revD2 = apf2.next(delay2.read());
       // revD1 = apf1.next(delay1.read()); revD2 = delay2.read(); 
-      // revD3 = delay3.read(); revD4 = delay4.read();
-      revD3 = apf3.next(delay3.read()); revD4 = apf4.next(delay4.read());
+      revD3 = delay3.read(); revD4 = delay4.read();
+      // revD3 = apf3.next(delay3.read()); revD4 = apf4.next(delay4.read());
       // revD3 = apf3.next(delay3.read()); revD4 = delay4.read();
       revP1 = audioInLeft + revD1; revP2 = audioInRight + revD2;
+      // revP1 = apf1.next(audioInLeft) + revD1; revP2 = apf2.next(audioInRight) + revD2;
       revP3 = (revP1 + revP2); revM3 = (revP1 - revP2); revP4 = (revD3 + revD4); revM4 = (revD3 - revD4);
       revP5 = (revP3 + revP4)>>1; revP6 = (revM3 + revM4)>>1; revM5 = (revP3 - revP4)>>1; revM6 = (revM3 - revM4)>>1;
       // revP5 = (revP3 + revP4); revP6 = (revM3 + revM4); revM5 = (revP3 - revP4); revM6 = (revM3 - revM4);
