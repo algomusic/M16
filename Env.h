@@ -94,7 +94,6 @@ class Env {
       jitEnvAttack = envAttack + rand(envAttack * 0.2);
       jitEnvDecay = envDecay; // + rand(envDecay * 0.2);
       envStartTime = micros(); //millis();
-      prevEnvVal = 0;
       currDelayRepeats = delayRepeats;
       next();
     }
@@ -217,11 +216,9 @@ class Env {
     }
 
 
-    /** Return the current envelope value */
+    /** Return the current envelope value - from 0 to MAX_16 */
     inline
     uint16_t getValue() {
-      // envVal = (prevEnvVal*4 + envVal) / 5; // smooth abrupt changes
-      // prevEnvVal = envVal;
       return envVal;
     }
 
@@ -257,7 +254,6 @@ class Env {
     uint32_t envVal = 0;
     uint32_t releaseStartLevelDiff = MAX_ENV_LEVEL;
     uint32_t decayStartLevel, decayStartLevelDiff, releaseStartlevel;
-    uint32_t prevEnvVal = 0;
     int delayRepeats = 0;
     int currDelayRepeats = 0;
     int delayExp = 4;
