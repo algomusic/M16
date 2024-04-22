@@ -61,6 +61,11 @@ class APF {
     // Serial.print("delayTime_samples "); Serial.println(msDur);
   }
 
+  /** Retrieve the delay time in ms */
+  float getTime() {
+    return delayTime_ms;
+  }
+
   /** Specify the phase - 0.0 to 1.0 */
   void setPhase(float level) {
     invPhase = max(0.0f, min(1.0f, 1 - level));
@@ -75,6 +80,11 @@ class APF {
   /** Specify the feedback level - 0.0 to 1.0 */
   void setLevel(float level) {
     delayLevel = max(0, min(1024, (int)(level * 1024)));
+  }
+
+  /** Retrieve the feedback level - 0.0 to 1.0 */
+  float getLevel() {
+    return delayLevel * MAX_16_INV;
   }
 
   /** Input a value to the filter and retrieve the allpassed output.
