@@ -56,14 +56,12 @@ public:
 
   // send MIDI messages - values from 0 - 127 only
   void sendNoteOn(int channel, int pitch, int velocity) {
-    // writeByte(0x90 | channel);
     writeByte(144 + channel);
     writeByte(pitch);
     writeByte(velocity);
   }
 
   void sendNoteOff(int channel, int pitch, int velocity) {
-    // writeByte(0x80 | channel);
     writeByte(128 + channel);
     writeByte(pitch);
     writeByte(velocity);
@@ -91,35 +89,9 @@ public:
     writeByte(252); //0xFC
   }
 
-/*
-  void readMIDI() { // temp
-  while(Serial2.available() > 2) {
-    byte sVal = Serial2.read();
-    if (sVal > 127 && sVal < 247) {
-      byte message[3];
-      // Serial.println(sVal);
-      message[0] = sVal;
-      sVal = Serial2.read();
-      while (sVal > 127) {
-        sVal = Serial2.read();
-      }
-      message[1] = sVal;
-      sVal = Serial2.read();
-      while (sVal > 127) {
-        sVal = Serial2.read();
-      }
-      message[2] = sVal;
-      if (message[0] == 144 && message[1] > 0) handleNoteOn(0, message[1], message[2]);
-      if (message[0] == 128 || (message[0] == 144 && message[1] == 0)) handleNoteOff(0, message[1], message[2]);
-    }
-  }
-}
-*/
-
   // recieve MIDI messages
   #if IS_ESP32()
   uint16_t read() {
-    // Serial.println("midi read " + millis());
     while(Serial2.available() > 2) {
       int inByte = readByte();
       // handle status byte or clock data
