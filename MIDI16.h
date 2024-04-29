@@ -54,39 +54,41 @@ public:
     #endif
   }
 
-  // send MIDI messages
-  void sendNoteOn(uint8_t channel, uint8_t pitch, uint8_t velocity) {
-    writeByte(0x90 | channel);
+  // send MIDI messages - values from 0 - 127 only
+  void sendNoteOn(int channel, int pitch, int velocity) {
+    // writeByte(0x90 | channel);
+    writeByte(144 + channel);
     writeByte(pitch);
     writeByte(velocity);
   }
 
-  void sendNoteOff(uint8_t channel, uint8_t pitch, uint8_t velocity) {
-    writeByte(0x80 | channel);
+  void sendNoteOff(int channel, int pitch, int velocity) {
+    // writeByte(0x80 | channel);
+    writeByte(128 + channel);
     writeByte(pitch);
     writeByte(velocity);
   }
 
-  void sendControlChange(uint8_t channel, uint8_t control, uint8_t value) {
-    writeByte(0xB0 | channel);
+  void sendControlChange(int channel, int control, int value) {
+    writeByte(176 + channel); // 0xB0
     writeByte(control);
     writeByte(value);
   }
 
   void sendClock() {
-    writeByte(0xF8);
+    writeByte(248); //0xF8
   }
 
   void sendStart() {
-    writeByte(0xFA);
+    writeByte(250); //0xFA
   }
 
   void sendContinue() {
-    writeByte(0xFB);
+    writeByte(251); //0xFB
   }
 
   void sendStop() {
-    writeByte(0xFC);
+    writeByte(252); //0xFC
   }
 
 /*
@@ -167,7 +169,7 @@ private:
     return Serial2.read();
   }
 
-  uint8_t writeByte(uint8_t val) {
+  void writeByte(uint8_t val) {
     Serial2.write(val);
   }
   #endif
@@ -177,7 +179,7 @@ private:
     return Serial.read();
   }
 
-  uint8_t writeByte(uint8_t val) {
+  void writeByte(uint8_t val) {
     Serial.write(val);
   }
   #endif
