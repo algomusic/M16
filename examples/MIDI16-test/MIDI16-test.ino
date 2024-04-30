@@ -22,19 +22,19 @@ uint8_t midiPitch = 0;
 CRGB leds[NUM_LEDS];
 
 void handleNoteOn(byte channel, byte pitch, byte velocity) {
-  Serial.println("NoteOn: " + String(pitch) + " " + String(velocity) + " " + String(channel));
+  Serial.println("Receive NoteOn: " + String(pitch) + " " + String(velocity) + " " + String(channel));
   leds[0] = CRGB::Green;
   FastLED.show();
 }
 
 void handleNoteOff(byte channel, byte pitch, byte velocity) {
-  Serial.println("NoteOff: " + String(pitch) + " " + String(velocity) + " " + String(channel));
+  Serial.println("Receive NoteOff: " + String(pitch) + " " + String(velocity) + " " + String(channel));
   leds[0] = CRGB::Black;
   FastLED.show();
 }
 
 void handleControlChange(byte channel, byte control, byte value) {
-  Serial.println("CC: " + String(control) + " " + String(value) + " " + String(channel));
+  Serial.println("Receive CC: " + String(control) + " " + String(value) + " " + String(channel));
 }
 
 void handleMidiClock() {
@@ -111,7 +111,7 @@ void loop() {
     onTime = msNow + 500000;
     offTime = msNow + 300000;
     midiPitch = rand(127);
-    Serial.print("note on "); Serial.println(midiPitch);
+    Serial.print("Send note on "); Serial.println(midiPitch);
     leds[0] = CRGB::Blue;
     FastLED.show();
     sounding = true;
@@ -120,12 +120,12 @@ void loop() {
       int cc = rand(127);
       int val = rand(127);
       midi.sendControlChange(0, cc, val); // check cc's work
-      Serial.print("Control change "); Serial.print(cc); Serial.print(" "); Serial.println(val);
+      Serial.print("Send control change "); Serial.print(cc); Serial.print(" "); Serial.println(val);
     }
   }
 
   if (sounding && msNow > offTime) {
-    Serial.println("note off");
+    Serial.println("Send note off");
     leds[0] = CRGB::Black;
     FastLED.show();
     sounding = false;
