@@ -1,7 +1,6 @@
 // MIDI16.h example code
 // Send and recieve MIDI messages using a hardware optocoupler-based circuit
-// If using 5v power for MIDI hardware circuit from ESP, then disconnect while booting
-// ESP may need to be manually put into boot mode to flash
+// ESP may need to be manually put into boot mode to reflash when using Serial2
 // Includes neopixel LED indicator. This may need to be disabled for some boards.
 #include "M16.h" 
 #include "MIDI16.h"
@@ -11,18 +10,20 @@ unsigned long msNow = millis();
 unsigned long midiTime = msNow;
 unsigned long onTime = msNow;
 unsigned long offTime = msNow;
+unsigned long prevClockTime;
+int prevClockDeltas [9];
+int prevBPM = 0;
 bool sounding = false;
 uint8_t midiPitch = 0;
 
 #include <FastLED.h>
 #define NUM_LEDS 1
 #define DATA_PIN 47 // 47 for Lolin S3 mini // 21 for Waveshare S3 pico
-#define CLOCK_PIN 13
 CRGB leds[NUM_LEDS];
 
 void handleNoteOn(byte channel, byte pitch, byte velocity) {
   Serial.println("NoteOn: " + String(pitch) + " " + String(velocity) + " " + String(channel));
-  leds[0] = CRGB::Blue;
+  leds[0] = CRGB::Green;
   FastLED.show();
 }
 
@@ -34,6 +35,38 @@ void handleNoteOff(byte channel, byte pitch, byte velocity) {
 
 void handleControlChange(byte channel, byte control, byte value) {
   Serial.println("CC: " + String(control) + " " + String(value) + " " + String(channel));
+}
+
+void handleMidiClock() {
+  unsigned long cTime = micros();
+  float deltaCT = cTime - prevClockTime;
+  prevClockTime = cTime;
+  float rollingCT = deltaCT;
+  for(int i=8; i>=0; i--) {
+    rollingCT += prevClockDeltas[i];
+    if (i > 0) {
+      prevClockDeltas[i] = prevClockDeltas[i-1];
+    } else prevClockDeltas[0] = deltaCT;
+  }
+  rollingCT *= 0.1;
+  float beatDelta = rollingCT * 24;
+  float BPM = 1000 / beatDelta * 60000;
+  if (round(BPM) != prevBPM) {
+    Serial.println("Clock delta: " + String(rollingCT) + " beat delta " + String(beatDelta) + " BPM " + String(BPM) + " round BPM " + String(round(BPM)));
+    prevBPM = round(BPM);
+  }
+}
+
+void handleMidiStart() {
+  Serial.println("* Start *");
+}
+
+void handleMidiCont() {
+  Serial.println("* Continue *");
+}
+
+void handleMidiStop() {
+  Serial.println("* Stop *");
 }
 
 void setup() { 
@@ -48,10 +81,12 @@ void setup() {
 }
 
 void loop() { 
-  msNow = millis();
+  msNow = micros();
+
+  // receive MIDI data
 
   if (msNow > midiTime) {
-    midiTime = msNow + 19;
+    midiTime = msNow + 500; // + 19ms is adequate if no clock sync is required
     uint8_t status = midi.read();
     // if (status > 0) {Serial.print("Status: "); Serial.println(status);}
     if (status == MIDI16::noteOn) {
@@ -60,12 +95,21 @@ void loop() {
       handleNoteOff(midi.getChannel(), midi.getData1(), midi.getData2());
     } else if (status == MIDI16::controlChange) {
       handleControlChange(midi.getChannel(), midi.getData1(), midi.getData2());
+    } else if (status == MIDI16::clock) {
+      handleMidiClock();
+    } else if (status == MIDI16::start) {
+      handleMidiStart();
+    } else if (status == MIDI16::cont) {
+      handleMidiCont();
+    } else if (status == MIDI16::stop) {
+      handleMidiStop();
     }
   }
 
+  // Send MIDI data
   if (msNow > onTime) {
-    onTime = msNow + 500;
-    offTime = msNow + 300;
+    onTime = msNow + 500000;
+    offTime = msNow + 300000;
     midiPitch = rand(127);
     Serial.print("note on "); Serial.println(midiPitch);
     leds[0] = CRGB::Blue;

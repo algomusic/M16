@@ -28,12 +28,11 @@ public:
   static const uint8_t cont = 0xFB;
   static const uint8_t stop = 0xFC;
 
-
   /** Constructor */
   MIDI16() {
-    // passes sProject PCB pins for ESP32 hardware serial
-    // ESP8266 uses default Serial pins (GPIO 3 for rx and 1 for tx)
-    MIDI16(37, 33); 
+    // Uses sProject PCB pins for ESP32-S3 hardware serial
+    // ESP8266 ignores this and uses default Serial pins (GPIO 3 for rx and 1 for tx)
+    MIDI16(37, 38); 
   }
 
   /** Constructor 
@@ -90,29 +89,20 @@ public:
   }
 
   // recieve MIDI messages
-  #if IS_ESP32()
   uint16_t read() {
-    while(Serial2.available() > 2) {
+    while(Serial2.available() > 0) { // 2
       int inByte = readByte();
-      // handle status byte or clock data
-      if ((inByte > 127 && inByte < 240) || (inByte > 248 && inByte < 252)) { 
-        return handleRead(inByte);
+      // handle clock data
+      if (inByte >= 248 && inByte <= 252) { 
+        return inByte;
+      }
+      // handle channel message data
+      if ((inByte > 127 && inByte < 240)) { 
+        return handleChannelRead(inByte);
       }
     }
     return 0;
   }
-  #elif IS_ESP8266()
-  uint16_t read() {
-    while(Serial.available() > 2) {
-      int inByte = readByte();
-      // handle status byte or clock data
-      if ((inByte > 127 && inByte < 240) || (inByte > 248 && inByte < 252)) { 
-        return handleRead(inByte);
-      }
-    }
-    return 0;
-  }
-  #endif
 
   // access current MIDI message data
   uint8_t getStatus() {
@@ -136,7 +126,6 @@ private:
   int transmitPin;
   uint8_t * message;
 
-  #if IS_ESP32()
   uint8_t readByte() {
     return Serial2.read();
   }
@@ -144,28 +133,23 @@ private:
   void writeByte(uint8_t val) {
     Serial2.write(val);
   }
-  #endif
 
-  #if IS_ESP8266()
-  uint8_t readByte() {
-    return Serial.read();
-  }
-
-  void writeByte(uint8_t val) {
-    Serial.write(val);
-  }
-  #endif
-
-  uint8_t handleRead(uint8_t inByte) { 
+  uint8_t handleChannelRead(uint8_t inByte) { 
     message[0] = inByte;
     inByte = readByte();
     while (inByte > 127) {
       inByte = readByte();
+      if (inByte >= 248 && inByte <= 252) {
+        return inByte;
+      }
     }
     message[1] = inByte;
     inByte = readByte();
     while (inByte > 127) {
       inByte = readByte();
+      if (inByte >= 248 && inByte <= 252) {
+        return inByte;
+      }
     }
     message[2] = inByte;
 
