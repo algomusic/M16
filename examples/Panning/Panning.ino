@@ -1,4 +1,4 @@
-// M16 Sinewave example
+// M16 Panning example
 #include "M16.h" 
 #include "Osc.h"
 #include "Env.h"
