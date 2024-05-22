@@ -28,6 +28,7 @@ private:
   bool delayFeedback = false;
   int16_t prevOutValue = 0;
   byte filtered = 1;
+  int16_t feedbackLevel = 512; // 0 to 1024
 
 public:
   /** Constructor.
@@ -103,11 +104,10 @@ public:
 
   /** Specify the delay feedback level, from 0.0 to 1.0 */
   void setLevel(float level) {
-    delayLevel = min(1024, max(0, (int)(level * 1024)));
-    // Serial.print("delayLevel "); Serial.println(delayLevel);
+    delayLevel = min(1024, max(0, (int)(level * 1024.0f)));
   }
 
-  /** Return the delay feedback level, from 0.0 to 1.0 */
+  /** Return the delay level, from 0.0 to 1.0 */
   float getLevel() {
     return delayLevel;
   }
@@ -115,6 +115,16 @@ public:
   /** Turn delay feedback on or off */
   void setFeedback(bool state) {
     delayFeedback = state;
+  }
+
+  /** Specify the delay feedback level, from 0.0 to 1.0 */
+  void setFeedbackLevel(float level) {
+    feedbackLevel = min(1024, max(0, (int)(level * 1024.0f)));
+  }
+
+  /** Return the delay level, from 0.0 to 1.0 */
+  float getFeedbackLevel() {
+    return feedbackLevel * 0.0009765625f;
   }
 
   /** Specify the degree of filtering of the delay signal, from 0 (none) to 4 (most dull) */
@@ -137,15 +147,15 @@ public:
     int32_t outValue = 0;
     if (delayTime_samples > 0) {
       outValue = read();
+      if (outValue > MAX_16) outValue = MAX_16;
+      if (outValue < MIN_16) outValue = MIN_16;
     }
     if (delayFeedback) {
-      inValue = (inValue + outValue)>>1;
+      inValue = ((inValue * (1024 - feedbackLevel))>>10) + ((outValue * feedbackLevel)>>10);
     }
     if (inValue > MAX_16) inValue = MAX_16;
     if (inValue < MIN_16) inValue = MIN_16;
     write(inValue);
-    if (outValue > MAX_16) outValue = MAX_16;
-    if (outValue < MIN_16) outValue = MIN_16;
     return outValue;
   }
 
