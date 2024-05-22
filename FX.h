@@ -301,6 +301,25 @@ class FX {
       return clip(inVal + delVal);
     }
 
+    inline
+    void chorusStereo(int32_t audioInLeft, int32_t audioInRight, int16_t &audioOutLeft, int16_t &audioOutRight) {
+      // set up first time called
+      if (!chorusInitiated) {
+        initChorus();
+      }
+      float chorusLfoVal = chorusLfo.next() * MAX_16_INV;
+      chorusDelay.setTime(chorusDelayTime + chorusLfoVal * chorusLfoWidth);
+      chorusDelay2.setTime(chorusDelayTime2 + chorusLfoVal * chorusLfoWidth);
+      int32_t delVal = chorusDelay.next(audioInLeft);
+      int32_t delVal2 = chorusDelay2.next(audioInRight);
+      int32_t inVal = (audioInLeft * (chorusMixInput))>>10;
+      int32_t inVal2 = (audioInRight * (chorusMixInput))>>10;
+      delVal = (delVal * chorusMixDelay)>>10;
+      delVal2 = (delVal2 * chorusMixDelay)>>10;
+      audioOutLeft = clip(inVal + delVal);
+      audioOutRight = clip(inVal2 + delVal2);
+    }
+
     /** Set the chorus effect depth
     * @depth amount of chorus to add to the input signal, 0.0 to 1.0
     */
@@ -336,6 +355,8 @@ class FX {
       chorusFeedback = val;
       chorusDelay.setFeedback(true);
       chorusDelay.setFeedbackLevel(max(0.0f, min(1.0f, chorusFeedback)));
+      chorusDelay2.setFeedback(true);
+      chorusDelay2.setFeedbackLevel(max(0.0f, min(1.0f, chorusFeedback)));
     }
 
     /** Set the chorus delay time
@@ -344,6 +365,7 @@ class FX {
     inline
     void setChorusDelayTime(float time) {
       chorusDelayTime = min(40.0f, max(0.0f, time));
+      chorusDelayTime2 = min(40.0f, max(0.0f, time * 0.74f));
     }
 
 
@@ -370,14 +392,15 @@ class FX {
     float waveShaperStepInc = MAX_16 * 2.0 * TABLE_SIZE_INV;
     bool chorusInitiated = false;
     int chorusDelayTime = 38;
+    int chorusDelayTime2 = 28;
     float chorusLfoRate = 0.65; // hz
     float chorusLfoWidth = 0.5; // ms
     int chorusMixInput = 600; // 0 - 1024
     int chorusMixDelay = 800; // 0 - 1024
     float chorusFeedback = 0.4; // 0.0 to 1.0
-    int16_t * chorusTable;
+    int16_t * chorusLfoTable;
     Osc chorusLfo;
-    Del chorusDelay;
+    Del chorusDelay, chorusDelay2;
 
     void initPluckBuffer() {
       pluckBuffer = new int[PLUCK_BUFFER_SIZE]; // create a new array
@@ -431,11 +454,12 @@ class FX {
     }
 
     void initChorus() {
-      chorusTable = new int16_t[TABLE_SIZE]; // create a new array
-      Osc::sinGen(chorusTable); // fill the wavetable
-      chorusLfo.setTable(chorusTable);
+      chorusLfoTable = new int16_t[TABLE_SIZE]; // create a new array
+      Osc::sinGen(chorusLfoTable); // fill the wavetable
+      chorusLfo.setTable(chorusLfoTable);
       chorusLfo.setFreq(chorusLfoRate);
       chorusDelay.setMaxDelayTime(chorusDelayTime + 3);
+      chorusDelay2.setMaxDelayTime(chorusDelayTime2 + 3);
       setChorusFeedback(chorusFeedback);
       chorusInitiated = true;
     }
