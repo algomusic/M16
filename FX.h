@@ -285,6 +285,8 @@ class FX {
     }
 
     /** A mono chorus using a modulated delay line.
+     * Based on Dattorro, Jon. 1997. Effect design, part 2: Delay line modulation and chorus. 
+     * Journal of the Audio Engineering Society 45(10), 764–788.
     * @audioIn A mono audio signal
     */
     inline
@@ -301,6 +303,12 @@ class FX {
       return clip(inVal + delVal);
     }
 
+    /** A stereo chorus using two modulated delay lines.
+    * @audioInLeft An audio signal
+    * @audioInRight An audio signal
+    * @audioOutLeft A variable to receive audio output for the left channel
+    * @audioOutLeft A variable to receive audio output for the right channel
+    */
     inline
     void chorusStereo(int32_t audioInLeft, int32_t audioInRight, int16_t &audioOutLeft, int16_t &audioOutRight) {
       // set up first time called
