@@ -16,6 +16,7 @@
 
 #include "Del.h"
 #include "APF.h"
+#include "Osc.h"
 
 class FX {
 
@@ -283,6 +284,69 @@ class FX {
       initReverb(reverbSize);
     }
 
+    /** A mono chorus using a modulated delay line.
+    * @audioIn A mono audio signal
+    */
+    inline
+    int16_t chorus(int32_t audioIn) {
+      // set up first time called
+      if (!chorusInitiated) {
+        initChorus();
+      }
+      float chorusLfoVal = chorusLfo.next() * MAX_16_INV;
+      chorusDelay.setTime(chorusDelayTime + chorusLfoVal * chorusLfoWidth);
+      int32_t delVal = chorusDelay.next(audioIn);
+      int32_t inVal = (audioIn * (chorusMixInput))>>10;
+      delVal = (delVal * chorusMixDelay)>>10;
+      return clip(inVal + delVal);
+    }
+
+    /** Set the chorus effect depth
+    * @depth amount of chorus to add to the input signal, 0.0 to 1.0
+    */
+    inline
+    void setChorusDepth(float depth) {
+      depth = pow(depth, 0.8) * 0.5;
+      chorusMixInput = panLeft(depth) * 1024;
+      chorusMixDelay = panRight(depth) * 1024;
+    }
+
+    /** Set the chorus width
+    * @depth pitch width of chorus LFO, 0.0 to 1.0
+    */
+    inline
+    void setChorusWidth(float depth) {
+      chorusLfoWidth = pow(max(0.0f, depth), 1.5) * 3.0d;
+    }
+
+    /** Set the chorus rate
+    * @rate pitch frequency of chorus LFO, in hertz. Typically 0.01 to 3.0 
+    */
+    inline
+    void setChorusRate(float rate) {
+      chorusLfoRate = rate;
+      chorusLfo.setFreq(chorusLfoRate);
+    }
+
+    /** Set the chorus feedback level
+    * @val feedback level of the chorus delay line, from 0.0 to 1.0 
+    */
+    inline
+    void setChorusFeedback(float val) {
+      chorusFeedback = val;
+      chorusDelay.setFeedback(true);
+      chorusDelay.setFeedbackLevel(max(0.0f, min(1.0f, chorusFeedback)));
+    }
+
+    /** Set the chorus delay time
+    * @time delay time in ms, typically 20 to 40 ms
+    */
+    inline
+    void setChorusDelayTime(float time) {
+      chorusDelayTime = min(40.0f, max(0.0f, time));
+    }
+
+
   private:
     const static int16_t PLUCK_BUFFER_SIZE = 500;
     int * pluckBuffer; // [PLUCK_BUFFER_SIZE];
@@ -304,6 +368,16 @@ class FX {
     int16_t * shapeTable;
     int shapeTableSize = 0;
     float waveShaperStepInc = MAX_16 * 2.0 * TABLE_SIZE_INV;
+    bool chorusInitiated = false;
+    int chorusDelayTime = 38;
+    float chorusLfoRate = 0.65; // hz
+    float chorusLfoWidth = 0.5; // ms
+    int chorusMixInput = 600; // 0 - 1024
+    int chorusMixDelay = 800; // 0 - 1024
+    float chorusFeedback = 0.4; // 0.0 to 1.0
+    int16_t * chorusTable;
+    Osc chorusLfo;
+    Del chorusDelay;
 
     void initPluckBuffer() {
       pluckBuffer = new int[PLUCK_BUFFER_SIZE]; // create a new array
@@ -354,6 +428,16 @@ class FX {
       // revP5 = (revP3 + revP4); revP6 = (revM3 + revM4); revM5 = (revP3 - revP4); revM6 = (revM3 - revM4);
       delay1.write(revP5); delay2.write(revP6); delay3.write(revM5); delay4.write(revM6);
       // delay1.write(revP5 * reverbTime); delay2.write(revP6 * reverbTime); delay3.write(revM5 * reverbTime); delay4.write(revM6 * reverbTime);
+    }
+
+    void initChorus() {
+      chorusTable = new int16_t[TABLE_SIZE]; // create a new array
+      Osc::sinGen(chorusTable); // fill the wavetable
+      chorusLfo.setTable(chorusTable);
+      chorusLfo.setFreq(chorusLfoRate);
+      chorusDelay.setMaxDelayTime(chorusDelayTime + 3);
+      setChorusFeedback(chorusFeedback);
+      chorusInitiated = true;
     }
 };
 
