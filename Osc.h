@@ -301,7 +301,7 @@ public:
         phase_increment_fractional_s1 = phase_increment_fractional;
         phase_increment_fractional_s2 = phase_increment_fractional;
       }
-      cycleLengthPerMS = frequency * 0.001; /// 1000.0f;
+      cycleLengthPerMS = frequency * 0.001f; /// 1000.0f;
     }
 	}
 
@@ -325,7 +325,7 @@ public:
    * @midiPitch The pitch, value 0 - 127
   */
 	inline
-	float getPitch(float midi_pitch) {
+	float getPitch() {
     return midiPitch;
   }
 
