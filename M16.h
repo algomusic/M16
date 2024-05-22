@@ -153,8 +153,8 @@ int16_t rightAudioOuputValue = 0;
     i2s_set_pin(i2s_num, &pin_config);                        // Tell it the pins you will be using
     i2s_start(i2s_num); // not explicity necessary, called by install
     // RTOS callback
-    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 2048, NULL, 2, &audioCallback1Handle, 0); // 1024 = memory, 1 = priorty, 0 = core
-    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 2048, NULL, configMAX_PRIORITIES - 1, &audioCallback2Handle, 1);
+    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 2048, NULL, configMAX_PRIORITIES - 1, &audioCallback1Handle, 0); // 1024 = memory, 1 = priorty, 0 = core
+    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 2048, NULL, 2, &audioCallback2Handle, 1);
     Serial.println("M16 is running");
   }
 #endif
