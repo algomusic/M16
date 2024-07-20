@@ -80,7 +80,7 @@ int16_t rightAudioOuputValue = 0;
   int i2sPinsOut [] = {16, 17, 18, 21}; // bck, ws, data_out, data_in defaults for eProject board, ESP32 or ESP32-S3 or ESP32-S2
   // there seems to be an issue on the S2 sharing bck (GPIO 16) with the MEMS microphone.
 
-  /* ESP32 I2S pin allocation */
+ // ESP32 I2S pin allocation
   static i2s_pin_config_t pin_config = { 
       .bck_io_num = i2sPinsOut[0],   // The bit clock connectiom, goes to pin 27 of ESP32
       .ws_io_num = i2sPinsOut[1],    // Word select, also known as word select or left right clock
@@ -120,6 +120,40 @@ int16_t rightAudioOuputValue = 0;
       .fixed_mclk = -1    
   };
 
+  /*
+ // version 3 API
+  #include "driver/i2s_std.h"
+
+  static const i2s_port_t i2s_num = I2S_NUM_0; // i2s port number
+
+  int i2sPinsOut [] = {16, 17, 18, 21}; // bck, ws, data_out, data_in defaults for eProject board, ESP32 or ESP32-S3 or ESP32-S2
+
+  i2s_chan_handle_t tx_handle;
+  i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+  i2s_new_channel(&chan_cfg, &tx_handle, NULL);
+
+  i2s_std_config_t std_cfg = {
+      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(48000),
+      .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
+      .gpio_cfg = {
+          .mclk = I2S_GPIO_UNUSED,
+          .bclk = i2sPinsOut[0],
+          .ws = i2sPinsOut[1],
+          .dout = i2sPinsOut[2],
+          .din = i2sPinsOut[3],
+          .invert_flags = {
+              .mclk_inv = false,
+              .bclk_inv = false,
+              .ws_inv = false,
+          },
+      },
+  };
+
+  i2s_channel_init_std_mode(tx_handle, &std_cfg);
+
+  i2s_channel_enable(tx_handle);
+  i2s_channel_write(tx_handle, src_buf, bytes_to_write, bytes_written, ticks_to_wait);
+*/
   void audioUpdate();
 
   /** Function for RTOS tasks to fill audio buffer */
