@@ -109,7 +109,7 @@ public:
 
   /** Return the delay level, from 0.0 to 1.0 */
   float getLevel() {
-    return delayLevel;
+    return delayLevel * 0.0009765625f;
   }
 
   /** Turn delay feedback on or off */
