@@ -63,12 +63,12 @@ class FX {
     * about 3.0 for mild drive, to about 4 - 6 for noticiable overdrive, to 7 - 10 for distortion
     */
     inline
-    int16_t softClip(int32_t sample_in, float amount) { // 14745, 13016
+    int16_t softClip(int32_t sample_in, float amount) {
       // int32_t samp = sample_in;
       // if (samp > 26033) samp = min(MAX_16, 26033 + ((samp - 26033) >> 3));
       // if (samp < -26033) samp = max(-MAX_16, -26033 + ((samp + 26033) >> 3));
       // 2/pi * arctan(samp * depth) // 0.635748
-      int16_t samp = 20831 * atan(amount * (sample_in * (float)MAX_16_INV)); // 20831
+      int32_t samp = 38000 * atan(amount * (sample_in * (float)MAX_16_INV)); // 20831
       // int16_t samp = (sample_in / (float)MAX_16) * MAX_16;
       // if (samp > MAX_16 || samp < MIN_16) Serial.println(samp);
       return clip(samp);
@@ -250,7 +250,7 @@ class FX {
       if (!reverbInitiated) {
         initReverb(reverbSize);
       }
-      processReverb(audioInLeft, audioInRight);
+      processReverb(clip(audioInLeft), clip(audioInRight));
       // processReverb(apf1.next(audioInLeft), apf2.next(audioInRight));
       audioOutLeft = clip(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12));
       audioOutRight = clip(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>12));
@@ -261,7 +261,8 @@ class FX {
     */
     inline
     void setReverbLength(float rLen) {
-      reverbFeedbackLevel = max(0.0f, min(1.0f, rLen));
+      rLen = max(0.0f, min(1.0f, rLen));
+      reverbFeedbackLevel = pow(rLen, 0.2f);
       initReverb();
     }
 
