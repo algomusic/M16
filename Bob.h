@@ -30,7 +30,8 @@ class Bob {
       setRes(0.2f);
     }
 
-    int16_t next(int16_t samp) {
+    int16_t next(int32_t samp) {
+      samp = max(MIN_16, min(MAX_16, samp));
       float  input = samp * MAX_16_INV;
       float total = 0.0f;
       float interp = 0.0f;
@@ -50,6 +51,11 @@ class Bob {
       return max(MIN_16, min(MAX_16, (int)(total * ampComp)));
     }
 
+    /** For compatability with SVF filter code. */
+    int16_t nextLPF(int32_t samp) {
+      return next(samp);
+    }
+
     void setRes(float res) {
       // maps resonance = 0->1 to K = 0 -> 5
       res = max(0.0, min(1.0, pow(res, 0.5)));
@@ -63,6 +69,11 @@ class Bob {
       freq = max(5.0f, min(20000.0f,freq));
       Fbase_ = freq;
       compute_coeffs(Fbase_);
+    }
+
+    /** For compatability with SVF filter code. */
+    void setCutoff(float cutoff_val) {
+      setFreq(20000.0f * pow(cutoff_val, 3));
     }
 
     float getFreq() {
