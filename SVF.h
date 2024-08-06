@@ -16,7 +16,6 @@
 #ifndef SVF_H_
 #define SVF_H_
 
-//template <int8_t FILTER_TYPE> class SVF {
 class SVF {
 
   public:

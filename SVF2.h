@@ -17,11 +17,10 @@
 #ifndef SVF2_H_
 #define SVF2_H_
 
-//template <int8_t FILTER_TYPE> class SVF {
 class SVF2 {
 
   public:
-    /** Constructor. */
+    /** Constructor */
     SVF2() {
       setRes(0.2);
     }
@@ -42,7 +41,7 @@ class SVF2 {
     }
 
     /** Set the cutoff or centre frequency of the filter.
-    * @param freq_val  40 - 10k Hz (SAMPLE_RATE/4).
+    * @param freq_val  0 - 10k Hz (~SAMPLE_RATE/4).
     */
     inline
     void setFreq(int32_t freq_val) {
@@ -108,7 +107,7 @@ class SVF2 {
     /** Calculate the next filter sample, for a mix between low, band and high pass filters.
      *  @input is an output from an oscillator or other audio element.
      *  @mix is the balance between low, band and high pass outputs, 0.0 - 1.0
-     *  Mix 0 is LPF, Mix 0.5 is BPF and mix 1.0 is HPF, in between are combinations
+     *  Mix 0 is LPF, Mix 0.5 is BPF and Mix 1.0 is HPF, inbetween are combinations
      */
     inline
     int16_t nextFiltMix(int32_t input, float mix) {
