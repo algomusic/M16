@@ -19,7 +19,7 @@
 class SVF {
 
   public:
-    /** Constructor. */
+    /** Constructor */
     SVF() {
       setRes(0.2);
     }
@@ -30,11 +30,11 @@ class SVF {
     inline
     void setRes(float resonance) { // An odd dip in level at around 70% resonance???
       resOffset = max(0.01f, min(0.84f, resonance));
-      q = (1.0 - resOffset) * 255;
-      // q = sqrt(1.0 - atan(sqrt(resonance * 255)) * 2.0 / 3.1459); // alternative
-      scale = sqrt(max(0.1f, resOffset)) * 255;
+      q = (1.0 - resOffset) * MAX_16;
+      // q = sqrt(1.0 - atan(sqrt(resonance * MAX_16)) * 2.0 / 3.1459); // alternative
+      scale = sqrt(max(0.1f, resOffset)) * MAX_16;
       resOffset = 1.2 - resOffset * 1.6;
-      // scale = sqrt(q) * 255; // alternative
+      // scale = sqrt(q) * MAX_16; // alternative
     }
 
     /** Set the cutoff or centre frequency of the filter.
@@ -162,8 +162,8 @@ class SVF {
 
   private:
     int32_t low, band, high, notch, allpassPrevIn, allpassPrevOut, simplePrev;
-    int32_t q = 255;
-    int32_t scale = sqrt(1) * 255;
+    int32_t q = MAX_16;
+    int32_t scale = sqrt(1) * MAX_16;
     volatile float f = 1.0;
     int32_t centFreq = 10000;
     float resOffset;
@@ -172,7 +172,8 @@ class SVF {
     void calcFilter(int32_t input) {
       input *= resOffset;
       low += f * band;
-      high = ((scale * input) >> 7) - low - ((q * band) >> 8);
+      // high = ((scale * input) >> 7) - low - ((q * band) >> 8);
+      high = ((scale * input) >> 15) - low - ((q * band) >> 16);
       band += f * high;
       notch = high + low;
     }
