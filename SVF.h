@@ -29,8 +29,8 @@ class SVF {
     * 0.01 > res < 1.0
     */
     inline
-    void setRes(float resonance) {
-      resOffset = max(0.2f, min(0.98f, resonance));
+    void setRes(float resonance) { // An odd dip in level at around 70% resonance???
+      resOffset = max(0.01f, min(0.84f, resonance));
       q = (1.0 - resOffset) * 255;
       // q = sqrt(1.0 - atan(sqrt(resonance * 255)) * 2.0 / 3.1459); // alternative
       scale = sqrt(max(0.1f, resOffset)) * 255;
@@ -48,7 +48,7 @@ class SVF {
 
     /** Return the cutoff or centre frequency of the filter.*/
     inline
-    int16_t getFreq() {
+    float getFreq() {
       return f;
     }
 
@@ -61,7 +61,7 @@ class SVF {
       cutoff_val = max(0.0f, min(1.0f, cutoff_val));
       float cutoff_freq = 0;
       if (cutoff_val > 0.7) {
-        cutoff_freq = pow(cutoff_val, 3) * SAMPLE_RATE * 0.2222; ///4.5;
+        cutoff_freq = pow(cutoff_val, 3) * SAMPLE_RATE * 0.2222;
       } else cutoff_freq = pow(cutoff_val * 1.43, 2) * 3500 + 40;
       f = 2 * sin(3.1459 * cutoff_freq * SAMPLE_RATE_INV);
     }
@@ -71,6 +71,7 @@ class SVF {
      */
     inline
     int16_t nextLPF(int32_t input) {
+      input = clipInput(input);
       calcFilter(input);
       low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
       return low; 
@@ -89,6 +90,7 @@ class SVF {
      */
     inline
     int16_t nextHPF(int32_t input) {
+      input = clipInput(input);
       calcFilter(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, high));
     }
@@ -98,6 +100,7 @@ class SVF {
      */
     inline
     int16_t nextBPF(int32_t input) {
+      input = clipInput(input);
       calcFilter(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, band));
     }
@@ -109,17 +112,16 @@ class SVF {
      */
     inline
     int16_t nextFiltMix(int32_t input, float mix) {
+      input = clipInput(input);
       calcFilter(input);
-      int lpfAmnt = 0;
-      if (mix < 0.5) lpfAmnt = low * (1 - mix * 2);
-      int bpfAmnt = 0;
+      int32_t lpfAmnt = 0;
+      if (mix < 0.5) lpfAmnt = low * pow((1 - mix * 2), 0.5);
+      int32_t bpfAmnt = 0;
       if (mix > 0.25 || mix < 0.75) {
-        if (mix < 0.5) {
-          lpfAmnt = band * mix * 2;
-        } else lpfAmnt = band * (2 - mix * 2);
+        bpfAmnt = band * pow(1 - (abs(mix - 0.5) * 2), 0.5);
       }
-      int hpfAmnt = 0;
-      if (mix > 0.5) hpfAmnt = high * (mix - 0.5) * 2;
+      int32_t hpfAmnt = 0;
+      if (mix > 0.5) hpfAmnt = clipInput(high * pow((mix - 0.5) * 2, 0.5));
       return max(-MAX_16, min(MAX_16, lpfAmnt + bpfAmnt + hpfAmnt));
     }
 
@@ -130,6 +132,7 @@ class SVF {
     inline
     int16_t nextAllpass(int32_t input) {
       // y = x + x(t-1) - y(t-1)
+      input = clipInput(input);
       int32_t output = input + allpassPrevIn - allpassPrevOut;
       allpassPrevIn = input;
       allpassPrevOut = output;
@@ -141,6 +144,7 @@ class SVF {
      */
     inline
     int16_t nextNotch(int32_t input) {
+      input = clipInput(input);
       calcFilter(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, notch));
     }
@@ -151,6 +155,7 @@ class SVF {
      */
     inline
     int16_t simpleLPF(int32_t input) {
+      input = clipInput(input);
       simplePrev = (input + simplePrev) >> 1;
       return simplePrev;
     }
@@ -159,7 +164,7 @@ class SVF {
     int32_t low, band, high, notch, allpassPrevIn, allpassPrevOut, simplePrev;
     int32_t q = 255;
     int32_t scale = sqrt(1) * 255;
-    volatile float f = SAMPLE_RATE * 0.25;
+    volatile float f = 1.0;
     int32_t centFreq = 10000;
     float resOffset;
     int32_t maxFreq = SAMPLE_RATE * 0.2222;
@@ -170,6 +175,13 @@ class SVF {
       high = ((scale * input) >> 7) - low - ((q * band) >> 8);
       band += f * high;
       notch = high + low;
+    }
+
+     int32_t clipInput(int32_t input) {
+      if (abs(input) > MAX_16) {
+        input = max(-MAX_16, min(MAX_16, input));
+      }
+      return input;
     }
 
 };
