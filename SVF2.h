@@ -149,18 +149,6 @@ class SVF2 {
       return max(-MAX_16, (int)min((int32_t)MAX_16, notch));
     }
 
-    /** Calculate the next averaged filter sample, given an input signal.
-     *  Input is an output from an oscillator or other audio element.
-     *  While not technically a state variable filter, it's useful for low power CPUs like ESP8266
-     */
-    inline
-    int16_t simpleLPF(int32_t input) {
-      input = clipInput(input);
-      int cutLevel = (1 - f) * 8; 
-      simplePrev = (input + simplePrev * (int)(pow(2, cutLevel) - 1)) >> cutLevel;
-      return simplePrev;
-    }
-
   private:
     int32_t low, band, high, notch, allpassPrevIn, allpassPrevOut, simplePrev;
     int32_t maxFreq = SAMPLE_RATE * 0.195;
