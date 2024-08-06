@@ -31,7 +31,6 @@ class Bob {
     }
 
     int16_t next(int32_t samp) {
-      samp = max(MIN_16, min(MAX_16, samp));
       float  input = samp * MAX_16_INV;
       float total = 0.0f;
       float interp = 0.0f;
