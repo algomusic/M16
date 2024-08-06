@@ -151,7 +151,7 @@ class SVF {
 
     /** Calculate the next averaged filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
-     *  Perhaps not technically a state variable filter, but useful for low power CPUs like ESP8266
+     *  While not technically a state variable filter, it's useful for low power CPUs like ESP8266
      */
     inline
     int16_t simpleLPF(int32_t input) {
