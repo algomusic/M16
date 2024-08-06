@@ -18,7 +18,7 @@ Always include the M16.h file and add a void audioUpdate() function that ends wi
 
 M16 prioritises audio processing and may not play well with other libraries where timing is critical, such as wifi, and file i/o. The temporary stopping of audio during these tasks may help coordination between them.
 
-Designed for use with the Arduino IDE.
+Designed for use with the Arduino IDE. Currently works with V2 of Arduino ESP32 by Espressif.
 
 M16 is inspired by the 8-bit Mozzi audio library by Tim Barrass 2012
 
