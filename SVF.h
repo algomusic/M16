@@ -156,7 +156,8 @@ class SVF {
     inline
     int16_t simpleLPF(int32_t input) {
       input = clipInput(input);
-      simplePrev = (input + simplePrev) >> 1;
+      int cutLevel = (1 - f) * 8; 
+      simplePrev = (input + simplePrev * (int)(pow(2, cutLevel) - 1)) >> cutLevel;
       return simplePrev;
     }
 
