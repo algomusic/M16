@@ -308,6 +308,16 @@ float slew(float curr, float target, float amt) {
   return curr + dist * amt;
 }
 
+/** Constrain values to a 16bit range
+* @input The value top be clipped
+*/
+int32_t clip16(int32_t input) {
+  if (abs(input) > MAX_16) {
+    input = max(-MAX_16, min(MAX_16, input));
+  }
+  return input;
+}
+
 // Rand from Mozzi library
 static unsigned long randX=132456789, randY=362436069, randZ=521288629;
 
