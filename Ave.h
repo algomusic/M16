@@ -79,13 +79,6 @@ class Ave {
     volatile float f = 10000; // approx cutoff frequency in Hz
     int16_t cutLevel = 0; // 0 - 10
 
-    int32_t clipInput(int32_t input) {
-      if (abs(input) > MAX_16) {
-        input = max(-MAX_16, min(MAX_16, input));
-      }
-      return input;
-    }
-
 };
 
 #endif /* AVE_H_ */
