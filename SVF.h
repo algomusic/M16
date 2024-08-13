@@ -70,7 +70,7 @@ class SVF {
      */
     inline
     int16_t nextLPF(int32_t input) {
-      input = clipInput(input);
+      input = clip16(input);
       calcFilter(input);
       low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
       return low; 
@@ -89,7 +89,7 @@ class SVF {
      */
     inline
     int16_t nextHPF(int32_t input) {
-      input = clipInput(input);
+      input = clip16(input);
       calcFilter(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, high));
     }
@@ -99,7 +99,7 @@ class SVF {
      */
     inline
     int16_t nextBPF(int32_t input) {
-      input = clipInput(input);
+      input = clip16(input);
       calcFilter(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, band));
     }
@@ -111,7 +111,7 @@ class SVF {
      */
     inline
     int16_t nextFiltMix(int32_t input, float mix) {
-      input = clipInput(input);
+      input = clip16(input);
       calcFilter(input);
       int32_t lpfAmnt = 0;
       if (mix < 0.5) lpfAmnt = low * pow((1 - mix * 2), 0.5);
@@ -120,7 +120,7 @@ class SVF {
         bpfAmnt = band * pow(1 - (abs(mix - 0.5) * 2), 0.5);
       }
       int32_t hpfAmnt = 0;
-      if (mix > 0.5) hpfAmnt = clipInput(high * pow((mix - 0.5) * 2, 0.5));
+      if (mix > 0.5) hpfAmnt = clip16(high * pow((mix - 0.5) * 2, 0.5));
       return max(-MAX_16, min(MAX_16, lpfAmnt + bpfAmnt + hpfAmnt));
     }
 
@@ -131,7 +131,7 @@ class SVF {
     inline
     int16_t nextAllpass(int32_t input) {
       // y = x + x(t-1) - y(t-1)
-      input = clipInput(input);
+      input = clip16(input);
       int32_t output = input + allpassPrevIn - allpassPrevOut;
       allpassPrevIn = input;
       allpassPrevOut = output;
@@ -143,21 +143,9 @@ class SVF {
      */
     inline
     int16_t nextNotch(int32_t input) {
-      input = clipInput(input);
+      input = clip16(input);
       calcFilter(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, notch));
-    }
-
-    /** Calculate the next averaged filter sample, given an input signal.
-     *  Input is an output from an oscillator or other audio element.
-     *  While not technically a state variable filter, it's useful for low power CPUs like ESP8266
-     */
-    inline
-    int16_t simpleLPF(int32_t input) {
-      input = clipInput(input);
-      int cutLevel = (1 - f) * 8; 
-      simplePrev = (input + simplePrev * (int)(pow(2, cutLevel) - 1)) >> cutLevel;
-      return simplePrev;
     }
 
   private:
@@ -176,13 +164,6 @@ class SVF {
       high = ((scale * input) >> 15) - low - ((q * band) >> 16);
       band += f * high;
       notch = high + low;
-    }
-
-     int32_t clipInput(int32_t input) {
-      if (abs(input) > MAX_16) {
-        input = max(-MAX_16, min(MAX_16, input));
-      }
-      return input;
     }
 
 };
