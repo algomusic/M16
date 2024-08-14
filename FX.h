@@ -28,23 +28,22 @@ class FX {
     *  Fold clipped values
     *  Pass in a signal and an amount to multiply its value by
     * @param sample_in The next sample value
-    * @param amount The degree of amplifcation with is then folded; 1.0 +
+    * @param amount The degree of amplifcation which is then folded; 1.0 +
     */
     inline
     int16_t waveFold(int32_t sample_in, float amount) {
-      if (amount > 1.0) {
-        sample_in *= amount;
-        while(abs(sample_in) > MAX_16) {
-          if (sample_in > 0) sample_in = MAX_16 - (sample_in - MAX_16);
-          if (sample_in < 0) sample_in = -MAX_16 - (sample_in + MAX_16);
-        }
+      if (amount != 1.0f) sample_in *= amount;
+      while(abs(sample_in) > MAX_16) {
+        if (sample_in > 0) sample_in = MAX_16 - (sample_in - MAX_16);
+        if (sample_in < 0) sample_in = -MAX_16 - (sample_in + MAX_16);
       }
       return clip(sample_in);
     }
 
     /** Clipping
-    *  Clip values outside max/min range
-    *  Pass in a signal
+    *  Clip values outside 16 bit values for max/min range
+    *  Same as clip16 function in M16
+    *  @sample_in Pass in a signal, such as output from an oscillator
     */
     inline
     int16_t clip(int32_t sample_in) {
