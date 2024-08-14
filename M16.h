@@ -318,6 +318,19 @@ int32_t clip16(int32_t input) {
   return input;
 }
 
+/** Clipping
+*  Clip values outside max/min range
+* @in_val Pass in a value to be clipped
+* @min_val The minimum value to clip to
+* @max_val The maximum value to clip to
+*/
+inline
+int16_t clip(float in_val, float min_val, float max_val) {
+  if (in_val > max_val) in_val = max_val;
+  if (in_val < min_val) in_val = min_val;
+  return in_val;
+}
+
 // Rand from Mozzi library
 static unsigned long randX=132456789, randY=362436069, randZ=521288629;
 
