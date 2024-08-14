@@ -70,7 +70,6 @@ class SVF2 {
     inline
     int16_t nextLPF(int32_t input) {
       input = clipInput(input);
-      // calcFilter(input);
       calcFilter(input);
       low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
       return low; 
@@ -84,6 +83,17 @@ class SVF2 {
       return nextLPF(input);
     }
 
+    /** Retrieve the current Lowpass filter sample.
+     *  Allows simultaneous use of LPF, HPF & BPF.
+     *  Use nextXXX() for one of them at each sample to compute the next filter values.
+     */
+    inline
+    int16_t currentLPF() {
+      input = clipInput(input);
+      low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
+      return low; 
+    }
+
     /** Calculate the next Highpass filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
      */
@@ -94,6 +104,16 @@ class SVF2 {
       return max(-MAX_16, (int)min((int32_t)MAX_16, high));
     }
 
+    /** Retrieve the current Highpass filter sample.
+     *  Allows simultaneous use of LPF, HPF & BPF.
+     *  Use nextXXX() for one of them at each sample to compute the next filter values.
+     */
+    inline
+    int16_t currentHPF() {
+      input = clipInput(input);
+      return max(-MAX_16, (int)min((int32_t)MAX_16, high));
+    }
+
     /** Calculate the next Bandpass filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
      */
@@ -101,6 +121,16 @@ class SVF2 {
     int16_t nextBPF(int32_t input) {
       input = clipInput(input);
       calcFilter(input);
+      return max(-MAX_16, (int)min((int32_t)MAX_16, band));
+    }
+
+    /** Retrieve the current Bandpass filter sample.
+     *  Allows simultaneous use of LPF, HPF & BPF.
+     *  Use nextXXX() for one of them at each sample to compute the next filter values.
+     */
+    inline
+    int16_t nextBPF() {
+      input = clipInput(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, band));
     }
 
