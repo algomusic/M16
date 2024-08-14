@@ -126,6 +126,24 @@ public:
     return sampVal;
 	}
 
+  /** Get a blend of this Osc and another, without incrementing the wavetable lookup.
+  * @param secondWaveTable - an wavetable array to morph with
+  * @param morphAmount - The balance (mix) of the second wavetable, 0.0 - 1.0
+  */
+	inline
+  int16_t currentMorph(int16_t * secondWaveTable, float morphAmount) {
+    int intMorphAmount = max(0, min(1024, (int)(1024 * morphAmount)));
+    int32_t sampVal = readTable();
+    int32_t sampVal2 = secondWaveTable[(int)phase_fractional];
+    if (morphAmount > 0) sampVal = (((sampVal2 * intMorphAmount) >> 10) +
+      ((sampVal * (1024 - intMorphAmount)) >> 10));
+    prevSampVal = sampVal;
+    if (spread1 != 1) {
+      sampVal = doSpread(sampVal);
+    }
+    return sampVal;
+	}
+
   /** Get a window transform between this Osc and another wavetable.
   * Inspired by the Window Transform Function by Dove Audio
   * @param secondWaveTable - an wavetable array to transform with
