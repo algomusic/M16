@@ -69,7 +69,7 @@ class SVF2 {
      */
     inline
     int16_t nextLPF(int32_t input) {
-      input = clipInput(input);
+      input = clip16(input);
       calcFilter(input);
       low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
       return low; 
@@ -89,7 +89,6 @@ class SVF2 {
      */
     inline
     int16_t currentLPF() {
-      input = clipInput(input);
       low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
       return low; 
     }
@@ -99,7 +98,7 @@ class SVF2 {
      */
     inline
     int16_t nextHPF(int32_t input) {
-      input = clipInput(input);
+      input = clip16(input);
       calcFilter(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, high));
     }
@@ -110,7 +109,6 @@ class SVF2 {
      */
     inline
     int16_t currentHPF() {
-      input = clipInput(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, high));
     }
 
@@ -119,7 +117,7 @@ class SVF2 {
      */
     inline
     int16_t nextBPF(int32_t input) {
-      input = clipInput(input);
+      input = clip16(input);
       calcFilter(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, band));
     }
@@ -130,7 +128,6 @@ class SVF2 {
      */
     inline
     int16_t nextBPF() {
-      input = clipInput(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, band));
     }
 
@@ -141,7 +138,7 @@ class SVF2 {
      */
     inline
     int16_t nextFiltMix(int32_t input, float mix) {
-      input = clipInput(input);
+      input = clip16(input);
       calcFilter(input);
       int32_t lpfAmnt = 0;
       if (mix < 0.5) lpfAmnt = low * pow((1 - mix * 2), 0.5);
@@ -150,7 +147,7 @@ class SVF2 {
         bpfAmnt = band * pow(1 - (abs(mix - 0.5) * 2), 0.5);
       }
       int32_t hpfAmnt = 0;
-      if (mix > 0.5) hpfAmnt = clipInput(high * pow((mix - 0.5) * 2, 0.5));
+      if (mix > 0.5) hpfAmnt = clip16(high * pow((mix - 0.5) * 2, 0.5));
       return max(-MAX_16, min(MAX_16, lpfAmnt + bpfAmnt + hpfAmnt));
     }
 
@@ -161,7 +158,7 @@ class SVF2 {
     inline
     int16_t nextAllpass(int32_t input) {
       // y = x + x(t-1) - y(t-1)
-      input = clipInput(input);
+      input = clip16(input);
       int32_t output = input + allpassPrevIn - allpassPrevOut;
       allpassPrevIn = input;
       allpassPrevOut = output;
@@ -173,7 +170,7 @@ class SVF2 {
      */
     inline
     int16_t nextNotch(int32_t input) {
-      input = clipInput(input);
+      input = clip16(input);
       calcFilter(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, notch));
     }
@@ -181,7 +178,7 @@ class SVF2 {
   private:
     int32_t low, band, high, notch, allpassPrevIn, allpassPrevOut, simplePrev;
     int32_t maxFreq = SAMPLE_RATE * 0.195;
-    float f = 0.0;
+    float f = 1.0;
     float q = 0.0;
     float fb = 0.0;
     float buf0 = 0.0;
@@ -197,7 +194,7 @@ class SVF2 {
       notch = (in - buf0 + buf1) * MAX_16; // Notch
     }
 
-    int32_t clipInput(int32_t input) {
+    int32_t clip16(int32_t input) {
       if (abs(input) > MAX_16) {
         input = max(-MAX_16, min(MAX_16, input));
       }
