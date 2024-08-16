@@ -95,7 +95,7 @@ public:
 	inline
   void setSpread(float newVal) {
     spread1 = 1.0f + newVal;
-    spread2 = 1.0f - newVal * 0.5;
+    spread2 = 1.0f - newVal * 0.5002;
     setFreq(getFreq());
 	}
 
@@ -291,9 +291,10 @@ public:
   */
   inline
 	void slewFreq(float freq, float amnt) {
+    if (freq == frequency) return;
     if (amnt == 0) {
       setFreq(freq);
-		} else if (freq > 0 && amnt > 0 && amnt <= 1) {
+		} else if (freq >= 0 && amnt > 0 && amnt <= 1) {
       float tempFreq = frequency;
       setFreq(slew(frequency, freq, amnt));
       prevFrequency = tempFreq;
@@ -617,11 +618,10 @@ private:
 
   /** Returns a spread sample. */
 	inline
-	int16_t doSpread(int16_t sampVal) {
+	int16_t doSpread(int32_t sampVal) {
     int32_t spreadSamp1 = table[(int)phase_fractional_s1];
-    sampVal = (sampVal + spreadSamp1)>>1;
     int32_t spreadSamp2 = table[(int)phase_fractional_s2];
-    sampVal = (sampVal + spreadSamp2)>>1;
+    sampVal = clip16((sampVal + ((spreadSamp1 * 600)>>10) + ((spreadSamp2 * 600)>>10))>>1);
     incrementSpreadPhase();
     return sampVal;
 	}
