@@ -119,6 +119,7 @@ public:
 
   /** Specify the delay feedback level, from 0.0 to 1.0 */
   void setFeedbackLevel(float level) {
+    setFeedback(true); // ensure feedback is on
     feedbackLevel = min(1024, max(0, (int)(level * 1024.0f)));
   }
 
@@ -151,12 +152,13 @@ public:
       if (outValue < MIN_16) outValue = MIN_16;
     }
     if (delayFeedback) {
-      inValue = ((inValue * (1024 - feedbackLevel))>>10) + ((outValue * feedbackLevel)>>10);
+      // inValue = ((inValue * (1024 - feedbackLevel))>>10) + ((outValue * feedbackLevel)>>10);
+      inValue = inValue + (outValue * feedbackLevel)>>10;
     }
     if (inValue > MAX_16) inValue = MAX_16;
     if (inValue < MIN_16) inValue = MIN_16;
     write(inValue);
-    return outValue;
+    return (outValue * delayLevel)>>10;
   }
 
   /** Read the buffer at the delayTime without incrementing read/write index */
