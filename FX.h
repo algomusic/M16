@@ -232,7 +232,7 @@ class FX {
         initReverb(reverbSize);
       }
       processReverb(audioIn, audioIn);
-      return clip(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>13) + ((revP2 * reverbMix)>>13));
+      return clip(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12) + ((revP2 * reverbMix)>>12));
     }
 
     /** A simple reverb using recursive delay lines.
@@ -251,8 +251,8 @@ class FX {
       }
       processReverb(clip(audioInLeft), clip(audioInRight));
       // processReverb(apf1.next(audioInLeft), apf2.next(audioInRight));
-      audioOutLeft = clip(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12));
-      audioOutRight = clip(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>12));
+      audioOutLeft = clip(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
+      audioOutRight = clip(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
     }
 
     /** Set the reverb length
