@@ -90,7 +90,6 @@ class SVF {
      */
     inline
     int16_t currentLPF() {
-      input = clip16(input);
       low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
       return low; 
     }
@@ -111,7 +110,6 @@ class SVF {
      */
     inline
     int16_t currentHPF() {
-      input = clip16(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, high));
     }
 
@@ -131,7 +129,6 @@ class SVF {
      */
     inline
     int16_t currentBPF() {
-      input = clip16(input);
       return max(-MAX_16, (int)min((int32_t)MAX_16, band));
     }
 
