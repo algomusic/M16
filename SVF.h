@@ -72,7 +72,7 @@ class SVF {
     int16_t nextLPF(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
+      low = low;
       return low; 
     }
 
@@ -90,7 +90,7 @@ class SVF {
      */
     inline
     int16_t currentLPF() {
-      low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
+      low = low;
       return low; 
     }
 

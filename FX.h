@@ -92,7 +92,7 @@ class FX {
     *  @param ratio is the ratio value, > 1.0, typically 2 to 4
     */
     inline
-    int16_t compression(int16_t sample, float threshold, float ratio) {
+    int16_t compression(int32_t sample, float threshold, float ratio) {
       int16_t thresh = threshold * MAX_16;
       float invRatio = 1.0f / ratio;
       float gainCompensationRatio = 1.0f + (1.0f - threshold * (1.0f + 1.0f * invRatio));

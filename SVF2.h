@@ -71,8 +71,7 @@ class SVF2 {
     int16_t nextLPF(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
-      return low; 
+      return clip16(low); 
     }
 
     /** Calculate the next Lowpass filter sample, given an input signal.
@@ -89,8 +88,7 @@ class SVF2 {
      */
     inline
     int16_t currentLPF() {
-      low = max((int32_t)-MAX_16, min((int32_t)MAX_16, low));
-      return low; 
+      return clip16(low); 
     }
 
     /** Calculate the next Highpass filter sample, given an input signal.
@@ -100,7 +98,7 @@ class SVF2 {
     int16_t nextHPF(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      return max(-MAX_16, (int)min((int32_t)MAX_16, high));
+      return clip16(high);
     }
 
     /** Retrieve the current Highpass filter sample.
@@ -109,7 +107,7 @@ class SVF2 {
      */
     inline
     int16_t currentHPF() {
-      return max(-MAX_16, (int)min((int32_t)MAX_16, high));
+      return clip16(high);
     }
 
     /** Calculate the next Bandpass filter sample, given an input signal.
@@ -119,7 +117,7 @@ class SVF2 {
     int16_t nextBPF(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      return max(-MAX_16, (int)min((int32_t)MAX_16, band));
+      return clip16(band);
     }
 
     /** Retrieve the current Bandpass filter sample.
@@ -128,7 +126,7 @@ class SVF2 {
      */
     inline
     int16_t nextBPF() {
-      return max(-MAX_16, (int)min((int32_t)MAX_16, band));
+      return clip16(band);
     }
 
     /** Calculate the next filter sample, for a mix between low, band and high pass filters.
@@ -185,22 +183,14 @@ class SVF2 {
     float buf1 = 0.0;
 
     void calcFilter(int32_t input) {
-      float in = input * MAX_16_INV;
-      buf0 = max(-1.0f, min(1.0f, buf0 + f * (in - buf0 + fb * (buf0 - buf1))));
-      buf1 = max(-1.0f, min(1.0f, buf1 + f * (buf0 - buf1)));
+      float in =  max(-1.0f, min(1.0f, input * MAX_16_INV));
+      buf0 = buf0 + f * (in - buf0 + fb * (buf0 - buf1));
+      buf1 = buf1 + f * (buf0 - buf1);
       low = buf1 * MAX_16; // LowPass
       high = (in - buf0) * MAX_16; // HighPass
       band = (buf0 - buf1) * MAX_16; // BandPass
       notch = (in - buf0 + buf1) * MAX_16; // Notch
     }
-
-    int32_t clip16(int32_t input) {
-      if (abs(input) > MAX_16) {
-        input = max(-MAX_16, min(MAX_16, input));
-      }
-      return input;
-    }
-
 };
 
 #endif /* SVF2_H_ */
