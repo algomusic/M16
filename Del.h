@@ -27,7 +27,7 @@ private:
   unsigned int delayBufferSize_samples = 0;
   bool delayFeedback = false;
   int16_t prevOutValue = 0;
-  byte filtered = 1;
+  byte filtered = 2;
   int16_t feedbackLevel = 512; // 0 to 1024
 
 public:
@@ -92,9 +92,7 @@ public:
   /** Specify the delay duration in milliseconds */
   void setTime(float msDur) {
     delayTime_ms = min(maxDelayTime_ms - 1.0f, max(0.0f, msDur));
-    // Serial.print("delayTime_ms "); Serial.println(delayTime_ms);
     delayTime_samples = msDur * SAMPLE_RATE * 0.001;
-    // Serial.print("delayTime_samples "); Serial.println(delayTime_samples);
   }
 
   /** Return the delay duration in milliseconds */
@@ -104,7 +102,7 @@ public:
 
   /** Specify the delay feedback level, from 0.0 to 1.0 */
   void setLevel(float level) {
-    delayLevel = min(1024, max(0, (int)(level * 1024.0f)));
+    delayLevel = min(1024, max(0, (int)(pow(level, 0.8) * 1024.0f)));
   }
 
   /** Return the delay level, from 0.0 to 1.0 */
@@ -120,7 +118,7 @@ public:
   /** Specify the delay feedback level, from 0.0 to 1.0 */
   void setFeedbackLevel(float level) {
     setFeedback(true); // ensure feedback is on
-    feedbackLevel = min(1024, max(0, (int)(level * 1024.0f)));
+    feedbackLevel = min(1024, max(0, (int)(pow(level, 0.8) * 1024.0f)));
   }
 
   /** Return the delay level, from 0.0 to 1.0 */
@@ -140,8 +138,8 @@ public:
     }
   }
 
-  /** Input a value to the delay and retrieve the signal delayed by delayTime milliseconds .
-	* @param inVal The signal input.
+  /** Input a value to the delay and retrieve the signal delayed by delayTime milliseconds.
+	* @param inValue The signal input.
 	*/
 	inline
 	int16_t next(int32_t inValue) {
@@ -152,13 +150,12 @@ public:
       if (outValue < MIN_16) outValue = MIN_16;
     }
     if (delayFeedback) {
-      // inValue = ((inValue * (1024 - feedbackLevel))>>10) + ((outValue * feedbackLevel)>>10);
-      inValue = inValue + (outValue * feedbackLevel)>>10;
+      inValue = (inValue + ((outValue * feedbackLevel)>>10)) * 0.9f;
     }
-    if (inValue > MAX_16) inValue = MAX_16;
+    if (inValue > MAX_16) inValue =  MAX_16;
     if (inValue < MIN_16) inValue = MIN_16;
     write(inValue);
-    return (outValue * delayLevel)>>10;
+    return outValue;
   }
 
   /** Read the buffer at the delayTime without incrementing read/write index */
