@@ -183,7 +183,7 @@ class SVF2 {
     float buf1 = 0.0;
 
     void calcFilter(int32_t input) {
-      float in =  max(-1.0f, min(1.0f, input * MAX_16_INV));
+      float in =  max(-1.0f, min(1.0f, (float)(input * MAX_16_INV)));
       buf0 = buf0 + f * (in - buf0 + fb * (buf0 - buf1));
       buf1 = buf1 + f * (buf0 - buf1);
       low = buf1 * MAX_16; // LowPass
