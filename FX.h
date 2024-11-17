@@ -244,7 +244,7 @@ class FX {
     * Inspired by reverb example G08 in Pure Data.
     */
     inline
-    void reverbStereo(int32_t audioInLeft, int32_t audioInRight, int16_t &audioOutLeft, int16_t &audioOutRight) {
+    void reverbStereo(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
       // set up first time called
       if (!reverbInitiated) {
         initReverb(reverbSize);
@@ -273,6 +273,11 @@ class FX {
       reverbMix = max(0, min(1024, (int)(rMix * 1204.0f)));
       // Serial.print("reverbMix ");Serial.println(reverbMix);
     }
+
+    /** Return the reverb amount, 0.0 - 1.0 */
+    float getReverbMix() {
+      return reverbMix * 0.0009765625f;
+    } 
 
     /** Set the reverb memory size
     * @newSize A multiple of the default, >= 1.0
