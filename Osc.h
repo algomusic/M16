@@ -99,12 +99,20 @@ public:
     setFreq(getFreq());
 	}
 
-  /** Set the spread value of the Oscil. Ranges > 0 */
+  /** Set the spread value of each detuned Oscilator instance. Ranges > 0 
+   * @val1 The first spread value
+   * @val2 The second spread value
+   */
 	inline
   void setSpread(int val1, int val2) {
 		spread1 = intervalRatios[val1 + 12]; //intervalFreq(frequency, val1);
     spread2 = intervalRatios[val2 + 12]; //intervalFreq(frequency, val2);
 	}
+
+  /** Return the spread value of the Oscil. */
+  float getSpread() {
+    return spread1 - 1.0;
+  }
 
   /** Get a blend of this Osc and another.
   * @param secondWaveTable - an wavetable array to morph with
