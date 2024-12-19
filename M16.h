@@ -271,12 +271,12 @@ float intervalFreq(float freqVal, int interval) {
 
 /** Return left amount for a pan position 0.0-1.0 */
 float panLeft(float panVal) {
-  return max(0.0, min(1.0, cos(6.219 * panVal * 0.25)));
+  return max(0.0, min(1.0, cos(6.291 * panVal * 0.25)));
 }
 
 /** Return right amount for a pan position 0.0-1.0 */
 float panRight(float panVal) {
-  return max(0.0, min(1.0, cos(6.219 * (panVal * 0.25 + 0.75))));
+  return max(0.0, min(1.0, cos(6.291 * (panVal * 0.25 + 0.75))));
 }
 
 /** Return scaled floating point value 
@@ -309,11 +309,21 @@ float slew(float curr, float target, float amt) {
 }
 
 /** Constrain values to a 16bit range
-* @input The value top be clipped
+* @input The value to be clipped
 */
 int32_t clip16(int32_t input) {
   if (abs(input) > MAX_16) {
     input = max(-MAX_16, min(MAX_16, input));
+  }
+  return input;
+}
+
+/** Constrain values to a 32bit range
+* @input The value to be clipped
+*/
+int32_t clip32(int32_t input) {
+  if (abs(input) > 65535) { // 2147483647
+    input = max(-65534, min(65535, input));
   }
   return input;
 }
