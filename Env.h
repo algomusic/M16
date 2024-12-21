@@ -22,23 +22,23 @@ class Env {
     Env() {}
 
     /** Set envAttack time in ms. */
-    void setAttack(int val) {
+    void setAttack(float val) {
       if (val >= 0) envAttack = val * 1000; // micros
     }
 
     /** Get attack time in ms. */
-    int getAttack() {
-      return envAttack * 0.001;
+    float getAttack() {
+      return envAttack * 0.001f;
     }
 
     /** Set envHold time in ms. */
-    void setHold(int val) {
+    void setHold(float val) {
       if (val >= 0) envHold = val * 1000;
     }
 
     /** Set envDecay time in ms. */
-    void setDecay(int val) {
-      if (val >= 0) envDecay = max(10, val) * 1000;
+    void setDecay(float val) {
+      if (val >= 0) envDecay = max(10.0f, val) * 1000;
     }
 
     /** Set the number of times to repeat the decay segment.
@@ -53,7 +53,7 @@ class Env {
 
     /** Get decay time in ms. */
     int getDecay() {
-      return envDecay * 0.001;
+      return envDecay * 0.001f;
     }
 
     /** Set envSustain level as a value from 0.0 - 1.0 */
@@ -70,15 +70,15 @@ class Env {
     }
 
     /** Set releaseState time in ms. */
-    void setRelease(int val) {
+    void setRelease(float val) {
       if (val >= 0) {
-        envRelease = max(10, val) * 1000;
+        envRelease = max(10.0f, val) * 1000.0f;
         jitEnvRelease = envRelease;
       }
     }
 
     /** Get release time in ms. */
-    int getRelease() {
+    float getRelease() {
       return envRelease * 0.001;
     }
 
