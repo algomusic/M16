@@ -32,7 +32,7 @@ public:
   MIDI16() {
     // Uses sProject PCB pins for ESP32-S3 hardware serial
     // ESP8266 ignores this and uses default Serial pins (GPIO 3 for rx and 1 for tx)
-    MIDI16(37, 38); 
+    MIDI16(37, 38);  // 34, 35 sProject board v3
   }
 
   /** Constructor 
