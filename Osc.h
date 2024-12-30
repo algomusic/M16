@@ -28,7 +28,7 @@ public:
   * Table is a int16_t array of TABLE_SIZE - values rabge from -16383 to 16383 (which seems like 15, not 16 bits???)
   * Use sinGen() or similar function in M16.h to fill the table in the setup() function before using
 	*/
-	Osc(const int16_t * TABLE_NAME):table(TABLE_NAME) {}
+	Osc(int16_t * TABLE_NAME):table(TABLE_NAME) {} // const 
 
   /** Updates the phase according to the current frequency and returns the sample at the new phase position.
 	* @return outSamp The next sample.
@@ -71,7 +71,7 @@ public:
 	* @param TABLE_NAME is the name of the array. Must be the same size as the original table used when instantiated.
 	*/
   inline
-	void setTable(const int16_t * TABLE_NAME) {
+	void setTable(int16_t * TABLE_NAME) { // const
 		table = TABLE_NAME;
 	}
 
@@ -112,6 +112,11 @@ public:
   /** Return the spread value of the Oscil. */
   float getSpread() {
     return spread1 - 1.0;
+  }
+
+  /** Return the current value of the Oscil. */
+  int16_t getValue() {
+    return prevSampVal; // close enough
   }
 
   /** Get a blend of this Osc and another.
@@ -559,7 +564,7 @@ private:
   float phase_increment_fractional_s2 = 18.75;
   float phase_increment_fractional_w1 = phase_increment_fractional;
   float phase_increment_fractional_w2 = phase_increment_fractional;
-	const int16_t * table;
+	int16_t * table; // const
   int32_t prevSampVal = 0;
   bool isNoise = false;
   bool isCrackle = false;
