@@ -240,21 +240,6 @@ int pitchQuantize(int pitch, int * pitchClassSet, int key) {
   return pitch; // just in case?
 }
 
-// int pitchQuantize(int pitch, int * pitchClassSet, int key) {
-//   int pitchClass = pitch%12;
-//   int pitchClassSetIndex = 0;
-//   for (int i=0; i < 12; i++) {
-//     if (pitchClass == pitchClassSet[i] + key) {
-//       pitchClassSetIndex = i;
-//     }
-//   }
-//   int octave = pitch/12;
-//   int pitchClassSetOctave = pitchClassSetIndex/12;
-//   int pitchClassSetIndexMod = pitchClassSetIndex%12;
-//   int pitchClassSetIndexModOctave = pitchClassSetIndexMod + pitchClassSetOctave*12;
-//   return pitchClassSetIndexModOctave + octave*12;
-// }
-
 /** Return freq a chromatic interval away from base
 * @freqVal The base frequency in Htz
 * @interval The chromatic distance from the base in semitones, -12 to 12
@@ -314,16 +299,6 @@ float slew(float curr, float target, float amt) {
 int32_t clip16(int32_t input) {
   if (abs(input) > MAX_16) {
     input = max(-MAX_16, min(MAX_16, input));
-  }
-  return input;
-}
-
-/** Constrain values to a 32bit range
-* @input The value to be clipped
-*/
-int32_t clip32(int32_t input) {
-  if (abs(input) > 65535) { // 2147483647
-    input = max(-65534, min(65535, input));
   }
   return input;
 }
