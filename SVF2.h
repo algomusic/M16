@@ -30,8 +30,8 @@ class SVF2 {
     */
     inline
     void setRes(float resonance) {
-      q = pow(max(0.0f, min(1.0f, resonance)), 0.4);
-      fb = q + q * (1.0 + f);
+      q = min(0.96, pow(max(0.0f, min(1.0f, resonance)), 0.6));
+      fb = q + q * (1.0 - f);
     }
 
     /** Return the resonance or q of the filter.*/
@@ -45,12 +45,19 @@ class SVF2 {
     */
     inline
     void setFreq(int32_t freq_val) {
-      f = 2 * sin(3.1459 * max(0, (int)min(maxFreq, freq_val)) * SAMPLE_RATE_INV);
+      freq = max(0, min(maxFreq, freq_val));
+      f = min(0.96f, 2.0f * sin(3.1459f * freq * SAMPLE_RATE_INV));
     }
 
     /** Return the cutoff or centre frequency of the filter.*/
     inline
-    int16_t getFreq() {
+    int32_t getFreq() {
+      return freq;
+    }
+
+    /** Return the f value.*/
+    inline
+    float getF() {
       return f;
     }
 
@@ -60,7 +67,8 @@ class SVF2 {
     */
     inline
     void setCutoff(float cutoff_val) {
-      f = pow(max(0.0f, min(1.0f, cutoff_val)), 2.2);
+      f = min(0.96, pow(max(0.0f, min(1.0f, cutoff_val)), 2.2));
+      freq = maxFreq * f;
       fb = q + q * (1.0 + f);
     }
 
@@ -176,6 +184,7 @@ class SVF2 {
   private:
     int32_t low, band, high, notch, allpassPrevIn, allpassPrevOut, simplePrev;
     int32_t maxFreq = SAMPLE_RATE * 0.195;
+    int32_t freq = 0;
     float f = 1.0;
     float q = 0.0;
     float fb = 0.0;
