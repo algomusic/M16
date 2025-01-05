@@ -4,6 +4,8 @@
 #include "M16.h"
 #include "Osc.h"
 #include "Bob.h"
+// #include "SVF2.h" // for comparison
+// #include "SVF.h" // for comparison
 
 int16_t waveTable [TABLE_SIZE]; // empty wavetable
 int16_t sineTable [TABLE_SIZE]; // empty wavetable
@@ -11,6 +13,8 @@ Osc osc1(waveTable);
 Osc lfo1(sineTable);
 Osc lfo2(sineTable);
 Bob lpf;
+// SVF2 lpf; // for comparison
+// SVF lpf; // for comparison
 unsigned long msNow = millis();
 unsigned long lfoTime = msNow;
 unsigned long pitchTime = msNow;
@@ -33,7 +37,7 @@ void loop() {
 
   if (msNow - lfoTime > lfoDelta || msNow - lfoTime < 0) {
     lfoTime = msNow;
-    lpf.setFreq(lfo1.atTimeNormal(msNow) * 20000);
+    lpf.setCutoff(lfo1.atTimeNormal(msNow));
     lpf.setRes(lfo2.atTimeNormal(msNow));
   }
 
