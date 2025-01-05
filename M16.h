@@ -199,7 +199,7 @@ int16_t rightAudioOuputValue = 0;
 */
 inline
 float mtof(float midival) {
-  midival = max(0.0f, min(127.0f, midival));
+  midival = max(0.0f, midival);
   float f = 0.0;
   if (midival) f = 8.1757989156 * pow(2.0, midival * 0.083333); // / 12.0);
   return f;
@@ -362,7 +362,7 @@ int gaussRandNumb(int maxVal, int tightness) {
 * @param maxVal The largest integer possible
 */
 int gaussRand(int maxVal) {
-  return gaussRandNumb(maxVal, 2);
+  return gaussRandNumb(maxVal, 3);
 }
 
 /** Approximate Chaotic Random number generator
@@ -380,4 +380,4 @@ float chaosRand(float range) {
   return chaosRandVal * 0.5 + range * 0.5;
 }
 
-// #endif #endif /* M16_H_ */
+// /* M16_H_ */
