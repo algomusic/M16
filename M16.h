@@ -256,11 +256,15 @@ float intervalFreq(float freqVal, int interval) {
 
 /** Return left amount for a pan position 0.0-1.0 */
 float panLeft(float panVal) {
+  if (panVal == 0) return 1;
+  if (panVal == 1) return 0;
   return max(0.0, min(1.0, cos(6.291 * panVal * 0.25)));
 }
 
 /** Return right amount for a pan position 0.0-1.0 */
 float panRight(float panVal) {
+  if (panVal == 0) return 0;
+  if (panVal == 1) return 1;
   return max(0.0, min(1.0, cos(6.291 * (panVal * 0.25 + 0.75))));
 }
 
