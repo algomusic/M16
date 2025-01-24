@@ -10,27 +10,33 @@ unsigned long msNow = millis();
 unsigned long midiTime = msNow;
 unsigned long onTime = msNow;
 unsigned long offTime = msNow;
-unsigned long prevClockTime;
-int prevClockDeltas [9];
-int prevBPM = 0;
+unsigned long microsNow = micros(); 
+unsigned long clockTime = microsNow;
+int tempoDelta = 20833; // 120 BPM
 bool sounding = false;
 uint8_t midiPitch = 0;
+uint8_t chan = 0;
+Seq seq;
+int BPM = 120;
+int prevBPM = 120;
 
-#include <FastLED.h>
-#define NUM_LEDS 1
-#define DATA_PIN 47 // 47 for Lolin S3 mini // 21 for Waveshare S3 pico
-CRGB leds[NUM_LEDS];
+#include <Adafruit_NeoPixel.h>
+#define PIN 47
+#define NUMPIXELS 1
+Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_RGB + NEO_KHZ800);
 
 void handleNoteOn(byte channel, byte pitch, byte velocity) {
   Serial.println("Receive NoteOn: " + String(pitch) + " " + String(velocity) + " " + String(channel));
-  leds[0] = CRGB::Green;
-  FastLED.show();
+  // leds[0] = CRGB::Green;
+  // FastLED.show();
+  pixels.setPixelColor(0, pixels.Color(0, 150, 0));
+  pixels.show(); 
 }
 
 void handleNoteOff(byte channel, byte pitch, byte velocity) {
   Serial.println("Receive NoteOff: " + String(pitch) + " " + String(velocity) + " " + String(channel));
-  leds[0] = CRGB::Black;
-  FastLED.show();
+  pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+  pixels.show(); 
 }
 
 void handleControlChange(byte channel, byte control, byte value) {
@@ -38,22 +44,10 @@ void handleControlChange(byte channel, byte control, byte value) {
 }
 
 void handleMidiClock() {
-  unsigned long cTime = micros();
-  float deltaCT = cTime - prevClockTime;
-  prevClockTime = cTime;
-  float rollingCT = deltaCT;
-  for(int i=8; i>=0; i--) {
-    rollingCT += prevClockDeltas[i];
-    if (i > 0) {
-      prevClockDeltas[i] = prevClockDeltas[i-1];
-    } else prevClockDeltas[0] = deltaCT;
-  }
-  rollingCT *= 0.1;
-  float beatDelta = rollingCT * 24;
-  float BPM = 1000 / beatDelta * 60000;
-  if (round(BPM) != prevBPM) {
-    Serial.println("Clock delta: " + String(rollingCT) + " beat delta " + String(beatDelta) + " BPM " + String(BPM) + " round BPM " + String(round(BPM)));
-    prevBPM = round(BPM);
+  BPM = midi.clockToBpm();
+  if (BPM != prevBPM) {
+    prevBPM = BPM;
+    Serial.println("Incomming BPM = " + String(BPM));
   }
 }
 
@@ -71,24 +65,21 @@ void handleMidiStop() {
 
 void setup() { 
     Serial.begin(115200);
-    FastLED.addLeds<SM16703, DATA_PIN, RGB>(leds, NUM_LEDS);
-    leds[0] = CRGB::Red;
-    FastLED.show();
-    delay(1000);
-    leds[0] = CRGB::Black;
-    FastLED.show();
+    pixels.begin();
+    pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+    pixels.show(); 
     Serial.println("MIDI16-test");
+    tempoDelta = midi.calcTempoDelta(140); // in micros
+    Serial.println("tempoDelta " + String(tempoDelta));
 }
 
 void loop() { 
-  msNow = micros();
+  msNow = millis();
 
   // receive MIDI data
-
   if (msNow > midiTime) {
-    midiTime = msNow + 500; // + 19ms is adequate if no clock sync is required
+    midiTime += 1; // 8 is enough for note messages, 1 required for clock
     uint8_t status = midi.read();
-    // if (status > 0) {Serial.print("Status: "); Serial.println(status);}
     if (status == MIDI16::noteOn) {
       handleNoteOn(midi.getChannel(), midi.getData1(), midi.getData2());
     } else if (status == MIDI16::noteOff) {
@@ -106,16 +97,18 @@ void loop() {
     }
   }
 
-  // Send MIDI data
+  // Send MIDI channel messages
   if (msNow > onTime) {
-    onTime = msNow + 500000;
-    offTime = msNow + 300000;
-    midiPitch = rand(127);
-    Serial.print("Send note on "); Serial.println(midiPitch);
-    leds[0] = CRGB::Blue;
-    FastLED.show();
+    onTime = msNow + 1000;
+    offTime = msNow + 250;
+    midiPitch = rand(60) + 30;
+    pixels.setPixelColor(0, pixels.Color(0, 0, 150));
+    pixels.show(); 
     sounding = true;
-    midi.sendNoteOn(0, midiPitch, 100);
+    chan = rand(4);
+    midi.sendNoteOn(chan, midiPitch, 100);
+    Serial.print("Send note on "); Serial.print(midiPitch);
+    Serial.print(" on chan "); Serial.println(chan);
     if (rand(10) < 3) {
       int cc = rand(127);
       int val = rand(127);
@@ -126,9 +119,18 @@ void loop() {
 
   if (sounding && msNow > offTime) {
     Serial.println("Send note off");
-    leds[0] = CRGB::Black;
-    FastLED.show();
+    pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+    pixels.show(); 
     sounding = false;
-    midi.sendNoteOff(0, midiPitch, 0);
+    midi.sendNoteOff(chan, midiPitch, 0);
+  }
+
+  // send MIDI clock tempo
+  // microsecond timing required for 24 PPQN accuracy
+  microsNow = micros(); 
+
+  if (microsNow > clockTime) {
+    clockTime += tempoDelta;
+    midi.sendClock();
   }
 }

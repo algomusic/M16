@@ -88,7 +88,9 @@ public:
     writeByte(252); //0xFC
   }
 
-  // recieve MIDI messages
+  /* Receive MIDI messages
+  *  Return the status byte if its availible or else return 0
+  */
   uint16_t read() {
     while(Serial2.available() > 0) { // 2
       int inByte = readByte();
@@ -104,7 +106,7 @@ public:
     return 0;
   }
 
-  // access current MIDI message data
+  /* Access current MIDI message data */
   uint8_t getStatus() {
     return message[0] - (message[0] & 0x0F);
   }
@@ -121,10 +123,42 @@ public:
     return message[2];
   }
 
+  /* Calulate the BPM based on MIDI clock pulses 
+  *  Return the BPM
+  */
+  int16_t clockToBpm() {
+    unsigned long cTime = micros();
+    float deltaCT = cTime - prevClockTime;
+    prevClockTime = cTime;
+    float rollingCT = deltaCT;
+    for(int i=14; i>=0; i--) {
+      rollingCT += prevClockDeltas[i];
+      if (i > 0) {
+        prevClockDeltas[i] = prevClockDeltas[i-1];
+      } else prevClockDeltas[0] = deltaCT;
+    }
+    int beatDelta = rollingCT * 15; // 15 for 14; 20 for 10; //24 for 8; // 30 for 6 // 11 for 20
+    // int BPM = round(1000.0f / beatDelta * 6000000);
+    int BPM = (int)((1000LL * 6000000 + (beatDelta >> 1)) / beatDelta);
+    return round(BPM * 0.1f);
+  }
+
+  /* Calculate the microseconds between MIDI clock pulses at 24 PPQN
+  *  @bpm The beats per minute for the tempo
+  *  Return the number of microseconds
+  */
+  int calcTempoDelta(float bpm) {
+    if (bpm > 0) {
+      return 60.0f / bpm * 1000000 / 24.0f;
+    } else return 20833; // 120 BPM default
+  }
+
 private:
   int recievePin;
   int transmitPin;
   uint8_t * message;
+  unsigned long prevClockTime;
+  int prevClockDeltas [15];
 
   uint8_t readByte() {
     return Serial2.read();
