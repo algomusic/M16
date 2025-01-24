@@ -193,7 +193,6 @@ class Seq {
     */
     inline
     double calcStepDelta(float bpm) {
-      // calcStepDelta(bpm, 1);
       if (bpm > 0) {
 				return 60.0 / bpm * 1000 / 1 / stepDiv;
 			} else return 250;
