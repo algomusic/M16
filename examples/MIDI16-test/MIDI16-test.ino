@@ -16,7 +16,6 @@ int tempoDelta = 20833; // 120 BPM
 bool sounding = false;
 uint8_t midiPitch = 0;
 uint8_t chan = 0;
-Seq seq;
 int BPM = 120;
 int prevBPM = 120;
 
