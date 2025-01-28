@@ -161,9 +161,18 @@ public:
   /** Read the buffer at the delayTime without incrementing read/write index */
   inline
 	int16_t read() {
+    return read(0);
+  }
+
+  /** Read the buffer at the delayTime + an offset without incrementing read/write index 
+   * @pos delay offset in samples, can be positive or negative
+  */
+  inline
+	int16_t read(int32_t pos) {
     int outValue = 0;
-    int readPos = writePos - delayTime_samples;
+    int readPos = writePos - delayTime_samples + pos;
     if (readPos < 0) readPos += delayBufferSize_samples;
+    if (readPos >= delayBufferSize_samples) readPos -= delayBufferSize_samples;
     outValue = min(MAX_16, max(MIN_16, (int)delayBuffer[readPos]));
     if(filtered > 0) {
       if (filtered == 1) {
