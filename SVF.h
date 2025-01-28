@@ -152,20 +152,6 @@ class SVF {
       return max(-MAX_16, min(MAX_16, lpfAmnt + bpfAmnt + hpfAmnt));
     }
 
-    /** Calculate the next Allpass filter sample, given an input signal.
-     *  Input is an output from an oscillator or other audio element.
-     *  Perhaps not technically a state variable filter, but...
-     */
-    inline
-    int16_t nextAllpass(int32_t input) {
-      // y = x + x(t-1) - y(t-1)
-      input = clip16(input);
-      int32_t output = input + allpassPrevIn - allpassPrevOut;
-      allpassPrevIn = input;
-      allpassPrevOut = output;
-      return max(-MAX_16, (int)min((int32_t)MAX_16, output));
-    }
-
     /** Calculate the next Notch filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
      */
@@ -193,7 +179,6 @@ class SVF {
       band += f * high;
       notch = high + low;
     }
-
 };
 
 #endif /* SVF_H_ */
