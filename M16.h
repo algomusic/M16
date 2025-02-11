@@ -67,7 +67,7 @@ int16_t rightAudioOuputValue = 0;
   void i2s_write_samples(int16_t leftSample, int16_t rightSample) {
     leftAudioOuputValue = leftSample;
     rightAudioOuputValue = rightSample;
-    i2s_write_lr(leftSample * 0.98, rightSample * 0.98); // * 0.98 to avoid DAC distortion at extremes
+    i2s_write_lr(leftSample, rightSample);
   }
 
   void seti2sPins(int bck, int ws, int dout, int din) {
@@ -185,10 +185,10 @@ int16_t rightAudioOuputValue = 0;
   void audioStart() {
     i2s_driver_install(i2s_num, &i2s_config, 0, NULL);        // ESP32 will allocated resources to run I2S
     i2s_set_pin(i2s_num, &pin_config);                        // Tell it the pins you will be using
-    i2s_start(i2s_num); // not explicity necessary, called by install
+    i2s_start(i2s_num); // not explicity necessary, called by install // 
     // RTOS callback
     xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 2048, NULL, configMAX_PRIORITIES - 1, &audioCallback1Handle, 0); // 1024 = memory, 1 = priorty, 0 = core
-    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 2048, NULL, 2, &audioCallback2Handle, 1);
+    xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 2048, NULL, 2, &audioCallback2Handle, 1); // move core 1 to 0 priority to enable smoother calulculations, such as for allpass filters
     Serial.println("M16 is running");
   }
 #endif
