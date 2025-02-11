@@ -75,8 +75,8 @@ void audioUpdate() {
     mix *= 0.6;
   }
   // stereo
-  int16_t leftVal = mix; 
-  int16_t rightVal = leftVal;
+  int32_t leftVal = mix; 
+  int32_t rightVal = leftVal;
   #if IS_ESP32() //8266 can't manage reverb as well
     effect1.reverbStereo(mix, mix, leftVal, rightVal);
   #endif
