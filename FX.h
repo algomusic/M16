@@ -17,6 +17,7 @@
 #include "Del.h"
 #include "APF.h"
 #include "Osc.h"
+#include "All.h"
 
 class FX {
 
@@ -235,7 +236,7 @@ class FX {
       return clip(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12) + ((revP2 * reverbMix)>>12));
     }
 
-    /** A simple reverb using recursive delay lines.
+    /** A simple 'spring' reverb using recursive delay lines.
     * Stereo version that takes two inputs (can be the same) and sets left and right channel outs
     * @audioInLeft A mono audio signal
     * @audioInRight A mono audio signal
@@ -249,10 +250,27 @@ class FX {
       if (!reverbInitiated) {
         initReverb(reverbSize);
       }
-      processReverb(clip(audioInLeft), clip(audioInRight));
+      if (reverb2Initiated) {
+        processReverb(clip(audioInLeft + allpassRevOut)>>1, clip(audioInRight + allpassRevOut)>>1);
+      } else  processReverb(clip(audioInLeft), clip(audioInRight));
       // processReverb(apf1.next(audioInLeft), apf2.next(audioInRight));
       audioOutLeft = clip(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
       audioOutRight = clip(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
+    }
+
+    /** A simple 'Chamberlin' reverb using allpass filter preprocessor and recursive delay lines. */
+    inline
+    void reverbStereo2(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
+      if (!reverb2Initiated) {
+        allpass1.setDelayTime(49.6);
+        allpass1.setFeedbackLevel(0.83);
+        allpass2.setDelayTime(34.65);
+        allpass2.setFeedbackLevel(0.79);
+        reverb2Initiated = true;
+      }
+      int32_t summedMono = (audioInLeft + audioInRight) >> 1;
+      allpassRevOut = allpass2.next(allpass1.next(summedMono));
+      reverbStereo(audioInLeft , audioInRight, audioOutLeft, audioOutRight);
     }
 
     /** Set the reverb length
@@ -262,7 +280,14 @@ class FX {
     void setReverbLength(float rLen) {
       rLen = max(0.0f, min(1.0f, rLen));
       reverbFeedbackLevel = pow(rLen, 0.2f);
-      initReverb();
+      initReverb(reverbSize);
+      allpass1.setFeedbackLevel(reverbFeedbackLevel * 0.95);
+      allpass2.setFeedbackLevel(reverbFeedbackLevel * 0.9);
+    }
+
+    /** Return the reverb length. */
+    float getReverbLength() {
+      return reverbFeedbackLevel;
     }
 
     /** Set the reverb amount
@@ -414,6 +439,9 @@ class FX {
     int16_t * chorusLfoTable;
     Osc chorusLfo;
     Del chorusDelay, chorusDelay2;
+    All allpass1, allpass2;
+    bool reverb2Initiated = false;
+    int32_t allpassRevOut = 0;
 
     void initPluckBuffer() {
       pluckBuffer = new int[PLUCK_BUFFER_SIZE]; // create a new array
