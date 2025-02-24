@@ -19,6 +19,11 @@ class Ave {
     /** Constructor */
     Ave() {}
 
+    /** Constructor */
+    Ave(int32_t freq_val) {
+      setFreq(freq_val);
+    }
+
     /** Set how resonant the filter will be.
     * 0.01 > res < 1.0
     */
