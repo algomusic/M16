@@ -18,6 +18,8 @@
 #include "APF.h"
 #include "Osc.h"
 #include "All.h"
+#include "SVF.h"
+#include "Ave.h"
 
 class FX {
 
@@ -72,6 +74,39 @@ class FX {
       // int16_t samp = (sample_in / (float)MAX_16) * MAX_16;
       // if (samp > MAX_16 || samp < MIN_16) Serial.println(samp);
       return clip(samp);
+    }
+
+    /** Overdrive
+    * Distort sound based on input level and depth amount
+    * Pass in a signal and depth amount.
+    * Output level can vary, so best to mix with original signal.
+    * @param sample_in The next sample value
+    * @param amount The degree of clipping to be applied, from 1 to 4 is a reasonable range
+    * Amounts less than 1.0 (neutral) will reduce the signal
+    */
+    inline
+    int16_t overdrive(int32_t sample_in, float amount) {
+      // filter input
+      Ave aveFilter(10000); // htz approx 1/4 of sample rate
+      sample_in = aveFilter.next(sample_in);
+      amount *= 0.72; // scale so 1.0 is neutral
+      // clipper
+      sample_in = sample_in * amount;
+      float sample = sample_in * MAX_16_INV * amount;
+      float absSampIn = abs(sample);
+      float clippedSampIn = (sample > 0) ? 1.0f : -1.0f;
+      float clippedSampIn16 = (sample_in > 0) ? MAX_16 : MIN_16;
+      float clipOut = 0;
+      float thresh = 0.33; //10922; //MAX_16 * 0.33;
+      
+      if (absSampIn < thresh) {
+        clipOut = 2.0f * sample;
+      } else if (absSampIn < 2 * thresh) {
+        clipOut = clippedSampIn * (3.0f - (2.0f - 3.0f * absSampIn) * (2.0f - 3.0f * absSampIn)) / 3.0f;
+      } else {
+        clipOut = clippedSampIn;
+      }
+      return clip16(clipOut * MAX_16);
     }
 
     /** Soft Saturation
