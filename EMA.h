@@ -20,8 +20,10 @@ class EMA {
     /** Constructor */
     EMA() {}
 
-    /** Constructor */
-    EMA(float newAlpha) {
+    /** Constructor 
+     * @param newAlpha 0.0 - 1.0
+    */
+    EMA(float newAlpha) { 
       newAlpha = max(0, min(1024, (int)(newAlpha * 1024)));
       alpha_val = max(10.0f, (1024.0f - newAlpha));
     }
@@ -86,16 +88,15 @@ class EMA {
     inline
     int16_t nextHPF(int32_t input) {
       // y[i] = 1/2(2 - α) . (x[i] - x[i-1]) + (1−α) ⋅ y[i−1]
-      outPrev = (((2048 - alpha_val) * (input - inPrev))>>10) + (((1024 - alpha_val) * outPrev)>>10);
+      outPrev = (((2048 - alpha_val) * (input - inPrev))>>11) + (((1024 - alpha_val) * outPrev)>>10);
       inPrev = input;
       return clip16(outPrev);
     }
 
   private:
-    int32_t outPrev = 0; // previous sample output value for averaging
-    int32_t inPrev = 0; // previous sample input value for averaging
+    int32_t outPrev = 0; // previous sample output value
+    int32_t inPrev = 0; // previous sample input value for HPF
     volatile float f = 10000; // approx cutoff frequency in Hz
-    int16_t cutLevel = 0; // 0 - 10
     int16_t alpha_val = 1024; // 0 - 1024
 
 };
