@@ -6,6 +6,7 @@
 #include "Bob.h"
 // #include "SVF2.h" // for comparison
 // #include "SVF.h" // for comparison
+// #include "EMA.h" // for comparison
 
 int16_t waveTable [TABLE_SIZE]; // empty wavetable
 int16_t sineTable [TABLE_SIZE]; // empty wavetable
@@ -15,6 +16,7 @@ Osc lfo2(sineTable);
 Bob lpf;
 // SVF2 lpf; // for comparison
 // SVF lpf; // for comparison
+// EMA lpf; // for comparison
 unsigned long msNow = millis();
 unsigned long lfoTime = msNow;
 unsigned long pitchTime = msNow;

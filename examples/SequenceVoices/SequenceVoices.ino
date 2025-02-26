@@ -80,11 +80,12 @@ void loop() {
 
 void audioUpdate() {
   int32_t leftVal = 0;
-  int16_t leftOut, rightOut;
+  int32_t leftOut, rightOut;
   for (int i=0; i<voices; i++) {
-    leftVal += (filters[i].nextLPF(oscillators[i].next()) * ampEnvs[i].getValue())>>18;
+    leftVal += (filters[i].nextLPF(oscillators[i].next()) * ampEnvs[i].getValue())>>16;
+    if (voices > 1) leftVal *= 0.9;
   }
-  leftVal = effect1.clip(leftVal);
+  leftVal = clip16(leftVal);
   effect1.reverbStereo(leftVal, leftVal, leftOut, rightOut); // bypass for ESP8266
   i2s_write_samples(leftOut, rightOut);
 }

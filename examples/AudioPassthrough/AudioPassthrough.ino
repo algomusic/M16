@@ -21,7 +21,7 @@ void loop() {}
 */
 
 void audioUpdate() {
-  int16_t leftVal = audioIn.nextLeft() * gain; // typically mic inputs are single channel
-  int16_t rightVal = leftVal;
+  int32_t leftVal = clip16(audioIn.nextLeft() * gain); // typically mic inputs are single channel
+  int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }
