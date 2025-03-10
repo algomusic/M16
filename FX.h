@@ -15,11 +15,10 @@
 #define FX_H_
 
 #include "Del.h"
-#include "APF.h"
 #include "Osc.h"
 #include "All.h"
 #include "SVF.h"
-#include "Ave.h"
+#include "EMA.h"
 
 class FX {
 
@@ -40,20 +39,10 @@ class FX {
         if (sample_in > 0) sample_in = MAX_16 - (sample_in - MAX_16);
         if (sample_in < 0) sample_in = -MAX_16 - (sample_in + MAX_16);
       }
-      return clip(sample_in);
+      return clip16(sample_in);
     }
 
-    /** Clipping
-    *  Clip values outside 16 bit values for max/min range
-    *  Same as clip16 function in M16
-    *  @sample_in Pass in a signal, such as output from an oscillator
-    */
-    inline
-    int16_t clip(int32_t sample_in) {
-      if (sample_in > MAX_16) sample_in = MAX_16;
-      if (sample_in < -MAX_16) sample_in = -MAX_16;
-      return sample_in;
-    }
+    // clip16() in M16.h does hard clipping
 
     /** Soft Clipping
     * Distort sound based on input level and depth amount
@@ -66,14 +55,8 @@ class FX {
     */
     inline
     int16_t softClip(int32_t sample_in, float amount) {
-      // int32_t samp = sample_in;
-      // if (samp > 26033) samp = min(MAX_16, 26033 + ((samp - 26033) >> 3));
-      // if (samp < -26033) samp = max(-MAX_16, -26033 + ((samp + 26033) >> 3));
-      // 2/pi * arctan(samp * depth) // 0.635748
       int32_t samp = 38000 * atan(amount * (sample_in * (float)MAX_16_INV)); // 20831
-      // int16_t samp = (sample_in / (float)MAX_16) * MAX_16;
-      // if (samp > MAX_16 || samp < MIN_16) Serial.println(samp);
-      return clip(samp);
+      return clip16(samp);
     }
 
     /** Overdrive
@@ -87,7 +70,7 @@ class FX {
     inline
     int16_t overdrive(int32_t sample_in, float amount) {
       // filter input
-      Ave aveFilter(10000); // htz approx 1/4 of sample rate
+      EMA aveFilter(10000); // htz approx 1/4 of sample rate
       sample_in = aveFilter.next(sample_in);
       amount *= 0.72; // scale so 1.0 is neutral
       // clipper
@@ -107,19 +90,6 @@ class FX {
         clipOut = clippedSampIn;
       }
       return clip16(clipOut * MAX_16);
-    }
-
-    /** Soft Saturation
-    *  Effects values above a threshold, adds
-    *  Pass in a signal and multiply its value beforehand to change fold depth
-    *  https://www.musicdsp.org/en/latest/Effects/42-soft-saturation.html
-    */
-    inline
-    int16_t softSaturation(int32_t sample_in) { // 14745, 13016 // a + (x-a)/(1+((x-a)/(1-a))^2) // f(x)*(1/((a+1)/2))
-      int16_t thresh = 26033;
-      if (sample_in > thresh) sample_in *= ((float)MAX_16 / ((thresh + MAX_16) * 0.5f));
-      if (sample_in < -26033) sample_in = (sample_in * -1 * ((float)MAX_16 / ((thresh + MAX_16) * 0.5f))) * -1;
-      return clip(sample_in);
     }
 
     /** Compressor with gain compensation
@@ -245,9 +215,9 @@ class FX {
       if (pluck_buffer_read_index < 0) pluck_buffer_read_index += PLUCK_BUFFER_SIZE;
       int bufferRead = pluckBuffer[pluck_buffer_read_index] * depth;
       // update buffer
-      int16_t output = audioIn + bufferRead;
+      int32_t output = audioIn + bufferRead;
       pluckBuffer[(int)pluck_buffer_write_index] = output; // divide?
-      int16_t aveOut = (output + prevPluckOutput) * 0.5f;
+      int32_t aveOut = (output + prevPluckOutput)>>1;
       prevPluckOutput = aveOut;
       // increment buffer phase
       pluck_buffer_write_index += 1;
@@ -268,7 +238,7 @@ class FX {
         initReverb(reverbSize);
       }
       processReverb(audioIn, audioIn);
-      return clip(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12) + ((revP2 * reverbMix)>>12));
+      return clip16(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12) + ((revP2 * reverbMix)>>12));
     }
 
     /** A simple 'spring' reverb using recursive delay lines.
@@ -286,11 +256,10 @@ class FX {
         initReverb(reverbSize);
       }
       if (reverb2Initiated) {
-        processReverb(clip(audioInLeft + allpassRevOut)>>1, clip(audioInRight + allpassRevOut)>>1);
-      } else  processReverb(clip(audioInLeft), clip(audioInRight));
-      // processReverb(apf1.next(audioInLeft), apf2.next(audioInRight));
-      audioOutLeft = clip(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
-      audioOutRight = clip(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
+        processReverb((audioInLeft + allpassRevOut)>>1, clip16(audioInRight + allpassRevOut)>>1);
+      } else  processReverb(clip16(audioInLeft), clip16(audioInRight));
+      audioOutLeft = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
+      audioOutRight = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
     }
 
     /** A simple 'Chamberlin' reverb using allpass filter preprocessor and recursive delay lines. */
@@ -365,7 +334,7 @@ class FX {
       int32_t delVal = chorusDelay.next(audioIn);
       int32_t inVal = (audioIn * (chorusMixInput))>>10;
       delVal = (delVal * chorusMixDelay)>>10;
-      return clip(inVal + delVal);
+      return clip16(inVal + delVal);
     }
 
     /** A stereo chorus using two modulated delay lines.
@@ -389,8 +358,8 @@ class FX {
       int32_t inVal2 = (audioInRight * (chorusMixInput))>>10;
       delVal = (delVal * chorusMixDelay)>>10;
       delVal2 = (delVal2 * chorusMixDelay)>>10;
-      audioOutLeft = clip(inVal + delVal);
-      audioOutRight = clip(inVal2 + delVal2);
+      audioOutLeft = clip16(inVal + delVal);
+      audioOutRight = clip16(inVal2 + delVal2);
     }
 
     /** Set the chorus effect depth
@@ -443,22 +412,17 @@ class FX {
 
 
   private:
-    const static int16_t PLUCK_BUFFER_SIZE = 500;
+    const static int16_t PLUCK_BUFFER_SIZE = 1500; // lowest MIDI pitch is 24
     int * pluckBuffer; // [PLUCK_BUFFER_SIZE];
     float pluck_buffer_write_index = 0;
     int prevPluckOutput = 0;
     bool pluckBufferEstablished = false;
     bool reverbInitiated = false;
-    float reverbFeedbackLevel = 0.980; // 0.0 to 1.0
-    int reverbMix = 270; // 0 to 1024
+    float reverbFeedbackLevel = 0.960; // 0.0 to 1.0
+    int reverbMix = 150; // 0 to 1024
     float reverbSize = 1.0; // >= 1, memory allocated to delay lengths
     // float reverbTime = 0.49999; // 0 to 0.5
     Del delay1, delay2, delay3, delay4;
-    APF apf1, apf2, apf3, apf4;
-    // APF apf1 = APF(0.4494, 0.9);
-    // APF apf2 = APF(0.7214, 0.9);
-    // APF apf3 = APF(3.875, 0.9);
-    // APF apf4 = APF(11.125, 0.9);
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
     int16_t * shapeTable;
     int shapeTableSize = 0;
@@ -477,6 +441,7 @@ class FX {
     All allpass1, allpass2;
     bool reverb2Initiated = false;
     int32_t allpassRevOut = 0;
+    int32_t prevSaturationOutput = 0;
 
     void initPluckBuffer() {
       pluckBuffer = new int[PLUCK_BUFFER_SIZE]; // create a new array
@@ -501,32 +466,17 @@ class FX {
       delay2.setTime(8.993 * size); delay2.setLevel(reverbFeedbackLevel); delay2.setFeedback(true);
       delay3.setTime(10.844 * size); delay3.setLevel(reverbFeedbackLevel); delay3.setFeedback(true);
       delay4.setTime(12.118 * size); delay4.setLevel(reverbFeedbackLevel); delay4.setFeedback(true);
-      apf1.setTime(0.4494 * size); apf1.setPhase(0.1); // apf1.setLevel(0.8);
-      apf3.setTime(0.5964 * size); apf3.setPhase(0.3); // apf3.setLevel(0.8);
-      apf4.setTime(3.875 * size);  apf4.setPhase(0.4); // apf4.setLevel(0.8);
-      // apf4.setTime(11.125 * size); apf4.setLevel(0.95);
-      // apf1.setTime(3.857 * size); apf1.setLevel(0.9);
-      // apf2.setTime(11.125 * size); apf2.setLevel(0.9);
-      apf2.setTime(2.875 * size); apf2.setPhase(0.2); // apf2.setLevel(0.8);
-      // apf4.setTime(7.5 * size); apf4.setLevel(0.9);
       reverbInitiated = true;
     }
 
     /** Compute reverb */
     void processReverb(int16_t audioInLeft, int16_t audioInRight) {
       revD1 = delay1.read(); revD2 = delay2.read();
-      // revD1 = apf1.next(delay1.read()); revD2 = apf2.next(delay2.read());
-      // revD1 = apf1.next(delay1.read()); revD2 = delay2.read(); 
       revD3 = delay3.read(); revD4 = delay4.read();
-      // revD3 = apf3.next(delay3.read()); revD4 = apf4.next(delay4.read());
-      // revD3 = apf3.next(delay3.read()); revD4 = delay4.read();
       revP1 = audioInLeft + revD1; revP2 = audioInRight + revD2;
-      // revP1 = apf1.next(audioInLeft) + revD1; revP2 = apf2.next(audioInRight) + revD2;
       revP3 = (revP1 + revP2); revM3 = (revP1 - revP2); revP4 = (revD3 + revD4); revM4 = (revD3 - revD4);
       revP5 = (revP3 + revP4)>>1; revP6 = (revM3 + revM4)>>1; revM5 = (revP3 - revP4)>>1; revM6 = (revM3 - revM4)>>1;
-      // revP5 = (revP3 + revP4); revP6 = (revM3 + revM4); revM5 = (revP3 - revP4); revM6 = (revM3 - revM4);
       delay1.write(revP5); delay2.write(revP6); delay3.write(revM5); delay4.write(revM6);
-      // delay1.write(revP5 * reverbTime); delay2.write(revP6 * reverbTime); delay3.write(revM5 * reverbTime); delay4.write(revM6 * reverbTime);
     }
 
     void initChorus() {

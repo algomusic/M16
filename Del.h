@@ -29,6 +29,7 @@ private:
   int16_t prevOutValue = 0;
   byte filtered = 2;
   int16_t feedbackLevel = 512; // 0 to 1024
+  bool usePSRAM = false;
 
 public:
   /** Constructor.
@@ -56,11 +57,24 @@ public:
    * @param maxDelayTime The maximum delay time in milliseconds
    */
   void setMaxDelayTime(unsigned int maxDelayTime) {
+    //Init PSRAM if availible
+    if (psramInit()) {
+      // Serial.println("\nPSRAM is correctly initialized");
+      usePSRAM = true;
+    } else{
+      // Serial.println("PSRAM not available");
+      usePSRAM = false;
+    }
+
     delete[] delayBuffer; // remove any previous memory allocation
     maxDelayTime_ms = max((unsigned int)0, maxDelayTime);
     delayBufferSize_samples = maxDelayTime_ms * SAMPLE_RATE * 0.001;
-    delayBuffer = new int16_t[delayBufferSize_samples]; // create a new audio buffer
-    empty();
+    if (usePSRAM) {
+      delayBuffer = (int16_t *) ps_malloc(delayBufferSize_samples * sizeof(int16_t)); // calloc fills array with zeros
+    } else {
+      delayBuffer = new int16_t[delayBufferSize_samples]; // create a new audio buffer
+      empty();
+    }
   }
 
   /** Constructor.

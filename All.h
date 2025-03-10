@@ -122,13 +122,16 @@ class All {
     int bufferWriteIndex = 0;
     int bufferReadIndex = 0;
     int prevOutput = 0;
+    bool usePSRAM = false;
 
      /** Create the allpass filter input signal buffer */
     void createInputBuffer() {
       delete[] inputBuffer; // remove any previous memory allocation
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
-      inputBuffer = new int[bufferSize_samples]; // create a new buffer
+      if (usePSRAM) {
+        inputBuffer = (int *) ps_malloc(bufferSize_samples * sizeof(int)); // calloc fills array with zeros
+      } else inputBuffer = new int[bufferSize_samples]; // create a new buffer
       for(int i=0; i<bufferSize_samples; i++) {
         inputBuffer[i] = 0; // zero out the buffer
       }
@@ -139,14 +142,24 @@ class All {
       delete[] outputBuffer; // remove any previous memory allocation
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
-      outputBuffer = new int[bufferSize_samples]; // create a new buffer
+      if (usePSRAM) {
+        outputBuffer = (int *) ps_malloc(bufferSize_samples * sizeof(int)); // calloc fills array with zeros
+      } else outputBuffer = new int[bufferSize_samples]; // create a new buffer
       for(int i=0; i<bufferSize_samples; i++) {
         outputBuffer[i] = 0; // zero out the buffer
       }
     }
 
     /** Set the allpass filter params */
-    void initAllpass() { 
+    void initAllpass() {
+      //Init PSRAM if availible
+      if (psramInit()) {
+        // Serial.println("\nPSRAM is correctly initialized");
+        usePSRAM = true;
+      } else{
+        // Serial.println("PSRAM not available");
+        usePSRAM = false;
+      }
       createInputBuffer();
       createOutputBuffer();
       allpassInitiated = true;
