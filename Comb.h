@@ -176,22 +176,23 @@ class Comb {
       delete[] outputBuffer; // remove any previous memory allocation
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
-      if (usePSRAM) {
-        outputBuffer = (int *) ps_malloc(bufferSize_samples * sizeof(int)); // calloc fills array with zeros
-      } else outputBuffer = new int[bufferSize_samples]; // create a new buffer
-      for(int i=0; i<bufferSize_samples; i++) {
-        outputBuffer[i] = 0; // zero out the buffer
+      if (usePSRAM && ESP.getFreePsram() > bufferSize_samples * sizeof(int)) {
+        outputBuffer = (int *) ps_calloc(bufferSize_samples, sizeof(int)); // calloc fills array with zeros
+      } else {
+        outputBuffer = new int[bufferSize_samples]; // create a new buffer
+        for(int i=0; i<bufferSize_samples; i++) {
+          outputBuffer[i] = 0; // zero out the buffer
+        }
       }
     }
 
     /** Set the comb filter params */
     void initComb() { 
-      //Init PSRAM if availible
-      if (psramInit()) {
-        // Serial.println("\nPSRAM is correctly initialized");
+      if (psramFound()) {
+        // Serial.println("PSRAM is availible in comb");
         usePSRAM = true;
-      } else{
-        // Serial.println("PSRAM not available");
+      } else {
+        // Serial.println("PSRAM not available in comb");
         usePSRAM = false;
       }
       createInputBuffer();

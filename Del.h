@@ -57,20 +57,18 @@ public:
    * @param maxDelayTime The maximum delay time in milliseconds
    */
   void setMaxDelayTime(unsigned int maxDelayTime) {
-    //Init PSRAM if availible
-    if (psramInit()) {
-      // Serial.println("\nPSRAM is correctly initialized");
+    if (psramFound()) {
+      // Serial.println("PSRAM is availible in delay");
       usePSRAM = true;
-    } else{
-      // Serial.println("PSRAM not available");
+    } else {
+      // Serial.println("PSRAM not available in delay");
       usePSRAM = false;
     }
-
     delete[] delayBuffer; // remove any previous memory allocation
     maxDelayTime_ms = max((unsigned int)0, maxDelayTime);
     delayBufferSize_samples = maxDelayTime_ms * SAMPLE_RATE * 0.001;
-    if (usePSRAM) {
-      delayBuffer = (int16_t *) ps_malloc(delayBufferSize_samples * sizeof(int16_t)); // calloc fills array with zeros
+    if (usePSRAM && ESP.getFreePsram() > delayBufferSize_samples * sizeof(int16_t)) {
+      delayBuffer = (int16_t *) ps_calloc(delayBufferSize_samples, sizeof(int16_t)); // calloc fills array with zeros
     } else {
       delayBuffer = new int16_t[delayBufferSize_samples]; // create a new audio buffer
       empty();
