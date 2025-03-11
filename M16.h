@@ -193,7 +193,6 @@ int16_t rightAudioOuputValue = 0;
   }
 #endif
 
-
 /** Return freq from a MIDI pitch 
 * @pitch The MIDI pitch to be converted
 */
