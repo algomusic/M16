@@ -344,7 +344,7 @@ class FX {
     * @audioOutLeft A variable to receive audio output for the right channel
     */
     inline
-    void chorusStereo(int32_t audioInLeft, int32_t audioInRight, int16_t &audioOutLeft, int16_t &audioOutRight) {
+    void chorusStereo(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
       // set up first time called
       if (!chorusInitiated) {
         initChorus();
