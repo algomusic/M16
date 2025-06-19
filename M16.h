@@ -284,6 +284,12 @@ float sigmoid(float inVal) { // 0.0 to 1.0
   }
 }
 
+/** Return cosine value based on step between -1.0 to 1.0 */
+inline
+float cosr(int step, int maxSteps = 16, float pulseDivision = 8) {
+  return cos(((step % maxSteps) / pulseDivision) * 3.1459);
+}
+
 /** Return a partial increment toward target from current value
 * @curr The curent value
 * @target The desired final value
