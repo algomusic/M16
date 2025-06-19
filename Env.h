@@ -88,12 +88,12 @@ class Env {
 //      Serial.println("start");
       peaked = false;
       envState = 1; // attack
-      JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (rand(MAX_ENV_LEVEL * 0.35));
+      JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (rand(MAX_ENV_LEVEL * 0.1));
       releaseStartLevelDiff = JIT_MAX_ENV_LEVEL; // 0
-      jitEnvRelease = envRelease + rand(envRelease * 0.2);
-      jitEnvAttack = envAttack + rand(envAttack * 0.2);
-      jitEnvDecay = envDecay; // + rand(envDecay * 0.2);
-      envStartTime = micros(); //millis();
+      jitEnvRelease = envRelease + rand(envRelease * 0.05);
+      jitEnvAttack = envAttack + rand(envAttack * 0.05);
+      jitEnvDecay = envDecay; 
+      envStartTime = micros(); 
       currDelayRepeats = delayRepeats;
       next();
     }
@@ -137,16 +137,17 @@ class Env {
         case 1:
           // attack
           if (jitEnvAttack == 0) {
-            envState = 2; // go to hold
             envVal = JIT_MAX_ENV_LEVEL;
+            envState = 2; // go to hold
             return envVal;
           } else if (elapsedTime <= jitEnvAttack) {
             double attackPortion = elapsedTime / (double)jitEnvAttack;
             envVal = max(envVal, min(JIT_MAX_ENV_LEVEL, (uint32_t)(JIT_MAX_ENV_LEVEL * attackPortion)));
+            // envVal = (envVal + JIT_MAX_ENV_LEVEL)>>1;
             return envVal;
           } else {
-            envState = 2; // go to hold
             envVal = JIT_MAX_ENV_LEVEL;
+            envState = 2; // go to hold
             return envVal;
           }
           break;
@@ -228,7 +229,7 @@ class Env {
     */
     inline
     void setMaxLevel(float level) {
-      MAX_ENV_LEVEL = (MAX_16 * 2 - 1) * level;
+      MAX_ENV_LEVEL = (MAX_16 * 2 - 1) * max(0.0f,level);
       JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
       sustainLevel = envSustain * MAX_ENV_LEVEL;
       // Serial.println("setting sus level to " + String(sustainLevel));
