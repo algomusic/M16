@@ -162,7 +162,7 @@ public:
       if (outValue < MIN_16) outValue = MIN_16;
     }
     if (delayFeedback) {
-      inValue = (inValue + ((outValue * feedbackLevel)>>10)) * 0.9f;
+      inValue = (inValue + ((outValue * feedbackLevel)>>10)) * 0.98f; // prevent runaway
     }
     if (inValue > MAX_16) inValue =  MAX_16;
     if (inValue < MIN_16) inValue = MIN_16;
@@ -177,7 +177,7 @@ public:
   }
 
   /** Read the buffer at the delayTime + an offset without incrementing read/write index 
-   * @pos delay offset in samples, can be positive or negative
+   * @param pos The delay offset in samples, can be positive or negative
   */
   inline
 	int16_t read(int32_t pos) {
@@ -200,8 +200,8 @@ public:
     return (outValue * delayLevel)>>10;
   }
 
-  /** Read the buffer at the delayTime and increment the read/write index
-  * @param inVal The signal input.
+  /** Write to the buffer and increment the write index
+  * @param inValue The signal input.
   */
   inline
 	void write(int inValue) {
