@@ -168,7 +168,7 @@ class Env {
           // if (jitEnvDecay > 0 && microsTime < decayStartTime + jitEnvDecay && envVal > sustainLevel && abs((int)envVal) > 1) { // decay
           if (jitEnvDecay > 0 && envVal > sustainLevel) { // decay
             float dPercent = max(0.0f, 1.0f - (microsTime - decayStartTime) / (float)jitEnvDecay);
-            dPercent = dPercent * dPercent * dPercent; // exp
+            dPercent = dPercent * dPercent * dPercent  * dPercent  * dPercent * dPercent; // very fast exp
             // envVal = sustainTriggerLevel + decayStartLevelDiff * dPercent;
             // envVal *= dPercent;
             envVal = decayStartLevel * dPercent;
