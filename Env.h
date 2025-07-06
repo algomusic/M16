@@ -46,8 +46,7 @@ class Env {
     */
     void setDecayRepeats(int val) {
       if (val >= 0) {
-        delayRepeats = val;
-        delayExp = 1;
+        decayRepeats = val;
       }
     }
 
@@ -94,7 +93,7 @@ class Env {
       jitEnvAttack = envAttack + rand(envAttack * 0.05);
       jitEnvDecay = envDecay; 
       envStartTime = micros(); 
-      currDelayRepeats = delayRepeats;
+      currDecayRepeats = decayRepeats;
       next();
     }
 
@@ -143,7 +142,6 @@ class Env {
           } else if (elapsedTime <= jitEnvAttack) {
             double attackPortion = elapsedTime / (double)jitEnvAttack;
             envVal = max(envVal, min(JIT_MAX_ENV_LEVEL, (uint32_t)(JIT_MAX_ENV_LEVEL * attackPortion)));
-            // envVal = (envVal + JIT_MAX_ENV_LEVEL)>>1;
             return envVal;
           } else {
             envVal = JIT_MAX_ENV_LEVEL;
@@ -165,21 +163,18 @@ class Env {
           break;
         case 3:
           // decay
-          // if (jitEnvDecay > 0 && microsTime < decayStartTime + jitEnvDecay && envVal > sustainLevel && abs((int)envVal) > 1) { // decay
           if (jitEnvDecay > 0 && envVal > sustainLevel) { // decay
             float dPercent = max(0.0f, 1.0f - (microsTime - decayStartTime) / (float)jitEnvDecay);
-            dPercent = dPercent * dPercent * dPercent  * dPercent  * dPercent * dPercent; // very fast exp
-            // envVal = sustainTriggerLevel + decayStartLevelDiff * dPercent;
-            // envVal *= dPercent;
+            dPercent = dPercent * dPercent * dPercent * dPercent; // very fast exp
             envVal = decayStartLevel * dPercent;
             return envVal;
           } else {
-            if (currDelayRepeats > 0) {
-              currDelayRepeats -= 1;
-              envStartTime += jitEnvDecay;
+            if (currDecayRepeats > 0) {
+              currDecayRepeats -= 1;
+              decayStartTime += jitEnvDecay;// microsTime; // reset decay start time
+              envVal = JIT_MAX_ENV_LEVEL;
             } else {
               envState = 4; // go to sustain
-              // if (delayRepeats > 0 && sustainLevel == 0) envVal = JIT_MAX_ENV_LEVEL;
             }
             return envVal;
           }
@@ -191,7 +186,8 @@ class Env {
             return envVal;
           } else {
             releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
-            releaseStartlevel = envVal; //JIT_MAX_ENV_LEVEL - releaseStartLevelDiff;
+            if (decayRepeats > 0) envVal = JIT_MAX_ENV_LEVEL;
+            releaseStartlevel = envVal;
             releaseStartTime = microsTime;
             envState = 5; // go to release
             return envVal;
@@ -199,9 +195,7 @@ class Env {
           break;
         case 5:
           // release
-          // if (microsTime < releaseStartTime + jitEnvRelease && envVal > 10) {
           if (envVal > 10) {
-            // float rPercent = pow(1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease, 4); // exp
             float rPercent = max(0.0f, 1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease);
             rPercent = rPercent * rPercent * rPercent; // faster exp
             envVal = releaseStartlevel * rPercent;
@@ -255,9 +249,8 @@ class Env {
     uint32_t envVal = 0;
     uint32_t releaseStartLevelDiff = MAX_ENV_LEVEL;
     uint32_t decayStartLevel, decayStartLevelDiff, releaseStartlevel;
-    int delayRepeats = 0;
-    int currDelayRepeats = 0;
-    int delayExp = 4;
+    int decayRepeats = 0;
+    int currDecayRepeats = 0;
 
     int envState = 0; // complete = 0, attack = 1, hold = 2, decay = 3, sustain = 4, release = 5
 

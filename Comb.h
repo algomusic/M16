@@ -53,6 +53,10 @@ class Comb {
       int delY = outputBuffer[bufferReadIndex]; 
       //figure out your current y term: y[n] = a*x[n] + b*x[n-d] + c*y[n-d]
       int output = clip16(((inputLevel * input)>>10) + ((feedforwardLevel * delX)>>10) + ((feedbackLevel * delY)>>10));
+      // filter the output?
+
+      // delay modulation? AKA C15 - https://www.nonlinear-labs.de/product/synth-engine/synth-engine.html#img5-2
+
       //stick the output in the ybuffer
       outputBuffer[bufferWriteIndex] = output;
       //increment write index
