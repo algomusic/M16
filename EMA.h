@@ -70,7 +70,9 @@ class EMA {
     int16_t nextLPF(int32_t input) {
       // no input clipping implemented - take care.
       // y[i]=α⋅x[i]+(1−α)⋅y[i−1]
-      outPrev = ((input * alpha_val)>>10) + ((outPrev * (1024 - alpha_val))>>10);
+      if (f < 10000) {
+        outPrev = ((input * alpha_val)>>10) + ((outPrev * (1024 - alpha_val))>>10);
+      } else outPrev = input;
       return outPrev;
     }
 
