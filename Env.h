@@ -87,10 +87,10 @@ class Env {
 //      Serial.println("start");
       peaked = false;
       envState = 1; // attack
-      JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (rand(MAX_ENV_LEVEL * 0.1));
+      JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (rand(MAX_ENV_LEVEL * 0.05));
       releaseStartLevelDiff = JIT_MAX_ENV_LEVEL; // 0
       jitEnvRelease = envRelease + rand(envRelease * 0.05);
-      jitEnvAttack = envAttack + rand(envAttack * 0.05);
+      jitEnvAttack = envAttack; // + rand(envAttack * 0.02);
       jitEnvDecay = envDecay; 
       envStartTime = micros(); 
       currDecayRepeats = decayRepeats;
