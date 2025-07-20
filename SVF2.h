@@ -44,8 +44,8 @@ class SVF2 {
     * @param freq_val  0 - 10k Hz (~SAMPLE_RATE/4).
     */
     inline
-    void setFreq(int32_t freq_val) {
-      freq = max(0, min(maxFreq, freq_val));
+    void setFreq(int freq_val) {
+      freq = max(0, min((int)maxFreq, freq_val));
       f = min(0.96f, 2.0f * sin(3.1459f * freq * SAMPLE_RATE_INV));
     }
 
@@ -154,7 +154,7 @@ class SVF2 {
       }
       int32_t hpfAmnt = 0;
       if (mix > 0.5) hpfAmnt = clip16(high * pow((mix - 0.5) * 2, 0.5));
-      return max(-MAX_16, min(MAX_16, lpfAmnt + bpfAmnt + hpfAmnt));
+      return max(-MAX_16, min(MAX_16, (int)(lpfAmnt + bpfAmnt + hpfAmnt)));
     }
 
     /** Calculate the next Allpass filter sample, given an input signal.

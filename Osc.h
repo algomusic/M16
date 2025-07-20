@@ -36,12 +36,12 @@ public:
 	inline
 	int16_t next() {
     int32_t sampVal = readTable();
-    sampVal = (sampVal + prevSampVal)>>1; // smooth
+    // sampVal = (sampVal + prevSampVal)>>1; // smooth
     incrementPhase();
     if (spread1 != 1) {
       sampVal = doSpread(sampVal);
     }
-    prevSampVal = sampVal;
+    // prevSampVal = sampVal;
     return sampVal;
 	}
 
@@ -209,8 +209,8 @@ public:
         }
       }
     }
-    sampVal = (sampVal + prevSampVal)>>1; // smooth
-    prevSampVal = sampVal;
+    // sampVal = (sampVal + prevSampVal)>>1; // smooth
+    // prevSampVal = sampVal;
     incrementPhase();
     return sampVal;
   }
@@ -223,7 +223,7 @@ public:
    * In Phase Mod, typically values 1/10th of FM ModIndex values provide equvalent change.
    */
   inline
-  int16_t phMod(int32_t modulator, float modIndex) {
+  int16_t phMod(int modulator, float modIndex) {
     modulator *= modIndex;
     int32_t sampVal = table[(int16_t)(phase_fractional + (modulator >> 4)) & (TABLE_SIZE - 1)];
   	incrementPhase();
@@ -238,7 +238,7 @@ public:
   *  Multiplying incomming oscillator amplitude between 0.5 - 2.0 is best.
   */
   inline
-  int16_t ringMod(int16_t audioIn) {
+  int16_t ringMod(int audioIn) {
     incrementPhase();
     int32_t currSamp = readTable();
     int16_t sampVal = (currSamp * audioIn)>>15;
@@ -280,10 +280,10 @@ public:
    * Credit to description in The CMT (Roads 1996).
    */
   inline
-  int16_t feedback(int modIndex) {
+  int16_t feedback(int32_t modIndex) {
   	int16_t y = table[(int)feedback_phase_fractional] >> 3;
   	int16_t s = readTableIndex(y);
-  	int f = ((int32_t)modIndex * (int32_t)s) >> 16;
+  	int f = (modIndex * (int32_t)s) >> 16;
 		phase_fractional += f + phase_increment_fractional;
 		if (phase_fractional > TABLE_SIZE) {
 			phase_fractional -= TABLE_SIZE;
@@ -528,7 +528,7 @@ public:
       val += gaussRand(deviation) - halfDev;
       if (val > MAX_16) val = val - MAX_16;
       if (val < MIN_16) val = MIN_16 + abs(val) - MAX_16;
-      theTable[i] = max(MIN_16, min(MAX_16, val));
+      theTable[i] = max(MIN_16, min(MAX_16, (int)val));
     }
   }
 
@@ -634,7 +634,7 @@ private:
 	int16_t doSpread(int32_t sampVal) {
     int32_t spreadSamp1 = table[(int)phase_fractional_s1];
     int32_t spreadSamp2 = table[(int)phase_fractional_s2];
-    sampVal = clip16((sampVal + ((spreadSamp1 * 600)>>10) + ((spreadSamp2 * 600)>>10))>>1);
+    sampVal = clip16((sampVal + ((spreadSamp1 * 500)>>10) + ((spreadSamp2 * 500)>>10))>>1);
     incrementSpreadPhase();
     return sampVal;
 	}

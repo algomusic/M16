@@ -42,7 +42,7 @@ class SVF {
     */
     inline
     void setFreq(int32_t freq_val) {
-      f = 2 * sin(3.1459 * max(0, (int)min(maxFreq, freq_val)) * SAMPLE_RATE_INV);
+      f = 2 * sin(3.1459 * max((int32_t)0, (int32_t)min(maxFreq, freq_val)) * SAMPLE_RATE_INV);
     }
 
     /** Return the cutoff or centre frequency of the filter.*/
@@ -80,7 +80,7 @@ class SVF {
      *  Input is an output from an oscillator or other audio element.
      */
     inline
-    int16_t next(int32_t input) {
+    int16_t next(int input) {
       return nextLPF(input);
     }
 
@@ -101,7 +101,7 @@ class SVF {
     int16_t nextHPF(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      return max(-MAX_16, (int)min((int32_t)MAX_16, high));
+      return max(-MAX_16, min(MAX_16, (int)high));
     }
 
     /** Retrieve the current Highpass filter sample.
@@ -110,17 +110,17 @@ class SVF {
      */
     inline
     int16_t currentHPF() {
-      return max(-MAX_16, (int)min((int32_t)MAX_16, high));
+      return max(-MAX_16, min(MAX_16, (int)high));
     }
 
     /** Calculate the next Bandpass filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
      */
     inline
-    int16_t nextBPF(int32_t input) {
+    int16_t nextBPF(int input) {
       input = clip16(input);
       calcFilter(input);
-      return max(-MAX_16, (int)min((int32_t)MAX_16, band));
+      return max(-MAX_16, min(MAX_16, (int)band));
     }
 
     /** Retrieve the current Bandpass filter sample.
@@ -129,7 +129,7 @@ class SVF {
      */
     inline
     int16_t currentBPF() {
-      return max(-MAX_16, (int)min((int32_t)MAX_16, band));
+      return max(-MAX_16, min(MAX_16, (int)band));
     }
 
     /** Calculate the next filter sample, given an input signal and a filter mix value.
@@ -138,7 +138,7 @@ class SVF {
      *  Mix 0 is LPF, Mix 0.5 is BPF and mix 1.0 is HPF, in between are combinations
      */
     inline
-    int16_t nextFiltMix(int32_t input, float mix) {
+    int16_t nextFiltMix(int input, float mix) {
       input = clip16(input);
       calcFilter(input);
       int32_t lpfAmnt = 0;
@@ -149,7 +149,7 @@ class SVF {
       }
       int32_t hpfAmnt = 0;
       if (mix > 0.5) hpfAmnt = clip16(high * pow((mix - 0.5) * 2, 0.5));
-      return max(-MAX_16, min(MAX_16, lpfAmnt + bpfAmnt + hpfAmnt));
+      return max(-MAX_16, min(MAX_16, (int)(lpfAmnt + bpfAmnt + hpfAmnt)));
     }
 
     /** Calculate the next Notch filter sample, given an input signal.
@@ -159,7 +159,7 @@ class SVF {
     int16_t nextNotch(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      return max(-MAX_16, (int)min((int32_t)MAX_16, notch));
+      return max(-MAX_16, min(MAX_16, (int)notch));
     }
 
   private:
@@ -175,7 +175,8 @@ class SVF {
       input *= resOffset;
       low += f * band;
       // high = ((scale * input) >> 7) - low - ((q * band) >> 8);
-      high = ((scale * input) >> 15) - low - ((q * band) >> 16);
+      // high = ((scale * input) >> 15) - low - ((q * band) >> 16);
+      high = ((scale * input) >> 14) - low - ((q * band) >> 15);
       band += f * high;
       notch = high + low;
     }

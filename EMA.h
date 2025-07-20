@@ -24,7 +24,7 @@ class EMA {
      * @param newAlpha 0.0 - 1.0
     */
     EMA(float newAlpha) { 
-      newAlpha = max(0, min(1024, (int)(newAlpha * 1024)));
+      newAlpha = max((int32_t)0, min((int32_t)1024, (int32_t)(newAlpha * 1024)));
       alpha_val = max(10.0f, (1024.0f - newAlpha));
     }
 
@@ -41,9 +41,9 @@ class EMA {
     inline
     void setFreq(int32_t freq_val) {
       // very approximate mapping of freq_val to f
-      f = max(40, min(10000, freq_val));
+      f = max((int32_t)40, min((int32_t)10000, freq_val));
       float cutVal = f * 0.0001;
-      alpha_val = max(10, (int)((1.0f - pow((1.0f - cutVal), 0.3f)) * 1024));
+      alpha_val = max((int32_t)10, (int32_t)((1.0f - pow((1.0f - cutVal), 0.3f)) * 1024));
     }
 
     /** Return the cutoff or centre frequency of the filter.*/
@@ -60,7 +60,7 @@ class EMA {
     void setCutoff(float cutoff_val) {
       f = max(40.0f, min(10000.0f, cutoff_val * 10000)); // approximate mapping
       float cutVal = max(0.0f, min(1.0f, cutoff_val));
-      alpha_val = max(10, (int)((1.0f - pow((1.0f - cutVal), 0.2f)) * 1024));
+      alpha_val = max((int32_t)10, (int32_t)((1.0f - pow((1.0f - cutVal), 0.2f)) * (int32_t)1024));
     }
 
     /** Calculate the next Lowpass filter sample, given an input signal.

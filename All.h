@@ -24,8 +24,8 @@ class All {
 
     /** Constructor */
     All(float delay, float feedback) {
-        setDelayTime(delay);
-        setFeedbackLevel(feedback);
+      setDelayTime(delay);
+      setFeedbackLevel(feedback);
     }
 
     /** Calculate the next Allpass filter sample, given an input signal.
@@ -76,17 +76,6 @@ class All {
       return feedbackLevel * 0.0009765625;
     }
 
-    /** Set the allpass filter size
-     * @param size The length of the maximum delay line in milliseconds
-     */
-    inline
-    void setMaxTime(int16_t size) {
-      if (size <= delayTime) {
-        allpassSize = size;
-        createInputBuffer();
-      } else Serial.println("Allpass size must be less than or equal to delay time");
-    }
-
     /** Set the allpass filter delay time
      * @param time The length of the delay line in milliseconds
      */
@@ -99,7 +88,7 @@ class All {
         }
         delayTime = time;
         delayTime_samples = delayTime * 0.001f * SAMPLE_RATE;
-      } else Serial.println("Allpass delay time must be between 0 and allpass size");
+      } else Serial.println("Allpass delay time must be between 0 and allpass size of " + String(allpassSize));
       // set the read index
       bufferReadIndex = (bufferWriteIndex - delayTime_samples);
       if (bufferReadIndex < 0) {
@@ -112,7 +101,7 @@ class All {
   private:
 
     bool allpassInitiated = false;
-    int16_t allpassSize = 100; // in ms 
+    int allpassSize = 100; // in ms 
     int bufferSize_samples;
     float delayTime = 1; // in ms // 0 - allpassSize
     int delayTime_samples;
@@ -129,9 +118,13 @@ class All {
       delete[] inputBuffer; // remove any previous memory allocation
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
-      if (usePSRAM) {
-        inputBuffer = (int *) ps_malloc(bufferSize_samples * sizeof(int)); // calloc fills array with zeros
-      } else inputBuffer = new int[bufferSize_samples]; // create a new buffer
+      #if IS_ESP32()
+        if (usePSRAM) {
+          inputBuffer = (int *) ps_malloc(bufferSize_samples * sizeof(int)); // calloc fills array with zeros
+        } else inputBuffer = new int[bufferSize_samples]; // create a new buffer
+      #else
+        inputBuffer = new int[bufferSize_samples]; // create a new buffer
+      #endif
       for(int i=0; i<bufferSize_samples; i++) {
         inputBuffer[i] = 0; // zero out the buffer
       }
@@ -142,9 +135,13 @@ class All {
       delete[] outputBuffer; // remove any previous memory allocation
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
-      if (usePSRAM && ESP.getFreePsram() > bufferSize_samples * sizeof(int)) {
-        outputBuffer = (int *) ps_calloc(bufferSize_samples, sizeof(int)); // calloc fills array with zeros
-      } else outputBuffer = new int[bufferSize_samples]; // create a new buffer
+      #if IS_ESP32()
+        if (usePSRAM && ESP.getFreePsram() > bufferSize_samples * sizeof(int)) {
+          outputBuffer = (int *) ps_calloc(bufferSize_samples, sizeof(int)); // calloc fills array with zeros
+        } else outputBuffer = new int[bufferSize_samples]; // create a new buffer
+      #else
+        inputBuffer = new int[bufferSize_samples]; // create a new buffer
+      #endif
       for(int i=0; i<bufferSize_samples; i++) {
         outputBuffer[i] = 0; // zero out the buffer
       }
@@ -152,13 +149,15 @@ class All {
 
     /** Set the allpass filter params */
     void initAllpass() {
-      if (psramFound()) {
-        // Serial.println("PSRAM is availible in allpass");
-        usePSRAM = true;
-      } else {
-        // Serial.println("PSRAM not available in allpass");
-        usePSRAM = false;
-      }
+      #if IS_ESP32()
+        if (psramFound()) {
+          // Serial.println("PSRAM is availible in allpass");
+          usePSRAM = true;
+        } else {
+          // Serial.println("PSRAM not available in allpass");
+          usePSRAM = false;
+        }
+      #endif
       createInputBuffer();
       createOutputBuffer();
       allpassInitiated = true;

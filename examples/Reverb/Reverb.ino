@@ -36,7 +36,8 @@ void setup() {
   #elif IS_ESP32()
     effect1.setReverbSize(16); // quality and memory >= 1 
   #endif
-  effect1.setReverbLength(0.9); // 0.0 - 1.0
+  effect1.setReverbLength(0.8); // 0.0 - 1.0
+  effect1.setReverbMix(0.4); // 0.0 - 1.0
   audioStart();
 }
 
@@ -71,7 +72,7 @@ void audioUpdate() {
   #elif IS_ESP32()
     int32_t oscVal = filter1.nextLPF((osc1.next() * ampEnv1.getValue())>>16);
     effect1.reverbStereo(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
-    // stereoReverb2 is a smoother reverb but requires more processing power
+    // try reverbStereo2 is a smoother reverb that requires more processing power
     // effect1.reverbStereo2(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal); 
   #endif
   i2s_write_samples(leftVal, rightVal);

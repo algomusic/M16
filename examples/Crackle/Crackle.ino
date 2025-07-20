@@ -32,7 +32,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  int16_t leftVal = (aOsc1.next() * vol)>>10;
-  int16_t rightVal = leftVal;
+  int32_t leftVal = (aOsc1.next() * vol)>>10;
+  int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

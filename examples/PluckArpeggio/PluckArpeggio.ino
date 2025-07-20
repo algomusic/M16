@@ -33,7 +33,7 @@ void setup() {
   stepTime = millis() + stepDelta;
   arp1.start();
   aOsc1.setPitch(arp1.next());
-  filter.setFreq(3500);
+  filter.setFreq(10000);
   audioStart();
 }
 
@@ -62,7 +62,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  int16_t leftVal = (filter.nextLPF(effect1.pluck((aOsc1.next() * ampEnv1.getValue() >> 16), aOsc1.getFreq(), feedback)) * vol)>>10;
-  int16_t rightVal = leftVal;
+  int32_t leftVal = (filter.nextLPF(effect1.pluck((aOsc1.next() * ampEnv1.getValue() >> 16), aOsc1.getFreq(), feedback)) * vol)>>10;
+  int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

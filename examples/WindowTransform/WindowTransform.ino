@@ -46,7 +46,7 @@ void loop() {
 */
 void audioUpdate() {
   // nextWTrans args: second wave, amount of second wave, duel window?, invert second wave?
-  int16_t leftVal = osc1.nextWTrans(sawtoothWave, windowSize, false, false); 
-  int16_t rightVal = leftVal;
+  int32_t leftVal = osc1.nextWTrans(sawtoothWave, windowSize, false, false); 
+  int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

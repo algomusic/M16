@@ -1,5 +1,4 @@
-/* M16 sequencer example
- */
+// M16 sequencer example
 #include "M16.h"
 #include "Osc.h"
 #include "Env.h"
@@ -48,7 +47,8 @@ void setup() {
   }
   seqGen();
   effect1.setReverbSize(16);
-  effect1.setReverbLength(0.7);
+  effect1.setReverbLength(0.25);
+  effect1.setReverbMix(0.2);
   // seti2sPins(25, 27, 12, 21); // or similar if required
   audioStart();
 }

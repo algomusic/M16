@@ -299,7 +299,7 @@ class FX {
     */
     inline
     void setReverbMix(float rMix) {
-      reverbMix = max(0, min(1024, (int)(rMix * 1204.0f)));
+      reverbMix = max(0, min(1024, (int)(rMix * 1024.0f)));
       // Serial.print("reverbMix ");Serial.println(reverbMix);
     }
 
@@ -418,8 +418,8 @@ class FX {
     int prevPluckOutput = 0;
     bool pluckBufferEstablished = false;
     bool reverbInitiated = false;
-    float reverbFeedbackLevel = 0.960; // 0.0 to 1.0
-    int reverbMix = 150; // 0 to 1024
+    float reverbFeedbackLevel = 0.2; // 0.0 to 1.0
+    int reverbMix = 80; // 0 to 1024
     float reverbSize = 1.0; // >= 1, memory allocated to delay lengths
     // float reverbTime = 0.49999; // 0 to 0.5
     Del delay1, delay2, delay3, delay4;

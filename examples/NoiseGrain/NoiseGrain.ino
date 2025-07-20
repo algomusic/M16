@@ -21,7 +21,7 @@ void loop() {
   
   if (msNow - changeTime > 1000 || msNow - changeTime < 0) {
       changeTime = msNow;
-    int grain = random(500)+1;
+    int grain = random(1000)+1;
     Osc::noiseGen(waveTable, grain);
     Serial.println(grain);
     ampEnv.start();

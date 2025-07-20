@@ -44,7 +44,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  int16_t leftVal = osc1.ringMod(osc2.next());
-  int16_t rightVal = leftVal;
+  int32_t leftVal = osc1.ringMod(osc2.next());
+  int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

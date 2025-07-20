@@ -57,22 +57,27 @@ public:
    * @param maxDelayTime The maximum delay time in milliseconds
    */
   void setMaxDelayTime(unsigned int maxDelayTime) {
-    if (psramFound()) {
-      // Serial.println("PSRAM is availible in delay");
-      usePSRAM = true;
-    } else {
-      // Serial.println("PSRAM not available in delay");
-      usePSRAM = false;
-    }
     delete[] delayBuffer; // remove any previous memory allocation
     maxDelayTime_ms = max((unsigned int)0, maxDelayTime);
     delayBufferSize_samples = maxDelayTime_ms * SAMPLE_RATE * 0.001;
-    if (usePSRAM && ESP.getFreePsram() > delayBufferSize_samples * sizeof(int16_t)) {
-      delayBuffer = (int16_t *) ps_calloc(delayBufferSize_samples, sizeof(int16_t)); // calloc fills array with zeros
-    } else {
+    #if IS_ESP32()
+      if (psramFound()) {
+        // Serial.println("PSRAM is availible in delay");
+        usePSRAM = true;
+      } else {
+        // Serial.println("PSRAM not available in delay");
+        usePSRAM = false;
+      }
+      if (usePSRAM && ESP.getFreePsram() > delayBufferSize_samples * sizeof(int16_t)) {
+        delayBuffer = (int16_t *) ps_calloc(delayBufferSize_samples, sizeof(int16_t)); // calloc fills array with zeros
+      } else {
+        delayBuffer = new int16_t[delayBufferSize_samples]; // create a new audio buffer
+        empty();
+      }
+    #else 
       delayBuffer = new int16_t[delayBufferSize_samples]; // create a new audio buffer
       empty();
-    }
+    #endif
   }
 
   /** Constructor.
@@ -114,7 +119,7 @@ public:
 
   /** Specify the delay feedback level, from 0.0 to 1.0 */
   void setLevel(float level) {
-    delayLevel = min(1024, max(0, (int)(pow(level, 0.8) * 1024.0f)));
+    delayLevel = min((int32_t)1024, max((int32_t)0, (int32_t)(pow(level, 0.8) * 1024.0f)));
   }
 
   /** Return the delay level, from 0.0 to 1.0 */
@@ -130,7 +135,7 @@ public:
   /** Specify the delay feedback level, from 0.0 to 1.0 */
   void setFeedbackLevel(float level) {
     setFeedback(true); // ensure feedback is on
-    feedbackLevel = min(1024, max(0, (int)(pow(level, 0.8) * 1024.0f)));
+    feedbackLevel = min((int32_t)1024, max((int32_t)0, (int32_t)(pow(level, 0.8) * 1024.0f)));
   }
 
   /** Return the delay level, from 0.0 to 1.0 */
@@ -180,7 +185,7 @@ public:
    * @param pos The delay offset in samples, can be positive or negative
   */
   inline
-	int16_t read(int32_t pos) {
+	int16_t read(int pos) {
     int outValue = 0;
     int readPos = writePos - delayTime_samples + pos;
     if (readPos < 0) readPos += delayBufferSize_samples;

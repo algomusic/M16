@@ -130,9 +130,9 @@ void loop() {
 */
 void audioUpdate() {
   // nextWTrans args: second wave, amount of second wave, duel window?, invert second wave?
-  int16_t leftVal = (filter1.simpleLPF(osc1.nextWTrans(sawtoothWave, windowSize, false, false)) * ampEnv1.getValue()) >> 16;
+  int32_t leftVal = (filter1.nextLPF(osc1.nextWTrans(sawtoothWave, windowSize, false, false)) * ampEnv1.getValue()) >> 16;
   leftVal = (leftVal + delay1.next(leftVal)) >> 1;
   leftVal = (leftVal * volume) >> 7;
-  int16_t rightVal = leftVal;
+  int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

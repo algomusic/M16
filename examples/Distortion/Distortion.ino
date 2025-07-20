@@ -69,7 +69,7 @@ void audioUpdate() {
   // int16_t leftVal = (filter.nextLPF(effect1.pluck((aOsc1.next() * ampEnv1.getValue() >> 16), aOsc1.getFreq(), feedback)) * vol)>>10;
   int16_t leftVal = (effect1.pluck((aOsc1.next() * ampEnv1.getValue() >> 16), aOsc1.getFreq(), feedback) * vol)>>10;
   leftVal = effect1.overdrive(leftVal, 2.5); // applies some gain and distortion
-  // leftVal = effect1.softClip(leftVal, 2); // applies some compression and distortion
+  // leftVal = effect1.softClip(leftVal, 2.5); // applies some compression and distortion
   int16_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

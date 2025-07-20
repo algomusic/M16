@@ -5,13 +5,11 @@
 // ESP8266 struggles with spread, try using window transform or osc morph instead
 #include "M16.h" 
 #include "Osc.h"
-#include "SVF.h"
 #include "Env.h"
 
 int16_t waveTable [TABLE_SIZE]; // empty wavetable
 Osc aOsc1(waveTable);
 Osc modOsc(waveTable);
-SVF filter;
 Env modEnv;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow = millis();
@@ -24,7 +22,6 @@ void setup() {
   Serial.begin(115200);
   Osc::sinGen(waveTable); // fill the wavetable
   aOsc1.setPitch(69);
-  filter.setFreq(6000);
   modEnv.setAttack(400);
   modEnv.setRelease(1600);
   audioStart();
@@ -64,7 +61,7 @@ void loop() {
   if (msNow - envTime > 11 || msNow - envTime < 0) {
     envTime = msNow;
     modEnv.next();
-    modVal = modIndex * modEnv.getValue() / MAX_16;
+    modVal = modIndex * modEnv.getValue() * MAX_16_INV;
   }
 }
 
@@ -73,12 +70,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  #if IS_ESP8266() // 8266 can't manage filter as well as phMod
-    int16_t leftVal = (aOsc1.phMod(modOsc.next(), modVal) * vol)>>10;
-  #elif IS_ESP32()
-    int16_t leftVal = (filter.nextLPF(aOsc1.phMod(modOsc.next(), modVal)) * vol)>>10;
-  #endif
-  // 
-  int16_t rightVal = leftVal;
+  int32_t leftVal = (aOsc1.phMod(modOsc.next(), modVal) * vol)>>10; // no filtering
+  int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }
