@@ -80,17 +80,11 @@ int16_t rightAudioOuputValue = 0;
 
   static const i2s_port_t i2s_num = I2S_NUM_0;
   int i2sPinsOut [] = {16, 17, 18, 21}; // bck, ws, dout, din
+  // int i2sPinsOut [] = {38, 39, 40, 41}; // bck, ws, dout, din
 
   i2s_chan_handle_t tx_handle = NULL;
   i2s_chan_handle_t rx_handle = NULL;
 
-  void seti2sPins(int bck, int ws, int dout, int din) {
-      i2sPinsOut[0] = bck;
-      i2sPinsOut[1] = ws;
-      i2sPinsOut[2] = dout;
-      i2sPinsOut[3] = din;
-      Serial.println("i2s output pins set");
-  }
 
   // Configuration macros/constants
   #define SAMPLE_RATE         44100       // or whatever you use
@@ -118,6 +112,18 @@ int16_t rightAudioOuputValue = 0;
           .din  = (gpio_num_t)i2sPinsOut[3]
       }
   };
+
+  void seti2sPins(int bck, int ws, int dout, int din) {
+      i2sPinsOut[0] = bck;
+      i2sPinsOut[1] = ws;
+      i2sPinsOut[2] = dout;
+      i2sPinsOut[3] = din;
+      std_cfg.gpio_cfg.bclk = (gpio_num_t)i2sPinsOut[0];
+      std_cfg.gpio_cfg.ws   = (gpio_num_t)i2sPinsOut[1];
+      std_cfg.gpio_cfg.dout = (gpio_num_t)i2sPinsOut[2];
+      std_cfg.gpio_cfg.din  = (gpio_num_t)i2sPinsOut[3];
+      Serial.println("i2s output pins set");
+  }
 
   void audioUpdate(); // forward
 
