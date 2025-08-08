@@ -31,6 +31,7 @@ void setup() {
   // osc1.setSpread(0.0002, -0.0002);
   lfo1.setFreq(0.2);
   lfo2.setFreq(0.04);
+  // seti2sPins(38, 39, 40, 41);
   audioStart();
 }
 
@@ -45,7 +46,9 @@ void loop() {
 
   if (msNow - pitchTime > pitchDelta || msNow - pitchTime < 0) {
     pitchTime = msNow;
-    osc1.setPitch(rand(36) + 24);
+    float pitch = round(rand(36) + 24);
+    osc1.setPitch(pitch);
+    Serial.println(pitch);
   }
 }
 
