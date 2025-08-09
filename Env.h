@@ -84,13 +84,12 @@ class Env {
     /** Begin the current envelope */
     inline
     void start() {
-//      Serial.println("start");
       peaked = false;
       envState = 1; // attack
       JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (rand(MAX_ENV_LEVEL * 0.05));
       releaseStartLevelDiff = JIT_MAX_ENV_LEVEL; // 0
       jitEnvRelease = envRelease + rand(envRelease * 0.05);
-      jitEnvAttack = envAttack; // + rand(envAttack * 0.02);
+      jitEnvAttack = envAttack;
       jitEnvDecay = envDecay; 
       envStartTime = micros(); 
       currDecayRepeats = decayRepeats;
@@ -116,7 +115,15 @@ class Env {
       }
     }
 
-    /** Return the envelope's release status */
+    /** Set the envelope's status 
+     * newState 0 = complete, 1 = attack, 2 = hold, 3 = decay, 4 = sustain, 5 = release
+    */
+    inline
+    void setEnvState(int newState) {
+      envState = newState;
+    }
+
+    /** Return the envelope's AHDSR status */
     inline
     int getEnvState() {
       return envState;
@@ -125,91 +132,81 @@ class Env {
     /** Compute and return the next envelope value */
     inline
     uint16_t next() {
-      // unsigned long msTime = millis();
       unsigned long microsTime = micros();
       unsigned long elapsedTime = microsTime - envStartTime;
-      switch (envState) {
-        case 0:
-          // env complete
-          return 0;
-          break;
-        case 1:
-          // attack
-          if (jitEnvAttack == 0) {
-            envVal = JIT_MAX_ENV_LEVEL;
-            envState = 2; // go to hold
-            return envVal;
-          } else if (elapsedTime <= jitEnvAttack) {
-            double attackPortion = elapsedTime / (double)jitEnvAttack;
-            envVal = max(envVal, min(JIT_MAX_ENV_LEVEL, (uint32_t)(JIT_MAX_ENV_LEVEL * attackPortion)));
-            return envVal;
-          } else {
-            envVal = JIT_MAX_ENV_LEVEL;
-            envState = 2; // go to hold
-            return envVal;
-          }
-          break;
-        case 2:
-          // hold
-          if (envHold > 0 && elapsedTime <= jitEnvAttack + envHold) { // hold
-            return envVal;
-          } else {
-            decayStartLevel = envVal; 
-            decayStartTime = microsTime;
-            decayStartLevelDiff = decayStartLevel - sustainTriggerLevel;
-            envState = 3; // go to decay
-            return envVal;
-          }
-          break;
-        case 3:
-          // decay
-          if (jitEnvDecay > 0 && envVal > sustainLevel) { // decay
-            float dPercent = max(0.0f, 1.0f - (microsTime - decayStartTime) / (float)jitEnvDecay);
-            dPercent = dPercent * dPercent * dPercent * dPercent; // very fast exp
-            envVal = decayStartLevel * dPercent;
-            return envVal;
-          } else {
-            if (currDecayRepeats > 0) {
-              currDecayRepeats -= 1;
-              decayStartTime += jitEnvDecay;// microsTime; // reset decay start time
-              envVal = JIT_MAX_ENV_LEVEL;
-            } else {
-              envState = 4; // go to sustain
-            }
-            return envVal;
-          }
-          break;
-        case 4:
-          // sustain
-          if (sustainLevel > 0) {// sustain
-            envVal = sustainLevel; 
-            return envVal;
-          } else {
-            releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
-            if (decayRepeats > 0) envVal = JIT_MAX_ENV_LEVEL;
-            releaseStartlevel = envVal;
-            releaseStartTime = microsTime;
-            envState = 5; // go to release
-            return envVal;
-          }
-          break;
-        case 5:
-          // release
-          if (envVal > 10) {
-            float rPercent = max(0.0f, 1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease);
-            rPercent = rPercent * rPercent * rPercent; // faster exp
-            envVal = releaseStartlevel * rPercent;
-            return envVal;
-          } else {
-            envState = 0; // go to complete
-            envVal = 0;
-            return 0;
-          }
-          break;
+      if (envState == 0) {
+        // env complete
+        envVal = 0;
       }
-      return 0; // should never reach this, but...
+      if (envState == 1) {
+        // attack
+        if (jitEnvAttack == 0) {
+          envVal = JIT_MAX_ENV_LEVEL;
+          envState = 2; // go to hold
+        } else if (elapsedTime <= jitEnvAttack) {
+          double attackPortion = elapsedTime / (double)jitEnvAttack;
+          envVal = max(envVal, min(JIT_MAX_ENV_LEVEL, (uint32_t)(JIT_MAX_ENV_LEVEL * attackPortion)));
+        } else {
+          envVal = JIT_MAX_ENV_LEVEL;
+          envState = 2; // go to hold
+        }
+      }
+      if (envState == 2) {
+        // hold
+        if (envHold > 0 && elapsedTime <= jitEnvAttack + envHold) { // hold
+        } else {
+          decayStartLevel = envVal; 
+          decayStartTime = microsTime;
+          decayStartLevelDiff = decayStartLevel - sustainTriggerLevel;
+          envState = 3; // go to decay
+        }
+      }
+      if (envState == 3) {
+        // decay
+        if (jitEnvDecay > 0 && envVal > sustainLevel) { // decay
+          float dPercent = max(0.0f, 1.0f - (microsTime - decayStartTime) / (float)jitEnvDecay);
+          dPercent = dPercent * dPercent * dPercent * dPercent; // very fast exp
+          envVal = decayStartLevel * dPercent;
+        } else {
+          if (currDecayRepeats > 0) {
+            currDecayRepeats -= 1;
+            decayStartTime += jitEnvDecay;// microsTime; // reset decay start time
+            envVal = JIT_MAX_ENV_LEVEL;
+          } else {
+            envState = 4; // go to sustain
+          }
+        }
+      }
+      if (envState == 4) {
+        // sustain
+        if (sustainLevel > 0) {// sustain
+          envVal = sustainLevel; 
+        } else {
+          releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
+          if (decayRepeats > 0) envVal = JIT_MAX_ENV_LEVEL;
+          releaseStartlevel = envVal;
+          releaseStartTime = microsTime;
+          envState = 5; // go to release
+        }
+      }
+      if (envState == 5) {
+        // release
+        if (envVal > 10) {
+          float rPercent = max(0.0f, 1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease);
+          rPercent = rPercent * rPercent * rPercent; // faster exp
+          envVal = releaseStartlevel * rPercent;
+        } else {
+          envState = 0; // go to complete
+          envVal = 0;
+        }
+      }
+      return envVal;
     }
 
+    /** Set the current envelope value - from 0 to MAX_16 */
+    void setValue(uint16_t val) {
+      envVal = val;
+    }
 
     /** Return the current envelope value - from 0 to MAX_16 */
     inline
