@@ -53,10 +53,6 @@ class Comb {
       int delY = outputBuffer[bufferReadIndex]; 
       //figure out your current y term: y[n] = a*x[n] + b*x[n-d] + c*y[n-d]
       int output = clip16(((inputLevel * input)>>10) + ((feedforwardLevel * delX)>>10) + ((feedbackLevel * delY)>>10));
-      // filter the output?
-
-      // delay modulation? AKA C15 - https://www.nonlinear-labs.de/product/synth-engine/synth-engine.html#img5-2
-
       //stick the output in the ybuffer
       outputBuffer[bufferWriteIndex] = output;
       //increment write index
@@ -164,7 +160,8 @@ class Comb {
 
      /** Create the allpass filter input signal buffer */
     void createInputBuffer() {
-      delete[] inputBuffer; // remove any previous memory allocation
+      if (inputBuffer) { delete[] inputBuffer; inputBuffer = nullptr; }
+      // delete[] inputBuffer; // remove any previous memory allocation
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
       if (usePSRAM) {
@@ -177,7 +174,8 @@ class Comb {
 
     /** Create the allpass filter output signal buffer */
     void createOutputBuffer() {
-      delete[] outputBuffer; // remove any previous memory allocation
+      if (outputBuffer) { delete[] outputBuffer; outputBuffer = nullptr; }
+      // delete[] outputBuffer; // remove any previous memory allocation
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
       if (usePSRAM && ESP.getFreePsram() > bufferSize_samples * sizeof(int)) {

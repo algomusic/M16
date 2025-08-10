@@ -70,7 +70,7 @@ class FX {
     inline
     int16_t overdrive(int32_t sample_in, float amount) {
       // filter input
-      EMA aveFilter(10000); // htz approx 1/4 of sample rate
+      aveFilter.setFreq(10000); // htz approx 1/4 of sample rate
       sample_in = aveFilter.next(sample_in);
       amount *= 0.72; // scale so 1.0 is neutral
       // clipper
@@ -123,11 +123,12 @@ class FX {
   	*/
     inline
     void setShapeTable(int16_t * TABLE_NAME, int tableSize) {
-      delete[] shapeTable; // remove any previous memory allocation
+      if (shapeTable) { delete[] shapeTable; shapeTable = nullptr; }
       shapeTableSize = tableSize;
+      shapeTable = new int16_t[shapeTableSize];
+      memcpy(shapeTable, TABLE_NAME, shapeTableSize * sizeof(int16_t));
       waveShaperStepInc = 65537.0 / shapeTableSize;
-      shapeTable = new int16_t[shapeTableSize]; // create a new waveshape table
-      shapeTable = TABLE_NAME;
+      waveShaperStepIncInv = 1.0f / waveShaperStepInc;
     }
 
     /** Wave Shaper
@@ -139,7 +140,7 @@ class FX {
     inline
     int16_t waveShaper(int16_t sample_in, float amount) {
       int index = sample_in;
-      if (shapeTableSize > 0) index = (sample_in + MAX_16) / waveShaperStepInc;
+      if (shapeTableSize > 0) index = min(shapeTableSize-1, (int)max(0.0f, (sample_in + MAX_16) * waveShaperStepIncInv));
       int16_t sampVal = shapeTable[index];
       if (amount >= 0 && amount < 1.0) sampVal = (sampVal * amount) + (sample_in * (1.0 - amount));
       return sampVal;
@@ -153,10 +154,12 @@ class FX {
     */
     inline
     void setShapeTableSoftClip(float amount) {
-      delete[] shapeTable; // remove any previous memory allocation
+      if (shapeTable) { delete[] shapeTable; shapeTable = nullptr; }
       shapeTableSize = TABLE_SIZE;
-      waveShaperStepInc = 65537.0 / shapeTableSize;
       shapeTable = new int16_t[shapeTableSize]; // create a new waveshape table
+      waveShaperStepInc = 65537.0 / shapeTableSize;
+      waveShaperStepIncInv = 1.0f / waveShaperStepInc;
+      
       for(int i=0; i<shapeTableSize; i++) {
         shapeTable[i] = 20813.0 * atan(amount * ((MIN_16 + i * waveShaperStepInc) * (float)MAX_16_INV));
       }
@@ -171,10 +174,11 @@ class FX {
     */
     inline
     void setShapeTableSigmoidCurve(float amount) {
-      delete[] shapeTable; // remove any previous memory allocation
+      if (shapeTable) { delete[] shapeTable; shapeTable = nullptr; } // remove any previous memory allocation
       shapeTableSize = TABLE_SIZE;
-      waveShaperStepInc = 65537.0 / shapeTableSize;
       shapeTable = new int16_t[shapeTableSize]; // create a new waveshape table
+      waveShaperStepInc = 65537.0 / shapeTableSize;
+      waveShaperStepIncInv = 1.0f / waveShaperStepInc;
       float tabInc = 1.0 / shapeTableSize * 2;
       for(int i=0; i<shapeTableSize * 0.5f; i++) {
         float sVal = pow(i * tabInc, amount);
@@ -190,10 +194,11 @@ class FX {
     */
     inline
     void setShapeTableJitter(float amount) {
-      delete[] shapeTable; // remove any previous memory allocation
+      if (shapeTable) { delete[] shapeTable; shapeTable = nullptr; } // remove any previous memory allocation
       shapeTableSize = TABLE_SIZE;
-      waveShaperStepInc = 65537.0 / shapeTableSize;
       shapeTable = new int16_t[shapeTableSize]; // create a new waveshape table
+      waveShaperStepInc = 65537.0 / shapeTableSize;
+      waveShaperStepIncInv = 1.0f / waveShaperStepInc;
       for(int i=0; i<shapeTableSize; i++) {
         shapeTable[i] = waveShaperStepInc * i + rand(amount * 2) - amount;
       }
@@ -427,6 +432,7 @@ class FX {
     int16_t * shapeTable;
     int shapeTableSize = 0;
     float waveShaperStepInc = MAX_16 * 2.0 * TABLE_SIZE_INV;
+    float waveShaperStepIncInv;
     bool chorusInitiated = false;
     int chorusDelayTime = 38;
     int chorusDelayTime2 = 28;
@@ -442,6 +448,7 @@ class FX {
     bool reverb2Initiated = false;
     int32_t allpassRevOut = 0;
     int32_t prevSaturationOutput = 0;
+    EMA aveFilter;
 
     void initPluckBuffer() {
       pluckBuffer = new int[PLUCK_BUFFER_SIZE]; // create a new array

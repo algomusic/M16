@@ -144,17 +144,46 @@ class SVF2 {
      */
     inline
     int16_t nextFiltMix(int32_t input, float mix) {
+      // input = clip16(input);
+      // calcFilter(input);
+      // int32_t lpfAmnt = 0;
+      // if (mix < 0.5) lpfAmnt = low * pow((1 - mix * 2), 0.5);
+      // int32_t bpfAmnt = 0;
+      // if (mix > 0.25 || mix < 0.75) {
+      //   bpfAmnt = band * pow(1 - (abs(mix - 0.5) * 2), 0.5);
+      // }
+      // int32_t hpfAmnt = 0;
+      // if (mix > 0.5) hpfAmnt = clip16(high * pow((mix - 0.5) * 2, 0.5));
+      // return max(-MAX_16, min(MAX_16, (int)(lpfAmnt + bpfAmnt + hpfAmnt)));
       input = clip16(input);
       calcFilter(input);
+
+      // Precompute scaled mix values
+      float mix2      = mix * 2.0f;           // 0.0 → 2.0
+      float invMix2   = 1.0f - mix2;          // 1 - mix*2
+      float absMixMid = fabsf(mix - 0.5f) * 2.0f; // 0.0 → 1.0 around 0.5 center
+
       int32_t lpfAmnt = 0;
-      if (mix < 0.5) lpfAmnt = low * pow((1 - mix * 2), 0.5);
-      int32_t bpfAmnt = 0;
-      if (mix > 0.25 || mix < 0.75) {
-        bpfAmnt = band * pow(1 - (abs(mix - 0.5) * 2), 0.5);
+      if (mix < 0.5f) {
+          // pow(x, 0.5) → sqrtf(x), clamp to >= 0
+          float amt = sqrtf(fmaxf(invMix2, 0.0f));
+          lpfAmnt = (int32_t)(low * amt);
       }
+
+      int32_t bpfAmnt = 0;
+      if (mix > 0.25f && mix < 0.75f) {
+          float amt = sqrtf(fmaxf(1.0f - absMixMid, 0.0f));
+          bpfAmnt = (int32_t)(band * amt);
+      }
+
       int32_t hpfAmnt = 0;
-      if (mix > 0.5) hpfAmnt = clip16(high * pow((mix - 0.5) * 2, 0.5));
-      return max(-MAX_16, min(MAX_16, (int)(lpfAmnt + bpfAmnt + hpfAmnt)));
+      if (mix > 0.5f) {
+          float amt = sqrtf(fmaxf((mix - 0.5f) * 2.0f, 0.0f));
+          hpfAmnt = clip16((int32_t)(high * amt));
+      }
+
+      int32_t sum = lpfAmnt + bpfAmnt + hpfAmnt;
+      return (int16_t)max((int32_t)-MAX_16, min((int32_t)MAX_16, sum));
     }
 
     /** Calculate the next Allpass filter sample, given an input signal.

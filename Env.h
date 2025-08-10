@@ -38,7 +38,7 @@ class Env {
 
     /** Set envDecay time in ms. */
     void setDecay(float val) {
-      if (val >= 0) envDecay = max(10.0f, val) * 1000;
+      if (val >= 0) envDecay = fmaxf(10.0f, val) * 1000;
     }
 
     /** Set the number of times to repeat the decay segment.
@@ -71,7 +71,7 @@ class Env {
     /** Set releaseState time in ms. */
     void setRelease(float val) {
       if (val >= 0) {
-        envRelease = max(10.0f, val) * 1000.0f;
+        envRelease = fmaxf(10.0f, val) * 1000.0f;
         jitEnvRelease = envRelease;
       }
     }
@@ -90,7 +90,8 @@ class Env {
       releaseStartLevelDiff = JIT_MAX_ENV_LEVEL; // 0
       jitEnvRelease = envRelease + rand(envRelease * 0.05);
       jitEnvAttack = envAttack;
-      jitEnvDecay = envDecay; 
+      jitEnvDecay = envDecay;
+      invJitEnvDecay = 1.0f / jitEnvDecay;
       envStartTime = micros(); 
       currDecayRepeats = decayRepeats;
       next();
@@ -164,7 +165,7 @@ class Env {
       if (envState == 3) {
         // decay
         if (jitEnvDecay > 0 && envVal > sustainLevel) { // decay
-          float dPercent = max(0.0f, 1.0f - (microsTime - decayStartTime) / (float)jitEnvDecay);
+          float dPercent = fmaxf(0.0f, 1.0f - (microsTime - decayStartTime) * invJitEnvDecay); /// (float)jitEnvDecay);
           dPercent = dPercent * dPercent * dPercent * dPercent; // very fast exp
           envVal = decayStartLevel * dPercent;
         } else {
@@ -192,7 +193,7 @@ class Env {
       if (envState == 5) {
         // release
         if (envVal > 10) {
-          float rPercent = max(0.0f, 1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease);
+          float rPercent = fmaxf(0.0f, 1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease);
           rPercent = rPercent * rPercent * rPercent; // faster exp
           envVal = releaseStartlevel * rPercent;
         } else {
@@ -220,7 +221,7 @@ class Env {
     */
     inline
     void setMaxLevel(float level) {
-      MAX_ENV_LEVEL = (MAX_16 * 2 - 1) * max(0.0f,level);
+      MAX_ENV_LEVEL = (MAX_16 * 2 - 1) * fmaxf(0.0f,level);
       JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
       sustainLevel = envSustain * MAX_ENV_LEVEL;
       // Serial.println("setting sus level to " + String(sustainLevel));
@@ -238,6 +239,7 @@ class Env {
     uint32_t MAX_ENV_LEVEL = MAX_16 * 2 - 1;
     uint32_t JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
     uint32_t jitEnvAttack, envAttack, envHold, envDecay, jitEnvDecay, sustainLevel, sustainTriggerLevel;
+    float invJitEnvDecay;
     float envSustain = 0.0f;
     uint32_t envRelease = 600 * 1000; // ms to micros
     uint32_t jitEnvRelease = envRelease;

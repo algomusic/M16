@@ -115,7 +115,8 @@ class All {
 
      /** Create the allpass filter input signal buffer */
     void createInputBuffer() {
-      delete[] inputBuffer; // remove any previous memory allocation
+      if (inputBuffer) { delete[] inputBuffer; inputBuffer = nullptr; }
+      // delete[] inputBuffer; // remove any previous memory allocation
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
       #if IS_ESP32()
@@ -132,7 +133,8 @@ class All {
 
     /** Create the allpass filter output signal buffer */
     void createOutputBuffer() {
-      delete[] outputBuffer; // remove any previous memory allocation
+      if (outputBuffer) { delete[] outputBuffer; outputBuffer = nullptr; }
+      // delete[] outputBuffer; // remove any previous memory allocation
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
       #if IS_ESP32()

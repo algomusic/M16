@@ -57,7 +57,7 @@ public:
    * @param maxDelayTime The maximum delay time in milliseconds
    */
   void setMaxDelayTime(unsigned int maxDelayTime) {
-    delete[] delayBuffer; // remove any previous memory allocation
+    if (delayBuffer) { delete[] delayBuffer; delayBuffer = nullptr; }
     maxDelayTime_ms = max((unsigned int)0, maxDelayTime);
     delayBufferSize_samples = maxDelayTime_ms * SAMPLE_RATE * 0.001;
     #if IS_ESP32()
@@ -88,7 +88,7 @@ public:
   }
 
   ~Del() {
-    delete[] delayBuffer;
+    if (delayBuffer) { delete[] delayBuffer; delayBuffer = nullptr; }
   }
 
   /** Return the size of the delay buffer in ms */
