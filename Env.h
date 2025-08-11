@@ -130,59 +130,76 @@ class Env {
       return envState;
     }
 
+    int prevEnvState = 0;
+
     /** Compute and return the next envelope value */
     inline
     uint16_t next() {
+      if (envState > 0 && envState != prevEnvState) {
+        prevEnvState = envState;
+        Serial.println("env next " + String(envState));
+      }
+
       unsigned long microsTime = micros();
-      unsigned long elapsedTime = microsTime - envStartTime;
+      unsigned long elapsedTime = (unsigned long)(microsTime - envStartTime);
+
       if (envState == 0) {
         // env complete
         envVal = 0;
       }
-      if (envState == 1) {
+      else if (envState == 1) {
         // attack
         if (jitEnvAttack == 0) {
           envVal = JIT_MAX_ENV_LEVEL;
           envState = 2; // go to hold
-        } else if (elapsedTime <= jitEnvAttack) {
+        } 
+        else if (elapsedTime <= jitEnvAttack) {
           double attackPortion = elapsedTime / (double)jitEnvAttack;
-          envVal = max(envVal, min(JIT_MAX_ENV_LEVEL, (uint32_t)(JIT_MAX_ENV_LEVEL * attackPortion)));
-        } else {
+          envVal = max(envVal, min(JIT_MAX_ENV_LEVEL,
+                    (uint32_t)(JIT_MAX_ENV_LEVEL * attackPortion)));
+        } 
+        else {
           envVal = JIT_MAX_ENV_LEVEL;
           envState = 2; // go to hold
         }
       }
-      if (envState == 2) {
+      else if (envState == 2) {
         // hold
-        if (envHold > 0 && elapsedTime <= jitEnvAttack + envHold) { // hold
-        } else {
+        if (envHold > 0 && (unsigned long)(elapsedTime) <= (jitEnvAttack + envHold)) {
+          // still holding
+        } 
+        else {
           decayStartLevel = envVal; 
           decayStartTime = microsTime;
           decayStartLevelDiff = decayStartLevel - sustainTriggerLevel;
           envState = 3; // go to decay
         }
       }
-      if (envState == 3) {
+      else if (envState == 3) {
         // decay
-        if (jitEnvDecay > 0 && envVal > sustainLevel) { // decay
-          float dPercent = fmaxf(0.0f, 1.0f - (microsTime - decayStartTime) * invJitEnvDecay); /// (float)jitEnvDecay);
-          dPercent = dPercent * dPercent * dPercent * dPercent; // very fast exp
+        unsigned long decayElapsed = (unsigned long)(microsTime - decayStartTime);
+        if (jitEnvDecay > 0 && envVal > sustainLevel) {
+          float dPercent = fmaxf(0.0f, 1.0f - decayElapsed * invJitEnvDecay);
+          dPercent = dPercent * dPercent * dPercent * dPercent; // fast exp
           envVal = decayStartLevel * dPercent;
-        } else {
+        } 
+        else {
           if (currDecayRepeats > 0) {
             currDecayRepeats -= 1;
-            decayStartTime += jitEnvDecay;// microsTime; // reset decay start time
+            decayStartTime += jitEnvDecay; // safe because unsigned long wraps
             envVal = JIT_MAX_ENV_LEVEL;
-          } else {
+          } 
+          else {
             envState = 4; // go to sustain
           }
         }
       }
-      if (envState == 4) {
+      else if (envState == 4) {
         // sustain
-        if (sustainLevel > 0) {// sustain
+        if (sustainLevel > 0) {
           envVal = sustainLevel; 
-        } else {
+        } 
+        else {
           releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
           if (decayRepeats > 0) envVal = JIT_MAX_ENV_LEVEL;
           releaseStartlevel = envVal;
@@ -190,17 +207,20 @@ class Env {
           envState = 5; // go to release
         }
       }
-      if (envState == 5) {
+      else if (envState == 5) {
         // release
+        unsigned long releaseElapsed = (unsigned long)(microsTime - releaseStartTime);
         if (envVal > 10) {
-          float rPercent = fmaxf(0.0f, 1.0f - (microsTime - releaseStartTime) / (float)jitEnvRelease);
-          rPercent = rPercent * rPercent * rPercent; // faster exp
+          float rPercent = fmaxf(0.0f, 1.0f - releaseElapsed / (float)jitEnvRelease);
+          rPercent = rPercent * rPercent * rPercent; // fast exp
           envVal = releaseStartlevel * rPercent;
-        } else {
+        } 
+        else {
           envState = 0; // go to complete
           envVal = 0;
         }
       }
+
       return envVal;
     }
 
