@@ -358,7 +358,7 @@ public:
 	inline
 	void setPitch(float midi_pitch) {
     midiPitch = midi_pitch;
-		setFreq(mtof(min(127.0f, max(0.0f, midi_pitch * (1 + (rand(6) * 0.00001f))))));
+		setFreq(mtof(min(127.0f, max(0.0f, midi_pitch * (1 + (audioRand(6) * 0.00001f))))));
     prevFrequency = frequency;
 	}
 
@@ -493,8 +493,10 @@ public:
   * @theTable The the wavetable to be filled
   */
   static void noiseGen(int16_t * theTable) {
+    audioRandSeed(random(MAX_16));
     for(int i=0; i<TABLE_SIZE; i++) {
-      theTable[i] = rand(MAX_16 * 2) - MAX_16;
+      // theTable[i] = rand(MAX_16 * 2) - MAX_16;
+      theTable[i] = audioRand(MAX_16 * 2) - MAX_16;
     }
   }
 
@@ -504,11 +506,11 @@ public:
   */
   static void noiseGen(int16_t * theTable, int grainSize) {
     int grainCnt = 0;
-    int randVal = rand(MAX_16 * 2) - MAX_16;
+    int randVal = audioRand(MAX_16 * 2) - MAX_16;
     for(int i=0; i<TABLE_SIZE; i++) {
       theTable[i] = randVal;
       grainCnt++;
-      if (grainCnt % grainSize == 0) randVal = rand(MAX_16 * 2) - MAX_16;
+      if (grainCnt % grainSize == 0) randVal = audioRand(MAX_16 * 2) - MAX_16;
     }
   }
 
@@ -521,8 +523,8 @@ public:
       theTable[i] = 0;
     }
     for(int i=0; i<2; i++) {
-      theTable[(int)rand(TABLE_SIZE)] = MAX_16;
-      theTable[(int)rand(TABLE_SIZE)] = MIN_16;
+      theTable[(int)audioRand(TABLE_SIZE)] = MAX_16;
+      theTable[(int)audioRand(TABLE_SIZE)] = MIN_16;
     }
   }
 
@@ -534,7 +536,7 @@ public:
     int deviation = MAX_16>>1;
     int halfDev = deviation>>1;
     for(int i=0; i<TABLE_SIZE; i++) {
-      val += gaussRand(deviation) - halfDev;
+      val += audioRandGauss(deviation, 2) - halfDev;
       if (val > MAX_16) val = val - MAX_16;
       if (val < MIN_16) val = MIN_16 + abs(val) - MAX_16;
       theTable[i] = max(MIN_16, min(MAX_16, (int)val));
@@ -548,7 +550,7 @@ public:
   static void pinkNoiseGen(int16_t * theTable) {
     float b0, b1, b2, b3, b4, b5, b6;
     for (int i=0; i<TABLE_SIZE; i++) {
-      float white = (rand(5000) - 2500) * 0.001; // 20000, 10000
+      float white = (audioRand(5000) - 2500) * 0.001; // 20000, 10000
       b0 = 0.99886 * b0 + white * 0.0555179;
       b1 = 0.99332 * b1 + white * 0.0750759;
       b2 = 0.969 * b2 + white * 0.153852;
@@ -590,7 +592,48 @@ private:
   float cycleLengthPerMS = frequency * 0.001f; // / 1000.0f;
   float midiPitch = 69;
 
-  /** Increments the phase of the oscillator without returning a sample.*/
+  /** Increments the phase of the oscillator without returning a sample. */
+  inline void incrementPhase() {
+      if (pulseWidthOn) {
+          // Adjust phase increment based on pulse width section
+          if (phase_fractional < HALF_TABLE_SIZE) {
+              phase_fractional += phase_increment_fractional_w1;
+          } else {
+              phase_fractional += phase_increment_fractional_w2;
+          }
+      } else {
+          phase_fractional += phase_increment_fractional;
+      }
+
+      // Fast path: normal wrapping when not noise or crackle
+      if (!isNoise && !isCrackle) {
+          if (phase_fractional >= TABLE_SIZE) {
+              phase_fractional -= TABLE_SIZE;
+              // Light random pitch drift for realism (±3 steps)
+              phase_increment_fractional *= (1.0f + ((audioRand(8) - 3) * 0.000001f));
+              if (pulseWidthOn) {
+                  float halfInc = phase_increment_fractional * 0.5f;
+                  phase_increment_fractional_w1 = halfInc / pulseWidth;
+                  phase_increment_fractional_w2 = halfInc / (1.0f - pulseWidth);
+              }
+          }
+          return; // Done
+      }
+
+      // Noise / crackle modes
+      if (phase_fractional >= TABLE_SIZE) {
+          if (isNoise) {
+              phase_fractional = audioRand(TABLE_SIZE); // fast wrap
+          } else { // crackle
+              if (audioRand(0x8000) > crackleAmnt) {
+                  phase_fractional = 1;
+              } else {
+                  phase_fractional = audioRand(TABLE_SIZE);
+              }
+          }
+      }
+  }
+  /*
   inline void incrementPhase() {
     if (pulseWidthOn) {
       // Adjust phase increment based on pulse width section
@@ -623,14 +666,15 @@ private:
       if (isNoise) {
         phase_fractional = rand() & (TABLE_SIZE - 1); // fast mod
       } else { // crackle
-        if ((rand() & 0x7FFF) > crackleAmnt) {
+        if ((audioRand() & 0x7FFF) > crackleAmnt) {
             phase_fractional = 1;
         } else {
-            phase_fractional = rand() & (TABLE_SIZE - 1);
+            phase_fractional = audioRand() & (TABLE_SIZE - 1);
         }
       }
     }
   }
+    */
 
   /** Increments the phase of spread reads of the oscillator
   * without returning a sample.*/

@@ -86,9 +86,11 @@ class Env {
     void start() {
       peaked = false;
       envState = 1; // attack
-      JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (rand(MAX_ENV_LEVEL * 0.05));
+      // JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (rand(MAX_ENV_LEVEL * 0.05));
+      JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (audioRand(MAX_ENV_LEVEL * 0.05));
       releaseStartLevelDiff = JIT_MAX_ENV_LEVEL; // 0
-      jitEnvRelease = envRelease + rand(envRelease * 0.05);
+      // jitEnvRelease = envRelease + rand(envRelease * 0.05);
+      jitEnvRelease = envRelease + audioRand(envRelease * 0.05);
       jitEnvAttack = envAttack;
       jitEnvDecay = envDecay;
       invJitEnvDecay = 1.0f / jitEnvDecay;
@@ -137,7 +139,7 @@ class Env {
     uint16_t next() {
       if (envState > 0 && envState != prevEnvState) {
         prevEnvState = envState;
-        Serial.println("env next " + String(envState));
+        // Serial.println("env next " + String(envState));
       }
 
       unsigned long microsTime = micros();

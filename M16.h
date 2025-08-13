@@ -61,6 +61,7 @@ int16_t rightAudioOuputValue = 0;
     timer1_attachInterrupt(onTimerISR); //Attach our sampling ISR
     timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
     timer1_write(2000); //Service at 2mS intervall
+    audioRandSeed(random() * MAX_16);
     Serial.println("M16 is running");
   }
 
@@ -406,7 +407,8 @@ int16_t clip(float in_val, float min_val, float max_val) {
 }
 
 // Rand from Mozzi library
-static unsigned long randX=132456789, randY=362436069, randZ=521288629;
+// static unsigned long randX=132456789, randY=362436069, randZ=521288629;
+static unsigned long randX=random() * 1000000000, randY=random() * 1000000000, randZ=random() * 1000000000; // randomise seed
 
 unsigned long xorshift96() { //period 2^96-1
   // static unsigned long x=123456789, y=362436069, z=521288629;
@@ -431,6 +433,15 @@ Ranged random number generator, faster than Arduino's built-in random function, 
 */
 int rand(int32_t maxVal) {
   return (int) (((xorshift96() & 0xFFFF) * maxVal)>>16);
+  // use MSB for increased randomness?, seems less evenly distributed
+  // return (int)(((xorshift96() >> 8) * maxVal) >> 24); 
+  // return (int)(xorshift96() % maxVal); // slighlty less event
+}
+
+// Gaussian approx for fixed tightness=3 (common case)
+// Much faster: unrolled, no loop overhead
+inline int gaussRand3(int maxVal) {
+    return (rand(maxVal + 1) + rand(maxVal + 1) + rand(maxVal + 1)) / 3;
 }
 
 /** Approximate Gausian Random
@@ -457,16 +468,84 @@ int gaussRand(int maxVal) {
 /** Approximate Chaotic Random number generator
 * The output values will between 0 and range
 * Range of 1 provides 2 attractor oscillation, other value provide more diversity
+* Is very slow because of floating point calcs!
 * @param range The largest value possible
 * Algorithm by Roger Luebeck  2000, 2017
 *  https://chaos-equations.com/index.htm
 */
-float prevChaosRandVal = 0.5;
+float prevChaosRandVal = random(); //0.5;
 
 float chaosRand(float range) {
   float chaosRandVal = range * sin(3.1459 * prevChaosRandVal);
   prevChaosRandVal = chaosRandVal;
   return chaosRandVal * 0.5 + range * 0.5;
 }
+
+  /**  === ISR-safe Xoshiro128** PRNG ===
+  * Good low-bit randomness for audio applications
+  * */
+  static uint32_t s0 = 0x9E3779B9;
+  static uint32_t s1 = 0x243F6A88;
+  static uint32_t s2 = 0xB7E15162;
+  static uint32_t s3 = 0xC0DEC0DE;
+
+  // Rotate left helper
+  inline uint32_t rotl(const uint32_t x, int k) {
+      return (x << k) | (x >> (32 - k));
+  }
+
+  // Core generator: xoshiro128**
+  inline uint32_t audioRand32() {
+      const uint32_t result = rotl(s1 * 5, 7) * 9; // strong low-bit mix
+
+      const uint32_t t = s1 << 9;
+      s2 ^= s0;
+      s3 ^= s1;
+      s1 ^= s2;
+      s0 ^= s3;
+
+      s2 ^= t;
+      s3 = rotl(s3, 11);
+
+      return result;
+  }
+
+  // Uniform int in [0, maxVal)
+  inline int audioRand(int32_t maxVal) {
+      // Use top 24 bits for better low-value uniformity
+      // return (int)((audioRand32() >> 8) * (uint32_t)maxVal >> 24);
+    if (maxVal <= 0) return 0;
+    return (int)(((uint64_t)(audioRand32() >> 8) * (uint64_t)maxVal) >> 24);
+  }
+
+  // Approx Gaussian
+  inline int audioRandGauss(int maxVal, int tightness) {
+      int sum = 0;
+      for (int i = 0; i < tightness; i++) {
+          sum += audioRand(maxVal + 1);
+      }
+      return sum / tightness;
+  }
+
+  // Portable seed function (no hardware RNG)
+  inline void audioRandSeed(uint32_t seed) {
+      if (seed == 0) {
+          // Use micros() + a simple LCG scramble for variety
+          uint32_t t = (uint32_t)micros();
+          seed = t ^ 0xA5A5A5A5UL;
+      }
+      // SplitMix32 seeding — ensures all states are non-zero
+      auto splitmix32 = [](uint32_t &x) {
+          uint32_t z = (x += 0x9E3779B9UL);
+          z = (z ^ (z >> 16)) * 0x85EBCA6BUL;
+          z = (z ^ (z >> 13)) * 0xC2B2AE35UL;
+          return z ^ (z >> 16);
+      };
+
+      s0 = splitmix32(seed);
+      s1 = splitmix32(seed);
+      s2 = splitmix32(seed);
+      s3 = splitmix32(seed);
+  }
 
 // /* M16_H_ */
