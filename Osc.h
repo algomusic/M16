@@ -37,6 +37,7 @@ public:
 	int16_t next() {
     int idx = (int)phase_fractional;
     int32_t sampVal = table[idx];
+    // int32_t sampVal = (table[idx] + prevSampVal)>>1;
     incrementPhase();
     if (spreadActive) {
       sampVal = doSpread(sampVal);
@@ -227,17 +228,31 @@ public:
    * @param modulator - The next sample from the modulating waveform
    * @param modIndex - The depth value to amplify the modulator by, from 0.0 to 1.0
    * ModIndex values between 0.0 - 1.0 are normally enough, higher values are possible
-   * In Phase Mod, typically values 1/10th of FM ModIndex values provide equvalent change.
    */
-  inline
-  int16_t phMod(int modulator, float modIndex) {
-    modulator *= modIndex;
-    int32_t sampVal = table[(int16_t)(phase_fractional + (modulator >> 4)) & (TABLE_SIZE - 1)];
-  	incrementPhase();
+  inline int16_t phMod(int16_t modulator, float modIndex) {
+    const float modScale = modIndex * (1.0f / 16.0f);
+    // Modulated phase in "table index units"
+    float p = phase_fractional + (float)modulator * modScale;
+    // Integer index and fractional part
+    int i0 = (int)p;                 // floor for positive p; trunc for negative is fine with mask below
+    float frac = p - (float)i0;      // [0,1) if p>=0; may be negative but handled by mask on indices
+    // Wrap indices (fast when TABLE_SIZE is power of two)
+    const int idx0 = i0 & (TABLE_SIZE - 1);
+    const int idx1 = (idx0 + 1) & (TABLE_SIZE - 1);
+    // Linear interpolation between adjacent samples
+    const int32_t a = table[idx0];
+    const int32_t b = table[idx1];
+    int32_t sampVal = a + (int32_t)((b - a) * frac);
+    // Advance the carrier phase
+    incrementPhase();
+    // Optional detune/spread
     if (spreadActive) {
-      sampVal = doSpread(sampVal);
+        sampVal = doSpread(sampVal);
     }
-    return sampVal;
+    // Interpolating two 16-bit values stays within 16-bit range, but clamp just in case
+    if (sampVal > MAX_16)  sampVal = MAX_16;
+    if (sampVal < MIN_16)  sampVal = MIN_16;
+    return (int16_t)sampVal;
   }
 
   /** Ring Modulation
