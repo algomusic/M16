@@ -200,7 +200,7 @@ class FX {
       waveShaperStepInc = 65537.0 / shapeTableSize;
       waveShaperStepIncInv = 1.0f / waveShaperStepInc;
       for(int i=0; i<shapeTableSize; i++) {
-        shapeTable[i] = waveShaperStepInc * i + rand(amount * 2) - amount;
+        shapeTable[i] = waveShaperStepInc * i + audioRand(amount * 2) - amount;
       }
     }
 
@@ -423,9 +423,9 @@ class FX {
     int prevPluckOutput = 0;
     bool pluckBufferEstablished = false;
     bool reverbInitiated = false;
-    float reverbFeedbackLevel = 0.2; // 0.0 to 1.0
-    int reverbMix = 80; // 0 to 1024
-    float reverbSize = 1.0; // >= 1, memory allocated to delay lengths
+    float reverbFeedbackLevel = 0.93; // 0.0 to 1.0 
+    int reverbMix = 40; // 0 to 1024
+    float reverbSize = 8.0; // >= 1, memory allocated to delay lengths 
     // float reverbTime = 0.49999; // 0 to 0.5
     Del delay1, delay2, delay3, delay4;
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
