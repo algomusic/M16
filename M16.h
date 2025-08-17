@@ -304,20 +304,34 @@ float ftom(float freq) {
 * @key pitch class key, 0-11, where 0 = C root
 */
 inline
-int pitchQuantize(int pitch, int * pitchClassSet, int key) {
-  for (int j=0; j<12; j++) {
-    int pitchClass = pitch%12;
-    bool adjust = true;
-    for (int i=0; i < 12; i++) {
-      if (pitchClass == pitchClassSet[i] + key) {
-        adjust = false;
-      }
+int pitchQuantize(int pitch, int8_t * pitchClassSet, int key) {
+  // Build a quick lookup table of allowed pitch classes
+  bool allowed[12] = {false};
+  for (int i = 0; i < 12; i++) {
+    int pc = (pitchClassSet[i] + key) % 12;
+    if (pc < 0) pc += 12;  // ensure positive
+    allowed[pc] = true;
+  }
+  // Try up to 12 downward adjustments
+  for (int j = 0; j < 12; j++) {
+    int pitchClass = (pitch % 12 + 12) % 12; // safe mod
+    if (allowed[pitchClass]) {
+      return pitch;
     }
-    if (adjust) {
-      pitch -= 1;
-    } else return pitch;
+    pitch -= 1;
   }
   return pitch; // just in case?
+}
+
+// overload to use int scale values
+inline
+int pitchQuantize(int pitch, int * pitchClassSet, int key) {
+  int8_t pc [12]; // empty
+  for (int i=0; i<12; i++) {
+    pc[i] = pitchClassSet[i];
+  }
+  int returnValue = pitchQuantize(pitch, pc, key);
+  return returnValue;
 }
 
 /** Return freq a chromatic interval away from base
