@@ -305,21 +305,24 @@ float ftom(float freq) {
 */
 inline
 int pitchQuantize(int pitch, int8_t * pitchClassSet, int key) {
-  // Build a quick lookup table of allowed pitch classes
+  // Build quick lookup table of allowed pitch classes
   bool allowed[12] = {false};
   for (int i = 0; i < 12; i++) {
     int pc = (pitchClassSet[i] + key) % 12;
-    if (pc < 0) pc += 12;  // ensure positive
+    if (pc < 0) pc += 12;  // keep in range
     allowed[pc] = true;
   }
-  // Try up to 12 downward adjustments
-  for (int j = 0; j < 12; j++) {
-    int pitchClass = (pitch % 12 + 12) % 12; // safe mod
-    if (allowed[pitchClass]) {
-      return pitch;
-    }
-    pitch -= 1;
+  int baseClass = (pitch % 12 + 12) % 12;
+  if (allowed[baseClass]) return pitch;
+
+  // Search outward up to 12 semitones
+  for (int dist = 1; dist < 12; dist++) {
+    int upClass   = (baseClass + dist) % 12;
+    int downClass = (baseClass - dist + 12) % 12;
+    if (allowed[downClass]) return pitch - dist;
+    if (allowed[upClass])   return pitch + dist;
   }
+
   return pitch; // just in case?
 }
 
