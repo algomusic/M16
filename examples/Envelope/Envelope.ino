@@ -30,8 +30,7 @@ void loop() {
 
   if ((unsigned long)(msNow - envTime) >= envTimeDelta) {
       envTime += envTimeDelta; 
-      ampEnv.next();
-      currEnvValue = ampEnv.getValue();
+      currEnvValue = ampEnv.next();
   }
 
   if ((unsigned long)(msNow - pitchTime) >= pitchTimeDelta) {
