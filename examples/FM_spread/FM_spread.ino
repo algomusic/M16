@@ -17,6 +17,8 @@ unsigned long pitchTime = msNow;
 unsigned long envTime = msNow;
 int noteCnt = 0;
 float modVal, modIndex = 0.5;
+int pitchDelta = 2000;
+int envDelta = 4;
 
 void setup() {
   Serial.begin(115200);
@@ -30,8 +32,8 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if (msNow - pitchTime > 2000 || msNow - pitchTime < 0) {
-      pitchTime = msNow;
+  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+    pitchTime += pitchDelta;
     if (noteCnt++ % 4 == 0) {
       if (random(2) == 0) {
         float spreadVal = random(1000) * 0.00001;
@@ -58,8 +60,8 @@ void loop() {
     modEnv.start();
   }
 
-  if (msNow - envTime > 11 || msNow - envTime < 0) {
-    envTime = msNow;
+  if ((unsigned long)(msNow - envTime) >= envDelta) {
+    envTime += envDelta; 
     modEnv.next();
     modVal = modIndex * modEnv.getValue() * MAX_16_INV;
   }

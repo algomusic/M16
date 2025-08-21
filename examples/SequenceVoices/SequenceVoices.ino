@@ -56,8 +56,8 @@ void setup() {
 void loop() {
   msNow = millis();
  
-  if (msNow - stepTime > stepDelta || msNow - stepTime < 0) {
-    stepTime = msNow;
+  if ((unsigned long)(msNow - stepTime) >= stepDelta) {
+      stepTime += stepDelta;
     if (stepCnt%64 == 0) seqGen();
     for (int i=0; i<voices; i++) {
       int p = sequences[i].next();
@@ -70,8 +70,8 @@ void loop() {
     stepCnt++;
   }
 
-  if (msNow - envTime > envDelta || msNow - envTime < 0) {
-    envTime = msNow;
+  if ((unsigned long)(msNow - envTime) >= envDelta) {
+      envTime += envDelta;
     for (int i=0; i<voices; i++) {
       ampEnvs[i].next();
     }

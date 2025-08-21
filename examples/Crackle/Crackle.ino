@@ -8,6 +8,7 @@ Osc aOsc1(waveTable);
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow = millis();
 unsigned long changeTime = msNow;
+int changeDelta = 5000;
 
 void setup() {
   Serial.begin(115200);
@@ -19,8 +20,8 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow - changeTime > 5000 || msNow - changeTime < 0) {
-      changeTime = msNow;
+  if ((unsigned long)(msNow - changeTime) >= changeDelta) {
+    changeTime += changeDelta;
     int16_t cAmnt = random(MAX_16);
     aOsc1.setCrackle(true, cAmnt); // 0 - MAX_16
     Serial.println(cAmnt);

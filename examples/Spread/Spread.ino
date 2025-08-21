@@ -12,6 +12,7 @@ SVF filter;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow, pitchTime;
 int noteCnt = 0;
+int pitchDelta = 1000;
 
 void setup() {
   Serial.begin(115200);
@@ -24,8 +25,8 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow - pitchTime > 1000 || msNow - pitchTime < 0) {
-      pitchTime = msNow;
+  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+    pitchTime += pitchDelta;
     if (noteCnt++ % 4 == 0) {
       if (random(2) == 0) {
         float detSpread = random(1000) * 0.00001;

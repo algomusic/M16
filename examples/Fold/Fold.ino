@@ -7,10 +7,12 @@ int16_t waveTable[TABLE_SIZE]; // empty wavetable
 Osc osc1(waveTable);
 FX effects1;
 int16_t vol = 1000; // 0 - 1024, 10 bit
-float foldAmnt = 1.0;
+float foldAmnt = 0.0;
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 unsigned long foldTime = msNow;
+int pitchDelta = 5000;
+int foldDelta = 100;
 
 void setup() {
   Serial.begin(115200);
@@ -24,15 +26,15 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow - pitchTime > 5000 || msNow - pitchTime < 0) {
-    pitchTime = msNow;
+  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+    pitchTime += pitchDelta;
     int pitch = random(24) + 36;
     Serial.println(pitch);
     osc1.setPitch(pitch);
   }
 
-  if (msNow - foldTime > 100 || msNow - foldTime < 0) {
-    foldTime = msNow;
+  if ((unsigned long)(msNow - foldTime) >= foldDelta) {
+    foldTime += foldDelta;
     foldAmnt += 0.05;
     if (foldAmnt > 10) foldAmnt = 1.0;
   }

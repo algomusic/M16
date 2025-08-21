@@ -12,6 +12,7 @@ int16_t vol = 500; // 0 - 1024, 10 bit
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 unsigned long widthTime = msNow;
+int pitchDelta = 12000;
 int lfoReadRate = 29; // update delta time in millis
 float pVal = 0.5;
   
@@ -29,15 +30,15 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if (msNow - pitchTime > 12000 || msNow - pitchTime < 0) {
-      pitchTime = msNow;
+  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+    pitchTime += pitchDelta;
     int pitch = random(24) + 36;
     Serial.println(pitch);
     aOsc1.setPitch(pitch);
   }
   
-  if (msNow - widthTime > lfoReadRate || msNow - widthTime < 0) {
-      widthTime = msNow;
+  if ((unsigned long)(msNow - widthTime) >= lfoReadRate) {
+    widthTime += lfoReadRate;
     // Compute the LFO value to modulate the duty cycle amount (freqency) by
     // = osc val / osc range * depth * val range reduction + offset (to make unipolar)
     float lfo1Val = (LFO1.atTime(msNow) * MAX_16_INV * 0.5) * 0.6 + 0.4; 

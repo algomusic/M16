@@ -8,6 +8,7 @@ Del delay1(500); // max delay time in ms
 int16_t triTable [TABLE_SIZE]; // empty array
 Osc osc1(triTable);
 Env ampEnv1;
+int noteDelta = 1000;
 
 unsigned long msNow, noteTime, envTime, delTime;
 int scale [] = {0, 2, 4, 5, 7, 9, 0, 0, 0, 0, 0};
@@ -33,8 +34,8 @@ void loop() {
   
   msNow = millis();
 
-  if (msNow > noteTime) {
-    noteTime = msNow + 1000;
+  if ((unsigned long)(msNow - noteTime) >= noteDelta) {
+      noteTime += noteDelta;
     osc1.setPitch(pitchQuantize(random(25) + 48, scale, 0));
     delay1.setFiltered(random(5));
     delay1.setTime(random(350) + 100);

@@ -19,6 +19,8 @@ Env ampEnvW, ampEnvP, ampEnvB, ampEnvC; // envelopes
 unsigned long msNow, stepTime, envTime = millis();
 int vol = 1000; // 0 - 1023, 10 bit // keep to max 50% for MAX98357 which sums both channels!
 byte color = 0;
+int envDelta = 4;
+int stepDelta = 2000;
 
 void setup() {
   Serial.begin(115200);
@@ -42,8 +44,8 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if (msNow - stepTime > 2000 || msNow - stepTime < 0) {
-      stepTime = msNow;
+  if ((unsigned long)(msNow - stepTime) >= stepDelta) {
+    stepTime += stepDelta; 
     if (color == 0) {
       ampEnvW.start();
       Serial.println("White Noise");
@@ -63,8 +65,8 @@ void loop() {
     color = (color + 1) % 4;
   }
 
-  if (msNow - envTime > 4 || msNow - envTime < 0) {
-    envTime = msNow;
+  if ((unsigned long)(msNow - envTime) >= envDelta) {
+      envTime += envDelta; 
     ampEnvW.next();
     ampEnvP.next();
     ampEnvB.next();
@@ -74,15 +76,15 @@ void loop() {
 
 // This function required in all M16 programs to specify the samples to be played
 void audioUpdate() {
-  int16_t whiteVal = (whiteOsc.next() * ampEnvW.getValue())>>16;
+  int32_t whiteVal = (whiteOsc.next() * ampEnvW.getValue())>>16;
   // i2s_write_samples(whiteVal, whiteVal);
-  int16_t pinkVal = pinkOsc.next() * ampEnvP.getValue()>>16;
+  int32_t pinkVal = pinkOsc.next() * ampEnvP.getValue()>>16;
   // i2s_write_samples(pinkVal, pinkVal);
-  int16_t brownVal = brownOsc.next() * ampEnvB.getValue()>>16;
+  int32_t brownVal = brownOsc.next() * ampEnvB.getValue()>>16;
   // i2s_write_samples(brownVal, brownVal);
-  int16_t crackleVal = crackleOsc.next() * ampEnvC.getValue()>>16;
+  int32_t crackleVal = crackleOsc.next() * ampEnvC.getValue()>>16;
   // i2s_write_samples(crackleVal, crackleVal);
-  int16_t leftVal = ((whiteVal + pinkVal + brownVal + crackleVal) * vol)>>10; // master volume
-  int16_t rightVal = leftVal;
+  int32_t leftVal = ((whiteVal + pinkVal + brownVal + crackleVal) * vol)>>10; // master volume
+  int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

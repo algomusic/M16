@@ -6,36 +6,32 @@
 #include "SVF.h"
 #include "FX.h"
 
-int16_t noiseTable [TABLE_SIZE]; // empty wavetable
-Osc aOsc1(noiseTable);
-Env ampEnv1;
+int16_t triTable [TABLE_SIZE]; // empty wavetable
+Osc aOsc(triTable);
+Env ampEnv;
 // Arp arp1;
 SVF filter;
 FX effect1;
 int bpm = 120;
+int32_t currEnvValue = 0;
 
-unsigned long stepDelta = 250;
 unsigned long msNow = millis();
 unsigned long stepTime = msNow;
 unsigned long envTime = msNow;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 float feedback = 0.9;
 float pitch = 48;
+int stepDelta = 500;
+int envDelta = 1;
 
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Osc::noiseGen(noiseTable); aOsc1.setNoise(true); // fill wavetable and set noise flag
-  ampEnv1.setAttack(0);
-  ampEnv1.setRelease(2);
+  ampEnv.setAttack(0);
+  ampEnv.setRelease(800);
+  Osc::triGen(triTable);
   int newSet [] = {48, 52, 55, 58, 60, 64};
-  // arp1.setValues(newSet, 6);
-  // arp1.setDirection(ARP_UP_DOWN);
-  // arp1.setRange(3);
-  // stepDelta = arp1.calcStepDelta(120, 2); // ms between steps at bpm sliced into 2
-  // stepTime = millis() + stepDelta;
-  // arp1.start();
-  aOsc1.setPitch(pitch);
+  aOsc.setPitch(pitch);
   filter.setFreq(3500);
   audioStart();
 }
@@ -43,21 +39,19 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if (msNow > stepTime) {
-    int deltaMult = rand(2) + 1;
-    stepTime = msNow + stepDelta * deltaMult;
+  if ((unsigned long)(msNow - stepTime) >= stepDelta) {
+      stepTime += stepDelta;
     pitch = clip(pitch + gaussRandNumb(24, 2) - 12, 36, 68); 
     Serial.println(pitch);
-    aOsc1.setPitch(pitch);
-    feedback = floatMap(pitch, 36, 72, 0.96, 0.995);
+    aOsc.setPitch(pitch);
     vol = 800 + rand(200);
-    filter.setFreq(rand(2000) + 3000);
-    ampEnv1.start();
+    aOsc.setPhase(0);
+    ampEnv.start();
   }
 
-  if (msNow - envTime > 4 || msNow - envTime < 0) {
-    envTime = msNow;
-    ampEnv1.next();
+  if ((unsigned long)(msNow - envTime) >= envDelta) {
+    envTime += envDelta;
+    currEnvValue = ampEnv.next();
   }
 }
 
@@ -66,10 +60,9 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  // int16_t leftVal = (filter.nextLPF(effect1.pluck((aOsc1.next() * ampEnv1.getValue() >> 16), aOsc1.getFreq(), feedback)) * vol)>>10;
-  int16_t leftVal = (effect1.pluck((aOsc1.next() * ampEnv1.getValue() >> 16), aOsc1.getFreq(), feedback) * vol)>>10;
-  leftVal = effect1.overdrive(leftVal, 2.5); // applies some gain and distortion
-  // leftVal = effect1.softClip(leftVal, 2.5); // applies some compression and distortion
-  int16_t rightVal = leftVal;
+  int32_t leftVal = aOsc.next() * ampEnv.getValue() >> 16;
+  leftVal = effect1.overdrive(leftVal, 10); // applies some gain and distortion
+  // leftVal = effect1.softClip(leftVal, 30); // applies some compression and saturation
+  int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

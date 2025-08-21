@@ -7,6 +7,8 @@ int16_t waveTable [TABLE_SIZE]; // empty wavetable
 Osc aOsc1(waveTable);
 Env ampEnv;
 unsigned long msNow, changeTime, envTime;
+int changeDelta = 1000;
+int envDelta = 4;
 
 void setup() {
   Serial.begin(115200);
@@ -19,16 +21,16 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if (msNow - changeTime > 1000 || msNow - changeTime < 0) {
-      changeTime = msNow;
+  if ((unsigned long)(msNow - changeTime) >= changeDelta) {
+    changeTime += changeDelta;
     int grain = random(1000)+1;
     Osc::noiseGen(waveTable, grain);
     Serial.println(grain);
     ampEnv.start();
   }
 
-  if (msNow - envTime > 4 || msNow - envTime < 0) {
-      envTime = msNow;
+  if ((unsigned long)(msNow - envTime) >= envDelta) {
+    envTime += envDelta; 
     ampEnv.next();
   }
 }

@@ -5,7 +5,8 @@
 // All allpass;
 All allpass(10, 0.7);
 unsigned long msNow = millis();
-unsigned long pitchTime = msNow;
+unsigned long impluseTime = msNow;
+int impluseDelta = 1000;
 int16_t impulse = 0;
 
 void setup() {
@@ -18,8 +19,8 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow - pitchTime > 1000 || msNow - pitchTime < 0) {
-    pitchTime = msNow;
+  if ((unsigned long)(msNow - impluseTime) >= impluseDelta) {
+      impluseTime += impluseDelta;
     impulse = MAX_16;
   }
 }

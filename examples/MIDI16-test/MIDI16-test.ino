@@ -12,6 +12,8 @@ unsigned long onTime = msNow;
 unsigned long offTime = msNow;
 unsigned long microsNow = micros(); 
 unsigned long clockTime = microsNow;
+int midiDelta = 8; // 8 is enough for note messages, 1 required for clock
+int onDelta = 1000;
 int tempoDelta = 20833; // 120 BPM
 bool sounding = false;
 uint8_t midiPitch = 0;
@@ -75,9 +77,9 @@ void setup() {
 void loop() { 
   msNow = millis();
 
-  // receive MIDI data
-  if (msNow > midiTime) {
-    midiTime += 1; // 8 is enough for note messages, 1 required for clock
+  // receive MIDI data 
+  if ((unsigned long)(msNow - midiTime) >= midiDelta) {
+    midiTime += midiDelta;
     uint8_t status = midi.read();
     if (status == MIDI16::noteOn) {
       handleNoteOn(midi.getChannel(), midi.getData1(), midi.getData2());
@@ -97,8 +99,8 @@ void loop() {
   }
 
   // Send MIDI channel messages
-  if (msNow > onTime) {
-    onTime = msNow + 1000;
+  if ((unsigned long)(msNow - onTime) >= onDelta) {
+      onTime += onDelta;
     offTime = msNow + 250;
     midiPitch = rand(60) + 30;
     pixels.setPixelColor(0, pixels.Color(0, 0, 150));
@@ -128,8 +130,8 @@ void loop() {
   // microsecond timing required for 24 PPQN accuracy
   microsNow = micros(); 
 
-  if (microsNow > clockTime) {
-    clockTime += tempoDelta;
+  if ((unsigned long)(microsNow - clockTime) >= tempoDelta) {
+      clockTime += tempoDelta;
     midi.sendClock();
   }
 }

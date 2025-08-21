@@ -38,14 +38,14 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow - lfoTime > lfoDelta || msNow - lfoTime < 0) {
-    lfoTime = msNow;
+  if ((unsigned long)(msNow - lfoTime) >= lfoDelta) {
+      lfoTime += lfoDelta;
     lpf.setCutoff(lfo1.atTimeNormal(msNow));
     lpf.setRes(lfo2.atTimeNormal(msNow));
   }
 
-  if (msNow - pitchTime > pitchDelta || msNow - pitchTime < 0) {
-    pitchTime = msNow;
+  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+      pitchTime += pitchDelta;
     float pitch = round(rand(36) + 24);
     osc1.setPitch(pitch);
     Serial.println(pitch);

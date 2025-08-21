@@ -32,9 +32,9 @@ void setup() {
   }
   // reverb setup
   #if IS_ESP32() //8266 can't manage reverb as well
-    effect1.setReverbSize(16); // quality and memory >= 1
-    effect1.setReverbLength(0.6); // 0-1
-    effect1.setReverbMix(0.7); // 0-1
+    effect1.setReverbSize(16); // quality, decay and memory >= 1
+    effect1.setReverbLength(0.6); // 0-1 feedback level
+    effect1.setReverbMix(0.7); // 0-1 balance between dry and wet signals
   #endif
   // setI2sPins(25, 27, 12, 21);
   audioStart();
@@ -43,9 +43,8 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  // Serial.print(msNow);Serial.print(" ");Serial.print(noteTime);Serial.print(" ");Serial.println(msNow - noteTime);
-  if (msNow - noteTime > noteDelta || msNow - noteTime < 0) {
-    noteTime = msNow;
+  if ((unsigned long)(msNow - noteTime) >= noteDelta) {
+      noteTime += noteDelta;
     for (int i=0; i<poly; i++){
       if (random(10) < 5) {
         int p = pitchQuantize(random(36) + 48, scale, 0);
@@ -56,8 +55,8 @@ void loop() {
     }
   }
 
-  if (msNow - envTime > envDelta || msNow - envTime < 0) {
-    envTime = msNow;
+  if ((unsigned long)(msNow - envTime) >= envDelta) {
+      envTime += envDelta;
     for (int i=0; i<poly; i++) {
       env[i].next();
     }

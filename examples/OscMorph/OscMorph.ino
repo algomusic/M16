@@ -12,6 +12,8 @@ bool morphUp = true;
 unsigned long msNow = millis();
 unsigned long noteTime = msNow;
 unsigned long morphTime = msNow;
+int noteDelta = 1000;
+int morphDelta = 32;
 
 void setup() {
   Serial.begin(115200);
@@ -24,14 +26,14 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow - noteTime > 5000 || msNow - noteTime < 0) {
-    noteTime = msNow;
+  if ((unsigned long)(msNow - noteTime) >= noteDelta) {
+    noteTime += noteDelta;
     int pitch = random(24) + 36;
     aOsc1.setPitch(pitch);
   }
 
-  if (msNow - morphTime > 32 || msNow - morphTime < 0) {
-    morphTime = msNow;
+  if ((unsigned long)(msNow - morphTime) >= morphDelta) {
+    morphTime += morphDelta;
     if (morphUp) {
       morphVal += 0.01;
       if (morphVal > 1.0) {

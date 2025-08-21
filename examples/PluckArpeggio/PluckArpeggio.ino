@@ -13,9 +13,10 @@ Arp arp1;
 SVF filter;
 FX effect1;
 int bpm = 120;
-double stepTime, stepDelta;
-unsigned long msNow = millis();
-unsigned long envTime = msNow;
+int stepDelta = 1000;
+int envDelta = 1;
+int32_t currEnvValue = 0;
+unsigned long msNow, stepTime, envTime;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 float feedback = 0.9;
 
@@ -34,14 +35,16 @@ void setup() {
   arp1.start();
   aOsc1.setPitch(arp1.next());
   filter.setFreq(10000);
+  stepTime = millis();
+  envTime = millis();
   audioStart();
 }
 
 void loop() {
   msNow = millis();
   
-  if (msNow - stepTime > stepDelta || msNow - stepTime < 0) {
-    stepTime = msNow;
+  if ((unsigned long)(msNow - stepTime) >= stepDelta) {
+    stepTime += stepDelta; 
     int pitch = arp1.next(); 
     Serial.println(pitch);
     aOsc1.setPitch(pitch);
@@ -51,9 +54,9 @@ void loop() {
     ampEnv1.start();
   }
 
-  if (msNow - envTime > 4 || msNow - envTime < 0) {
-    envTime = msNow;
-    ampEnv1.next();
+  if ((unsigned long)(msNow - envTime) >= envDelta) {
+    envTime += envDelta; 
+    currEnvValue = ampEnv1.next();
   }
 }
 
@@ -62,7 +65,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  int32_t leftVal = (filter.nextLPF(effect1.pluck((aOsc1.next() * ampEnv1.getValue() >> 16), aOsc1.getFreq(), feedback)) * vol)>>10;
+  int32_t leftVal = (filter.nextLPF(effect1.pluck((aOsc1.next() * currEnvValue) >> 16, aOsc1.getFreq(), feedback)) * vol)>>10;
   int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

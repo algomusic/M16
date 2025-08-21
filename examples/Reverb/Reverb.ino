@@ -15,6 +15,7 @@ unsigned long msNow = millis();
 unsigned long noteTime = msNow;
 unsigned long envTime = msNow;
 unsigned long delTime = msNow;
+int noteDelta = 1000;
 int scale [] = {0, 2, 4, 5, 7, 9, 0, 0, 0, 0, 0};
 int reverbLength = 900; // 0 - 1024
 int reverbMix = 400; // 0 - 1024
@@ -44,8 +45,8 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow - noteTime > 1000 || msNow - noteTime < 0) {
-    noteTime = msNow;
+  if ((unsigned long)(msNow - noteTime) >= noteDelta) {
+      noteTime += noteDelta;
     int p = pitchQuantize(random(25) + 48, scale, 0);
     osc1.setPitch(p);
     filter1.setFreq(min(4000.0f, mtof(p + 32)));

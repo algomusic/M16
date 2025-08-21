@@ -12,6 +12,9 @@ int16_t panLevelL = panLeft(panPos) * 1024; // 0 - 1024
 int16_t panLevelR = panRight(panPos) * 1024;
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
+unsigned long envTime = msNow;
+int pitchDelta = 1000;
+int envDelta = 4;
 int8_t sweep = 2; // 0 to left, 1 to right, 2 no sweep
 
 void setup() {
@@ -26,7 +29,8 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow - pitchTime > 4 || msNow - pitchTime < 0) {
+  if ((unsigned long)(msNow - envTime) >= envDelta) {
+      envTime += envDelta; 
     ampEnv1.next();
     if (sweep < 2) {
       if (sweep == 0) panPos = max(0.0d, panPos - 0.0001);
@@ -36,8 +40,8 @@ void loop() {
     }
   }
 
-  if (msNow - pitchTime > 1000 || msNow - pitchTime < 0) {
-    pitchTime = msNow;
+  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+    pitchTime += pitchDelta;
     int pitch = random(24) + 58;
     osc1.setPitch(pitch);
     panPos = rand(11) * 0.1;

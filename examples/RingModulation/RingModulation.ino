@@ -11,6 +11,7 @@ Osc osc2(triangleWave);
 unsigned long msNow = millis();
 unsigned long modTime = msNow;
 float freqRatio = 0;
+int modDelta = 10;
 
 void setup() {
   Serial.begin(115200);
@@ -23,8 +24,8 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if (msNow - modTime > 10 || msNow - modTime < 0) {
-      modTime = msNow;
+  if ((unsigned long)(msNow - modTime) >= modDelta) {
+    modTime += modDelta;
     float freq1 = mtof(60);
     osc1.setFreq(freq1);
     float freq2 = freq1 * freqRatio;

@@ -27,8 +27,9 @@ void setup() {
 
 void loop() {
   msNow = millis();
-  if (msNow - pitchTime > noteDelta || msNow - pitchTime < 0) {
-    pitchTime = msNow;
+  
+  if ((unsigned long)(msNow - pitchTime) >= noteDelta) {
+      pitchTime += noteDelta;
     int pitch = arp1.next();
     Serial.println(pitch);
     osc1.setPitch(pitch);

@@ -9,8 +9,8 @@ Env ampEnv;
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 unsigned long envTime = msNow;
-int pitchTimeDelta = 1000;
-int envTimeDelta = 1;
+int pitchDelta = 1000;
+int envDelta = 1;
 int currEnvValue = 0;
 int8_t pitchClass [] = {0,2,4,7,9}; // major pentatonic
 
@@ -28,13 +28,13 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - envTime) >= envTimeDelta) {
-      envTime += envTimeDelta; 
-      currEnvValue = ampEnv.next();
+  if ((unsigned long)(msNow - envTime) >= envDelta) {
+    envTime += envDelta; 
+    currEnvValue = ampEnv.next();
   }
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchTimeDelta) {
-      pitchTime += pitchTimeDelta;
+  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+    pitchTime += pitchDelta;
     int pitch = pitchQuantize(random(24) + 58, pitchClass, 0);
     Serial.println(pitch);
     osc1.setPitch(pitch);

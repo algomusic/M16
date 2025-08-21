@@ -31,6 +31,9 @@ unsigned long noteOnTime = msNow;
 unsigned long noteOffTime = msNow;
 unsigned long ccTime = msNow;
 int noteDelta = 500;
+int ccDelta = 800;
+int envDelta = 4;
+int glideDelta = 21;
 float windowSize = 0;
 float nextFreq = 440;
 int outPitch = 60;
@@ -92,8 +95,8 @@ void loop() {
 
   msNow = millis();
 
-  if (msNow - noteOnTime > noteDelta || msNow - noteOnTime < 0) {
-    noteOnTime = msNow;
+  if ((unsigned long)(msNow - noteOnTime) >= noteDelta) {
+    noteOnTime += noteDelta;
     noteOffTime = noteOnTime + 100;
     notePlaying = true;
     outPitch = pitchQuantize(rand(24) + 48, pitchClass, 0);
@@ -106,20 +109,20 @@ void loop() {
     notePlaying = false;
   }
 
-  if (msNow - ccTime > 800 || msNow - ccTime < 0) {
-    ccTime = msNow;
+  if ((unsigned long)(msNow - ccTime) >= ccDelta) {
+    ccTime += ccDelta;
     int ccVal = rand(127);
     MIDI.sendControlChange(7, ccVal, 1); // CC, value, chan
     Serial.print(" Sent CC 7 value: ");Serial.print(ccVal);Serial.println();
   }
    
-  if (msNow - envTime > 4 || msNow - envTime < 0) {
-    envTime = msNow;
+  if ((unsigned long)(msNow - envTime) >= envDelta) {
+    envTime += envDelta;
     ampEnv1.next();
   }
 
-  if (msNow - glideTime > 21 || msNow - glideTime < 0) {
-    glideTime = msNow;
+  if ((unsigned long)(msNow - glideTime) >= glideDelta) {
+    glideTime += glideDelta;
     osc1.slewFreq(nextFreq, 0.8);
   }
 }

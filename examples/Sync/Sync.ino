@@ -18,6 +18,8 @@ Osc aOsc1(waveTable);
 Env ampEnv;
 int envVal = 0;
 unsigned long pitchTime = millis();
+int readPulseDelta = 2;
+int writePulseDelta = 2;
 
 int prevVal = 0;
 unsigned long msNow, ampEnvTime, readPulseTime, writePulseTime;
@@ -43,10 +45,9 @@ void loop() {
   msNow = millis();
 
   // read sync
-  if (msNow > readPulseTime) {
+  if ((unsigned long)(msNow - readPulseTime) >= readPulseDelta) {
     // Sync pulse is about 4ms, so delta between reads should no longer than that 
-    readPulseTime = msNow + 2; 
-
+    readPulseTime += readPulseDelta;
     if(audioSync.receivePulse(msNow)){
       playNote();
       float newBPM = audioSync.getInBpm();
@@ -58,8 +59,8 @@ void loop() {
   }
 
   // write sync
-  if (msNow > writePulseTime) {
-    writePulseTime = msNow + 2; 
+  if ((unsigned long)(msNow - writePulseTime) >= writePulseDelta) {
+      writePulseTime += writePulseDelta;
     if (audioSync.pulseOnTime(msNow)) {
       audioSync.startPulse();
     }
