@@ -72,7 +72,7 @@ class SVF {
     int16_t nextLPF(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      low = low;
+      low = clip16(low);
       return low; 
     }
 
@@ -175,7 +175,6 @@ class SVF {
       input *= resOffset;
       low += f * band;
       // high = ((scale * input) >> 7) - low - ((q * band) >> 8);
-      // high = ((scale * input) >> 15) - low - ((q * band) >> 16);
       high = ((scale * input) >> 14) - low - ((q * band) >> 15);
       band += f * high;
       notch = high + low;
