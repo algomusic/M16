@@ -1,7 +1,7 @@
 /*
  * Osc.h
  *
- * A wavetable oscillator class. Contains generators for common wavetables.
+ * A waveTable oscillator class. Contains generators for common wavetables.
  *
  * by Andrew R. Brown 2021
  *
@@ -28,7 +28,9 @@ public:
   * Table is a int16_t array of TABLE_SIZE - values rabge from -16383 to 16383 (which seems like 15, not 16 bits???)
   * Use sinGen() or similar function in M16.h to fill the table in the setup() function before using
 	*/
-	Osc(int16_t * TABLE_NAME):table(TABLE_NAME) {} // const 
+	// Osc(int16_t * TABLE_NAME):waveTable(TABLE_NAME) {
+  //   setTable(TABLE_NAME);
+  // } 
 
   /** Updates the phase according to the current frequency and returns the sample at the new phase position.
 	* @return outSamp The next sample.
@@ -36,13 +38,19 @@ public:
 	inline
 	int16_t next() {
     int idx = (int)phase_fractional;
-    int32_t sampVal = table[idx];
-    // int32_t sampVal = (table[idx] + prevSampVal)>>1;
+    int32_t sampVal = 0; // rand(MAX_16);
+    if (frequency > 831) { // midi pitch ~80 // high
+      sampVal = waveTable[idx + TABLE_SIZE + TABLE_SIZE];
+    } else if (frequency > 208) { // midi pitch ~56 // mid
+      sampVal = waveTable[idx + TABLE_SIZE];
+    } else {
+      sampVal = (waveTable[idx] + prevSampVal)>>1; // low
+      prevSampVal = sampVal;
+    }
     incrementPhase();
     if (spreadActive) {
       sampVal = doSpread(sampVal);
     }
-    // prevSampVal = sampVal;
     return sampVal;
 	}
 
@@ -54,7 +62,7 @@ public:
 	int16_t atTime(unsigned long ms) {
     unsigned long indexAtTime = ms * cycleLengthPerMS * TABLE_SIZE;
     int index = indexAtTime & (TABLE_SIZE - 1); //indexAtTime % TABLE_SIZE; assuming index is a power of 2
-    int16_t outSamp = table[index]; 
+    int16_t outSamp = waveTable[index]; 
     return outSamp;
   }
 
@@ -73,7 +81,9 @@ public:
 	*/
   inline
 	void setTable(int16_t * TABLE_NAME) { // const
-		table = TABLE_NAME;
+    // TABLE_NAME = waveTable;
+		waveTable = TABLE_NAME;
+    // allocateWavetable();
 	}
 
 	/** Set the phase of the Oscil. Phase ranges from 0.0 - 1.0 */
@@ -120,18 +130,19 @@ public:
 
   /** Return the current value of the Oscil. */
   int16_t getValue() {
-    return prevSampVal; // close enough
+    int idx = (int)phase_fractional;
+    return waveTable[idx];
   }
 
   /** Get a blend of this Osc and another.
-  * @param secondWaveTable - an wavetable array to morph with
+  * @param secondWaveTable - an waveTable array to morph with
   * @param morphAmount - The balance (mix) of the second wavetable, 0.0 - 1.0
   */
 	inline
   int16_t nextMorph(int16_t * secondWaveTable, float morphAmount) {
     int intMorphAmount = max(0, min (1024, (int)(1024 * morphAmount)));
     int idx = (int)phase_fractional;
-    int32_t sampVal = table[idx];
+    int32_t sampVal = waveTable[idx];
     int32_t sampVal2 = secondWaveTable[idx];
     if (morphAmount > 0) sampVal = (((sampVal2 * intMorphAmount) >> 10) +
       ((sampVal * (1024 - intMorphAmount)) >> 10));
@@ -144,15 +155,15 @@ public:
     return sampVal;
 	}
 
-  /** Get a blend of this Osc and another, without incrementing the wavetable lookup.
-  * @param secondWaveTable - an wavetable array to morph with
-  * @param morphAmount - The balance (mix) of the second wavetable, 0.0 - 1.0
+  /** Get a blend of this Osc and another, without incrementing the waveTable lookup.
+  * @param secondWaveTable - a waveTable  array to morph with
+  * @param morphAmount - The balance (mix) of the second waveTable , 0.0 - 1.0
   */
 	inline
   int16_t currentMorph(int16_t * secondWaveTable, float morphAmount) {
     int intMorphAmount = max(0, min(1024, (int)(1024 * morphAmount)));
     int idx = (int)phase_fractional;
-    int32_t sampVal = table[idx];
+    int32_t sampVal = waveTable[idx];
     int32_t sampVal2 = secondWaveTable[idx];
     if (morphAmount > 0) sampVal = (((sampVal2 * intMorphAmount) >> 10) +
       ((sampVal * (1024 - intMorphAmount)) >> 10));
@@ -163,12 +174,12 @@ public:
     return sampVal;
 	}
 
-  /** Get a window transform between this Osc and another wavetable.
+  /** Get a window transform between this Osc and another waveTable .
   * Inspired by the Window Transform Function by Dove Audio
-  * @param secondWaveTable - an wavetable array to transform with
-  * @param windowSize - The amount (mix) of the second wavetable to let through, 0.0 - 1.0
+  * @param secondWaveTable - an waveTable  array to transform with
+  * @param windowSize - The amount (mix) of the second waveTable  to let through, 0.0 - 1.0
   * @param duel - Use a duel window that can increase harmonicity
-  * @param duel - Invert the second wavefrom that can increase harmonicity
+  * @param invert - Invert the second wavefrom that can increase harmonicity
   */
 	inline
   int16_t nextWTrans(int16_t * secondWaveTable, float windowSize, bool duel, bool invert) {
@@ -183,7 +194,14 @@ public:
       if (phase_fractional < (quarterTable - portion14) || (phase_fractional > (quarterTable + portion14) &&
           phase_fractional < (threeQuarterTable - portion14)) || phase_fractional > (threeQuarterTable + portion14)) {
         int idx = (int)phase_fractional;
-        int32_t sampVal = table[idx];
+        if (frequency > 831) { // midi pitch ~80 // high
+          sampVal = waveTable[idx + TABLE_SIZE + TABLE_SIZE];
+        } else if (frequency > 208) { // midi pitch ~56 // mid
+          sampVal = waveTable[idx + TABLE_SIZE];
+        } else {
+          sampVal = (waveTable[idx] + prevSampVal)>>1; // low
+          prevSampVal = sampVal;
+        }
         if (spreadActive) {
           sampVal = doSpread(sampVal);
         }
@@ -201,7 +219,14 @@ public:
     } else {
       if (phase_fractional < (halfTable - portion12) || phase_fractional > (halfTable + portion12)) {
         int idx = (int)phase_fractional;
-        int32_t sampVal = table[idx];
+        if (frequency > 831) { // midi pitch ~80 // high
+          sampVal = waveTable[idx + TABLE_SIZE + TABLE_SIZE];
+        } else if (frequency > 208) { // midi pitch ~56 // mid
+          sampVal = waveTable[idx + TABLE_SIZE];
+        } else {
+          sampVal = (waveTable[idx] + prevSampVal)>>1; // low
+          prevSampVal = sampVal;
+        }
         if (spreadActive) {
           sampVal = doSpread(sampVal);
         }
@@ -217,8 +242,8 @@ public:
         }
       }
     }
-    // sampVal = (sampVal + prevSampVal)>>1; // smooth
-    // prevSampVal = sampVal;
+    sampVal = (sampVal + prevSampVal)>>1; // smooth joins
+    prevSampVal = sampVal;
     incrementPhase();
     return sampVal;
   }
@@ -226,8 +251,8 @@ public:
   /** Phase Modulation (FM)
    * Pass in a second oscillator and multiply its value to change mod depth
    * @param modulator - The next sample from the modulating waveform
-   * @param modIndex - The depth value to amplify the modulator by, from 0.0 to 1.0
-   * ModIndex values between 0.0 - 1.0 are normally enough, higher values are possible
+   * @param modIndex - The depth value to amplify the modulator by
+   * ModIndex values between 0.0 - 10.0 are normally enough, higher values are possible
    */
   inline int16_t phMod(int16_t modulator, float modIndex) {
     const float modScale = modIndex * (1.0f / 16.0f);
@@ -240,8 +265,8 @@ public:
     const int idx0 = i0 & (TABLE_SIZE - 1);
     const int idx1 = (idx0 + 1) & (TABLE_SIZE - 1);
     // Linear interpolation between adjacent samples
-    const int32_t a = table[idx0];
-    const int32_t b = table[idx1];
+    const int32_t a = waveTable[idx0];
+    const int32_t b = waveTable[idx1];
     int32_t sampVal = a + (int32_t)((b - a) * frac);
     // Advance the carrier phase
     incrementPhase();
@@ -252,7 +277,9 @@ public:
     // Interpolating two 16-bit values stays within 16-bit range, but clamp just in case
     if (sampVal > MAX_16)  sampVal = MAX_16;
     if (sampVal < MIN_16)  sampVal = MIN_16;
-    return (int16_t)sampVal;
+    int16_t outSamp = (sampVal + prevSampVal)>>1; // smooth
+    prevSampVal = outSamp;
+    return outSamp;
   }
 
   /** Ring Modulation
@@ -263,7 +290,7 @@ public:
   int16_t ringMod(int audioIn) {
     incrementPhase();
     int idx = (int)phase_fractional;
-    int32_t currSamp = table[idx];
+    int32_t currSamp = waveTable[idx];
     int16_t sampVal = (currSamp * audioIn)>>15;
     if (spreadActive) {
       sampVal = doSpread(sampVal);
@@ -272,14 +299,14 @@ public:
   }
 
   /** PhISM Shaker model
-   * Designed for Osc being set to a noise wavetable.
-   * @param thresh The amount of aparent particles. Typically 0.9 - 0.999
+   * Designed for Osc being set to a noise waveTable .
+   * @param thresh The amount of aparent particles. Ty cally 0.9 - 0.999
    * Envelope output and pass to one or more band pass filters or other resonator.
    */
   inline
   int16_t particle(float thresh) {
     int idx = (int)phase_fractional;
-    int32_t noiseVal = table[idx];
+    int32_t noiseVal = waveTable[idx];
     if (noiseVal > (MAX_16 * thresh)) {
       particleEnv = noiseVal - (MAX_16 - noiseVal) - (MAX_16 - noiseVal);
     } else particleEnv *= particleEnvReleaseRate;
@@ -305,8 +332,8 @@ public:
    */
   inline
   int16_t feedback(int32_t modIndex) {
-  	int16_t y = table[(int)feedback_phase_fractional] >> 3;
-  	int16_t s = table[y]; 
+  	int16_t y = waveTable[(int)feedback_phase_fractional] >> 3;
+  	int16_t s = waveTable[y]; 
   	int f = (modIndex * (int32_t)s) >> 16;
 		phase_fractional += f + phase_increment_fractional;
 		if (phase_fractional > TABLE_SIZE) {
@@ -318,7 +345,7 @@ public:
 		if (feedback_phase_fractional > TABLE_SIZE) {
 			feedback_phase_fractional -= TABLE_SIZE;
 		}
-    int16_t out = table[(int16_t)phase_fractional & (TABLE_SIZE - 1)];
+    int16_t out = waveTable[(int16_t)phase_fractional & (TABLE_SIZE - 1)];
   	return out;
   }
 
@@ -406,6 +433,7 @@ public:
   */
 	inline
 	void setCrackle(bool val) {
+    setNoise(true);
 		isCrackle = val;
 	}
 
@@ -415,6 +443,7 @@ public:
   */
 	inline
 	void setCrackle(bool val, int amnt) {
+    setNoise(true);
 		isCrackle = val;
     crackleAmnt = max(1, min(MAX_16, amnt));
 	}
@@ -447,36 +476,73 @@ public:
    * main program file and reference them from instances of this class.
    */
 
-  /** Generate a cosine wave
+  /** Generate a cosine wave for the provided wavetable
   * @theTable The the wavetable to be filled
   */
   static void cosGen(int16_t * theTable) {
     for(int i=0; i<TABLE_SIZE; i++) {
-      theTable[i] = (cos(2 * 3.1459 * i * TABLE_SIZE_INV) * MAX_16); //32767, 16383
+      int samp = (cos(2 * 3.1459 * i * TABLE_SIZE_INV) * MAX_16);
+      theTable[i] = samp; // low
+      theTable[i + TABLE_SIZE] = samp; // mid
+      theTable[i + TABLE_SIZE * 2] = samp; // high
     }
   }
 
-  /** Generate a sine wave
+  /** Generate a sine wave for the provided wavetable
   * @theTable The the wavetable to be filled
   */
   static void sinGen(int16_t * theTable) {
     for(int i=0; i<TABLE_SIZE; i++) {
-      theTable[i] = (sin(2 * 3.1459 * i * TABLE_SIZE_INV) * MAX_16); //32767, 16383
+      int samp = (sin(2 * 3.1459 * i * TABLE_SIZE_INV) * MAX_16);
+      theTable[i] = samp; // low
+      theTable[i + TABLE_SIZE] = samp; // mid
+      theTable[i + TABLE_SIZE * 2] = samp; // high
     }
   }
 
-  /** Generate a triangle wave
+  /** Generate a sine wave for the oscillator */
+  void sinGen() {
+    allocateWavetable();
+    for(int i=0; i<TABLE_SIZE; i++) {
+      int samp = (sin(2 * 3.1459 * i * TABLE_SIZE_INV) * MAX_16);
+      waveTable[i] = samp; // low
+      waveTable[i + TABLE_SIZE] = samp; // mid
+      waveTable[i + TABLE_SIZE * 2] = samp; // high
+      Serial.println(samp);
+    }
+  }
+
+  /** Generate a triangle wave for the provided wavetable
   * @theTable The the wavetable to be filled
   */
   static void triGen(int16_t * theTable) {
-    for (int i=0; i<TABLE_SIZE; i++) {
-      if (i < HALF_TABLE_SIZE) {
-        theTable[i] = MAX_16 - i * (MAX_16 * 2.0f * TABLE_SIZE_INV * 2.0f);
-      } else theTable[i] = MIN_16 + (i - (float)HALF_TABLE_SIZE) * (MAX_16 * 2.0f * TABLE_SIZE_INV * 2.0f);
-    }
+    Osc::generateWave(theTable, 0, 48, 1); // low
+    Osc::generateWave(theTable, 1, 20, 1); // mid
+    Osc::generateWave(theTable, 2, 12, 1); // high
+    // for (int i=0; i<TABLE_SIZE; i++) {
+    //   if (i < HALF_TABLE_SIZE) {
+    //     int samp = MAX_16 - i * (MAX_16 * 2.0f * TABLE_SIZE_INV * 2.0f);
+    //     theTable[i] = samp;
+    //     theTable[i + TABLE_SIZE] = samp; // mid
+    //     theTable[i + TABLE_SIZE * 2] = samp; // high
+    //   } else {
+    //     int samp = MIN_16 + (i - (float)HALF_TABLE_SIZE) * (MAX_16 * 2.0f * TABLE_SIZE_INV * 2.0f);
+    //     theTable[i] = samp;
+    //     theTable[i + TABLE_SIZE] = samp; // mid
+    //     theTable[i + TABLE_SIZE * 2] = samp; // high
+    //   }
+    // }
   }
 
-  /** Generate a square/pulse wave
+  /** Generate a triangle wave for the oscillator */
+  void triGen() {
+    allocateWavetable();
+    Osc::generateWave(waveTable, 0, 48, 1); // low
+    Osc::generateWave(waveTable, 1, 20, 1); // mid
+    Osc::generateWave(waveTable, 2, 12, 1); // high
+  }
+
+  /** Generate a square/pulse wave for the provided wavetable
   * @theTable The the wavetable to be filled
   * @duty The duty cycle, or pulse width, 0.0 - 1.0, 0.5 = sqr
   */
@@ -484,34 +550,73 @@ public:
     for(int i=0; i<TABLE_SIZE; i++) {
       if (i < TABLE_SIZE * duty) {
         theTable[i] = MAX_16;
-      } else theTable[i] = MIN_16;
+        theTable[i + TABLE_SIZE] = MAX_16;
+        theTable[i + TABLE_SIZE * 2] = MAX_16;
+      } else {
+        theTable[i] = MIN_16;
+        theTable[i + TABLE_SIZE] = MIN_16;
+        theTable[i + TABLE_SIZE * 2] = MIN_16;
+      }
     }
   }
 
-  /** Generate a square wave
+  /** Generate a square wave for the provided wavetable
   * @theTable The the wavetable to be filled
   */
   static void sqrGen(int16_t * theTable) {
-    pulseGen(theTable, 0.5);
+    Osc::generateWave(theTable, 0, 56, 2); // low
+    Osc::generateWave(theTable, 1, 28, 2); // mid
+    Osc::generateWave(theTable, 2, 12, 2); // high
   }
 
-  /** Generate a sawtooth wave
+  /** Generate a square wave for the local wavetable
+  * @theTable The the wavetable to be filled
+  */
+  void sqrGen() {
+    allocateWavetable();
+    Osc::generateWave(waveTable, 0, 56, 2); // low
+    Osc::generateWave(waveTable, 1, 28, 2); // mid
+    Osc::generateWave(waveTable, 2, 12, 2); // high
+  }
+
+  /** Generate a sawtooth wave for the provided wavetable
   * @theTable The the wavetable to be filled
   */
   static void sawGen(int16_t * theTable) {
-    for (int i=0; i<TABLE_SIZE; i++) {
-      theTable[i] = (MAX_16 - i * (MAX_16 * 2 * TABLE_SIZE_INV));
-    }
+    Osc::generateWave(theTable, 0, 84, 3); // low
+    Osc::generateWave(theTable, 1, 34, 3); // mid
+    Osc::generateWave(theTable, 2, 8, 3); // high
+    // for (int i=0; i<TABLE_SIZE; i++) {
+    //   theTable[i] = (MAX_16 - i * (MAX_16 * 2 * TABLE_SIZE_INV));
+    // }
   }
 
-  /** Generate white noise
+  /** Generate a sawtooth wave for the oscillator 
+   * in the local wavetable
+  */
+  void sawGen() { 
+    allocateWavetable();
+    Osc::generateWave(waveTable, 0, 84, 3); // low
+    Osc::generateWave(waveTable, 1, 34, 3); // mid
+    Osc::generateWave(waveTable, 2, 8, 3); // high
+  }
+
+  /** Generate white noise for the provided wavetable
   * @theTable The the wavetable to be filled
   */
   static void noiseGen(int16_t * theTable) {
     audioRandSeed(random(MAX_16));
-    for(int i=0; i<TABLE_SIZE; i++) {
-      // theTable[i] = rand(MAX_16 * 2) - MAX_16;
+    for(int i=0; i<FULL_TABLE_SIZE; i++) {
       theTable[i] = audioRand(MAX_16 * 2) - MAX_16;
+    }
+  }
+
+  /** Generate white noise in the local wavetable */
+  void noiseGen() {
+    allocateWavetable();
+    audioRandSeed(random(MAX_16));
+    for(int i=0; i<FULL_TABLE_SIZE; i++) {
+      waveTable [i] = audioRand(MAX_16 * 2) - MAX_16;
     }
   }
 
@@ -522,24 +627,51 @@ public:
   static void noiseGen(int16_t * theTable, int grainSize) {
     int grainCnt = 0;
     int randVal = audioRand(MAX_16 * 2) - MAX_16;
-    for(int i=0; i<TABLE_SIZE; i++) {
+    for(int i=0; i<FULL_TABLE_SIZE; i++) {
       theTable[i] = randVal;
       grainCnt++;
       if (grainCnt % grainSize == 0) randVal = audioRand(MAX_16 * 2) - MAX_16;
     }
   }
 
+  /** Generate grainly white noise, like a sample and hold wave
+  * @grainSize The number of samples each random value is held for
+  */
+  void noiseGen(int grainSize) {
+    allocateWavetable();
+    int grainCnt = 0;
+    int randVal = audioRand(MAX_16 * 2) - MAX_16;
+    for(int i=0; i<FULL_TABLE_SIZE; i++) {
+      waveTable[i] = randVal;
+      // prevSampVal = (randVal + prevSampVal)>>1;
+      // waveTable[i] = prevSampVal;
+      grainCnt++;
+      if (grainCnt % grainSize == 0) randVal = audioRand(MAX_16 * 2) - MAX_16;
+    }
+  }
+
   /** Generate crackle noise
-  * @theTable The the wavetable to be filled
+  * @theTable The wavetable to be filled
   */
   static void crackleGen(int16_t * theTable) {
-    // theTable[0] = MAX_16;
-    for(int i=0; i<TABLE_SIZE; i++) {
+    for(int i=0; i<FULL_TABLE_SIZE; i++) {
       theTable[i] = 0;
     }
-    for(int i=0; i<2; i++) {
-      theTable[(int)audioRand(TABLE_SIZE)] = MAX_16;
-      theTable[(int)audioRand(TABLE_SIZE)] = MIN_16;
+    for(int i=0; i<6; i++) { 
+      theTable[(int)audioRand(FULL_TABLE_SIZE)] = MAX_16;
+      theTable[(int)audioRand(FULL_TABLE_SIZE)] = MIN_16;
+    }
+  }
+
+  /** Generate crackle noise in the local wavetable */
+  void crackleGen() {
+    allocateWavetable();
+    for(int i=0; i<FULL_TABLE_SIZE; i++) {
+      waveTable [i] = 0;
+    }
+    for(int i=0; i<6; i++) { 
+      waveTable[(int)audioRand(FULL_TABLE_SIZE)] = MAX_16;
+      waveTable[(int)audioRand(FULL_TABLE_SIZE)] = MIN_16;
     }
   }
 
@@ -550,11 +682,25 @@ public:
     int val = 0;
     int deviation = MAX_16>>1;
     int halfDev = deviation>>1;
-    for(int i=0; i<TABLE_SIZE; i++) {
+    for(int i=0; i<FULL_TABLE_SIZE; i++) {
       val += audioRandGauss(deviation, 2) - halfDev;
       if (val > MAX_16) val = val - MAX_16;
       if (val < MIN_16) val = MIN_16 + abs(val) - MAX_16;
       theTable[i] = max(MIN_16, min(MAX_16, (int)val));
+    }
+  }
+
+  /** Generate Browian noise in the local wavetable */
+  void brownNoiseGen() {
+    allocateWavetable();
+    int val = 0;
+    int deviation = MAX_16>>1;
+    int halfDev = deviation>>1;
+    for(int i=0; i<FULL_TABLE_SIZE; i++) {
+      val += audioRandGauss(deviation, 2) - halfDev;
+      if (val > MAX_16) val = val - MAX_16;
+      if (val < MIN_16) val = MIN_16 + abs(val) - MAX_16;
+      waveTable [i] = max(MIN_16, min(MAX_16, (int)val));
     }
   }
 
@@ -564,7 +710,7 @@ public:
   */
   static void pinkNoiseGen(int16_t * theTable) {
     float b0, b1, b2, b3, b4, b5, b6;
-    for (int i=0; i<TABLE_SIZE; i++) {
+    for (int i=0; i<FULL_TABLE_SIZE; i++) {
       float white = (audioRand(5000) - 2500) * 0.001; // 20000, 10000
       b0 = 0.99886 * b0 + white * 0.0555179;
       b1 = 0.99332 * b1 + white * 0.0750759;
@@ -579,6 +725,45 @@ public:
     }
   }
 
+  /** Generate pink noise in the local wavetable
+  * Using Paul Kellet's refined method
+  */
+  void pinkNoiseGen() {
+    allocateWavetable();
+    float b0, b1, b2, b3, b4, b5, b6;
+    for (int i=0; i<FULL_TABLE_SIZE; i++) {
+      float white = (audioRand(5000) - 2500) * 0.001; // 20000, 10000
+      b0 = 0.99886 * b0 + white * 0.0555179;
+      b1 = 0.99332 * b1 + white * 0.0750759;
+      b2 = 0.969 * b2 + white * 0.153852;
+      b3 = 0.8665 * b3 + white * 0.3104856;
+      b4 = 0.55 * b4 + white * 0.5329522;
+      b5 = -0.7616 * b5 - white * 0.016898;
+      float pink = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+      pink *= 0.11;
+      b6 = white * 0.115926;
+      waveTable [i] = max(MIN_16, min(MAX_16, (int)(pink * MAX_16)));
+    }
+  }
+
+  /** Allocate memory for an external waveTable 
+   * @theTable The waveTable pointer
+   * Be careful of the pointer to pointer argbrequiring &NAME is the calling pointer
+  */
+  static void allocateWaveMemory(int16_t** theTable) {
+    #if IS_ESP32()
+    if (psramFound() && ESP.getFreePsram() > FULL_TABLE_SIZE * sizeof(int16_t)) {
+      *theTable = (int16_t*) ps_calloc(FULL_TABLE_SIZE, sizeof(int16_t));
+      Serial.println("PSRAM is availible for wavetable");
+    } else {
+      *theTable = new int16_t[FULL_TABLE_SIZE];
+      Serial.println("PSRAM not available for wavetable");
+    }
+    #else
+      *theTable = new int16_t[FULL_TABLE_SIZE];
+    #endif
+  }
+
 private:
   float phase_fractional = 0.0;
   float spread1 = 1.0;
@@ -591,11 +776,12 @@ private:
   float phase_increment_fractional_s2 = 18.75;
   float phase_increment_fractional_w1 = phase_increment_fractional;
   float phase_increment_fractional_w2 = phase_increment_fractional;
-	int16_t * table; // const
+  int16_t * waveTable = nullptr; 
+  bool allocated = false;
   int32_t prevSampVal = 0;
   bool isNoise = false;
   bool isCrackle = false;
-  int crackleAmnt = MAX_16 * 0.5; //0; //MAX_16 * 0.5;
+  int crackleAmnt = MAX_16 * 0.5; //MAX_16 * 0.5;
   float frequency = 440;
   float prevFrequency = 440;
   float pulseWidth = 0.5;
@@ -606,6 +792,86 @@ private:
   float testVal = 1.3;
   float cycleLengthPerMS = frequency * 0.001f; // / 1000.0f;
   float midiPitch = 69;
+  bool usePSRAM = false;
+
+  /** Fill the waveTable with silence */
+  void empty(int16_t * theTable) {
+    for(int i=0; i<FULL_TABLE_SIZE; i++) {
+      theTable[i] = 0; // zero out the wavetable
+    }
+  }
+
+  /** Allocate memory for the waveTable */
+  void allocateWavetable() {
+    if (!allocated) {
+      #if IS_ESP32()
+        if (psramFound()) {
+          Serial.println("PSRAM is availible in osc");
+          usePSRAM = true;
+        } else {
+          Serial.println("PSRAM not available in osc");
+          usePSRAM = false;
+        }
+        if (usePSRAM && ESP.getFreePsram() > FULL_TABLE_SIZE * sizeof(int16_t)) {
+          waveTable = (int16_t *) ps_calloc(FULL_TABLE_SIZE, sizeof(int16_t)); // calloc fills array with zeros
+        } else {
+          waveTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
+          empty(waveTable);
+        }
+      #else 
+        waveTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
+        empty(waveTable);
+      #endif
+      allocated = true;
+    }
+  }
+
+  /* Bandlimited waveTable generator 
+  * @segment Which 3rd of the full table to use, low (0), mid (1), high (2)
+  */
+  static void generateWave(int16_t * theTable, int segment, int overtones, int waveType) {
+    float angularFreq = (2.0f * PI) / (float)TABLE_SIZE;
+    float maxAmp = 1.0;
+    float maxValue = -1;
+    float minValue = 1;
+    float * tempTable = new float[TABLE_SIZE];
+
+    for (int i=0; i<TABLE_SIZE; i++) {
+      tempTable[i] = 0;
+    }
+    for (int i=0; i<TABLE_SIZE; i++) {
+      if (waveType == 1) { // triangle
+        for(int m=0; m<overtones; m+=2) { // low 48, mid 20, high 12
+          float nextOvertone = (maxAmp/((m+1)*(m+1)) * sin((angularFreq*(m+1))*i)); //triangle formula
+          if (m%4 == 0) nextOvertone *= -1;
+          tempTable[i] = (tempTable[i] + nextOvertone); 
+        }
+      }
+      if (waveType == 2) { // square
+        for(int m=0; m<overtones; m+=2) {  // <56 = 56, 28, >80 = 12
+          float nextOvertone = (maxAmp/((m+1)) * sin((angularFreq*(m+1))*i)); //square wave formula
+          tempTable[i] = (tempTable[i] + nextOvertone); 
+        }
+      }
+      if (waveType == 3) { // sawtooth
+        for(int m=0; m<overtones; m++) { // low 84, mid 34, high 8
+          tempTable[i] = (tempTable[i] + ((maxAmp/(m+1) * sin((angularFreq*(m+1))*i)))); //sawtooth formula
+        }
+      }
+      if (tempTable[i] > maxValue) { //checks highest value
+        maxValue = tempTable[i];
+      }
+      if (tempTable[i] < minValue) { //checks lowest value
+          minValue = tempTable[i];
+      }
+    }
+    // normalise
+    int segOffset = TABLE_SIZE * segment;
+    for (int i=0; i<TABLE_SIZE; i++) {
+      theTable[i + segOffset] = floatMap(tempTable[i], minValue, maxValue, -1, 1) * (MAX_16 * 2 - MAX_16);
+    }
+    delete[] tempTable;
+  }
 
   /** Increments the phase of the oscillator without returning a sample. */
   inline void incrementPhase() {
@@ -648,48 +914,6 @@ private:
           }
       }
   }
-  /*
-  inline void incrementPhase() {
-    if (pulseWidthOn) {
-      // Adjust phase increment based on pulse width section
-      if (phase_fractional < HALF_TABLE_SIZE) {
-        phase_fractional += phase_increment_fractional_w1;
-      } else {
-        phase_fractional += phase_increment_fractional_w2;
-      }
-    } else {
-      phase_fractional += phase_increment_fractional;
-    }
-
-    // Fast path: normal wrapping when not noise or crackle
-    if (!isNoise && !isCrackle) {
-      if (phase_fractional >= TABLE_SIZE) {
-        phase_fractional -= TABLE_SIZE;
-        // Light random pitch drift for realism
-        phase_increment_fractional *= (1.0f + ((rand() & 0x7) - 3) * 0.000001f);
-        if (pulseWidthOn) {
-          float halfInc = phase_increment_fractional * 0.5f;
-          phase_increment_fractional_w1 = halfInc / pulseWidth;
-          phase_increment_fractional_w2 = halfInc / (1.0f - pulseWidth);
-        }
-      }
-      return; // Done
-    }
-
-    // Noise / crackle modes
-    if (phase_fractional >= TABLE_SIZE) {
-      if (isNoise) {
-        phase_fractional = rand() & (TABLE_SIZE - 1); // fast mod
-      } else { // crackle
-        if ((audioRand() & 0x7FFF) > crackleAmnt) {
-            phase_fractional = 1;
-        } else {
-            phase_fractional = audioRand() & (TABLE_SIZE - 1);
-        }
-      }
-    }
-  }
-    */
 
   /** Increments the phase of spread reads of the oscillator
   * without returning a sample.*/
@@ -704,13 +928,12 @@ private:
   /** Returns a spread sample. */
 	inline
 	int16_t doSpread(int32_t sampVal) {
-    int32_t spreadSamp1 = table[(int)phase_fractional_s1];
-    int32_t spreadSamp2 = table[(int)phase_fractional_s2];
+    int32_t spreadSamp1 = waveTable[(int)phase_fractional_s1];
+    int32_t spreadSamp2 = waveTable[(int)phase_fractional_s2];
     sampVal = clip16((sampVal + ((spreadSamp1 * 500)>>10) + ((spreadSamp2 * 500)>>10))>>1);
     incrementSpreadPhase();
     return sampVal;
 	}
 };
-
 
 #endif /* OSC_H_ */
