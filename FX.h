@@ -34,10 +34,11 @@ class FX {
     */
     inline
     int16_t waveFold(int32_t sample_in, float amount) {
-      if (amount != 1.0f) sample_in *= amount;
+      if (amount <= 1) return sample_in;
+      sample_in *= amount;
       while(abs(sample_in) > MAX_16) {
-        if (sample_in > 0) sample_in = MAX_16 - (sample_in - MAX_16);
-        if (sample_in < 0) sample_in = -MAX_16 - (sample_in + MAX_16);
+        if (sample_in > 0) sample_in = MAX_16 - (sample_in + MIN_16);
+        if (sample_in <= 0) sample_in = MIN_16 - (sample_in + MAX_16);
       }
       return clip16(sample_in);
     }
@@ -487,7 +488,17 @@ class FX {
     }
 
     void initChorus() {
-      chorusLfoTable = new int16_t[TABLE_SIZE]; // create a new array
+      #if IS_ESP32()
+        if (psramFound() && ESP.getFreePsram() > FULL_TABLE_SIZE * sizeof(int16_t)) {
+          chorusLfoTable = (int16_t *) ps_calloc(FULL_TABLE_SIZE, sizeof(int16_t)); // calloc fills array with zeros
+          Serial.println("PSRAM is availible in chorus");
+        } else {
+          chorusLfoTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
+          Serial.println("PSRAM not available in chorus");
+        }
+      #else 
+        chorusLfoTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
+      #endif
       Osc::sinGen(chorusLfoTable); // fill the wavetable
       chorusLfo.setTable(chorusLfoTable);
       chorusLfo.setFreq(chorusLfoRate);
