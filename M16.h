@@ -25,11 +25,12 @@
 const float SAMPLE_RATE_INV  = 1.0f / SAMPLE_RATE;
 #define MAX_16 32767
 #define MIN_16 -32767
-float MAX_16_INV = 0.00003052;
+const float MAX_16_INV = 0.00003052;
 
-const int16_t TABLE_SIZE = 4096; //8192; // 2048 // 4096 // 8192 // 16384 //32768 // 65536 //uint16_t
+const int16_t TABLE_SIZE = 4096; //4096; //8192; // 2048 // 4096 // 8192 // 16384 //32768 // 65536 //uint16_t
 const float TABLE_SIZE_INV = 1.0f / TABLE_SIZE;
 const int16_t HALF_TABLE_SIZE = 2048; //TABLE_SIZE / 2;
+const int16_t FULL_TABLE_SIZE = 12288; //TABLE_SIZE * 3; // accomodates low, mid, and high freq band limited waves
 
 int16_t prevWaveVal = 0;
 int16_t leftAudioOuputValue = 0;
@@ -61,7 +62,6 @@ int16_t rightAudioOuputValue = 0;
     timer1_attachInterrupt(onTimerISR); //Attach our sampling ISR
     timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
     timer1_write(2000); //Service at 2mS intervall
-    audioRandSeed(random() * MAX_16);
     Serial.println("M16 is running");
   }
 
