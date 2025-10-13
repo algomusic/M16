@@ -3,8 +3,7 @@
 #include "M16.h" 
 #include "Osc.h"
 
-int16_t waveTable [TABLE_SIZE]; // empty wavetable
-Osc aOsc1(waveTable);
+Osc aOsc1;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow = millis();
 unsigned long changeTime = msNow;
@@ -12,7 +11,7 @@ int changeDelta = 5000;
 
 void setup() {
   Serial.begin(115200);
-  Osc::crackleGen(waveTable); // fill the wavetable
+  aOsc1.crackleGen(); // fill the wavetable
   aOsc1.setCrackle(true, 1000); // 0 - MAX_16
   audioStart();
 }

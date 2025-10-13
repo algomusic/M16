@@ -1,33 +1,25 @@
 // M16 Noise types example
-
 #include "M16.h"
 #include "Osc.h"
 #include "Env.h"
 
-int16_t whiteTable [TABLE_SIZE]; // empty wavetable
-int16_t pinkTable [TABLE_SIZE]; 
-int16_t brownTable [TABLE_SIZE]; 
-int16_t crackleTable [TABLE_SIZE]; 
-Osc whiteOsc(whiteTable); //instantiate oscillator and assign a table
-Osc pinkOsc(pinkTable);
-Osc brownOsc(brownTable);
-Osc crackleOsc(crackleTable);
-
+Osc whiteOsc, pinkOsc, brownOsc, crackleOsc;
 Env ampEnvW, ampEnvP, ampEnvB, ampEnvC; // envelopes
 
 // handle control rate updates for envelope and notes
 unsigned long msNow, stepTime, envTime = millis();
-int vol = 1000; // 0 - 1023, 10 bit // keep to max 50% for MAX98357 which sums both channels!
+int vol = 1000; // 0 - 1023, 10 bit // keep to max 50% for MAX98357 which sums both channels to mono.
 byte color = 0;
 int envDelta = 4;
 int stepDelta = 2000;
 
 void setup() {
   Serial.begin(115200);
-  Osc::noiseGen(whiteTable); // fill wavetable
-  Osc::pinkNoiseGen(pinkTable);
-  Osc::brownNoiseGen(brownTable);
-  Osc::crackleGen(crackleTable);
+  delay(200);
+  whiteOsc.noiseGen(); // fill wavetable
+  pinkOsc.pinkNoiseGen();
+  brownOsc.brownNoiseGen();
+  crackleOsc.crackleGen();
   whiteOsc.setNoise(true);
   pinkOsc.setNoise(true);
   brownOsc.setNoise(true);
@@ -77,13 +69,9 @@ void loop() {
 // This function required in all M16 programs to specify the samples to be played
 void audioUpdate() {
   int32_t whiteVal = (whiteOsc.next() * ampEnvW.getValue())>>16;
-  // i2s_write_samples(whiteVal, whiteVal);
-  int32_t pinkVal = pinkOsc.next() * ampEnvP.getValue()>>16;
-  // i2s_write_samples(pinkVal, pinkVal);
-  int32_t brownVal = brownOsc.next() * ampEnvB.getValue()>>16;
-  // i2s_write_samples(brownVal, brownVal);
-  int32_t crackleVal = crackleOsc.next() * ampEnvC.getValue()>>16;
-  // i2s_write_samples(crackleVal, crackleVal);
+  int32_t pinkVal = (pinkOsc.next() * ampEnvP.getValue())>>16;
+  int32_t brownVal = (brownOsc.next() * ampEnvB.getValue())>>16;
+  int32_t crackleVal = (crackleOsc.next() * ampEnvC.getValue())>>16;
   int32_t leftVal = ((whiteVal + pinkVal + brownVal + crackleVal) * vol)>>10; // master volume
   int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);

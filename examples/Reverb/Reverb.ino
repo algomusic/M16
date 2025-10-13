@@ -5,8 +5,7 @@
 #include "SVF.h"
 #include "FX.h"
 
-int16_t waveTable [TABLE_SIZE]; // empty array
-Osc osc1(waveTable);
+Osc osc1;
 Env ampEnv1;
 SVF filter1;
 FX effect1;
@@ -24,7 +23,7 @@ float leftPan, rightPan;
 void setup() {
   Serial.begin(115200);
   // tone
-  Osc::sawGen(waveTable);
+  osc1.sawGen();
   osc1.setPitch(60);
   ampEnv1.setAttack(30); 
   ampEnv1.setRelease(300);
@@ -71,7 +70,7 @@ void audioUpdate() {
     int16_t oscVal = (osc1.next() * ampEnv1.getValue())>>16;
     effect1.reverbStereo(oscVal, oscVal, leftVal, rightVal);
   #elif IS_ESP32()
-    int32_t oscVal = filter1.nextLPF((osc1.next() * ampEnv1.getValue())>>16);
+    int32_t oscVal = filter1.nextLPF((osc1.next() * ampEnv1.getValue())>>14);
     effect1.reverbStereo(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
     // try reverbStereo2 is a smoother reverb that requires more processing power
     // effect1.reverbStereo2(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal); 

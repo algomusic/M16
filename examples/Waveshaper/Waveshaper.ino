@@ -4,9 +4,7 @@
 #include "Osc.h"
 #include "FX.h"
 
-int16_t sineTable[TABLE_SIZE]; // empty wavetable
-Osc aOsc1(sineTable);
-Osc lfo1(sineTable);
+Osc aOsc1, lfo1;
 FX effect1;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow = millis();
@@ -31,8 +29,9 @@ void generateTransferFunction() {
 
 void setup() {
   Serial.begin(115200);
-  Osc::sinGen(sineTable); // fill the wavetable
+  aOsc1.sinGen(); // fill the wavetable
   aOsc1.setPitch(69);
+  lfo1.sinGen(); // fill the wavetable
   lfo1.setFreq(0.5);
   generateTransferFunction();
   effect1.setShapeTable(waveShapeTable, TABLE_SIZE); // install the shaping wavetable

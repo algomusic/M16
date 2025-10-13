@@ -6,7 +6,7 @@
 #include "Seq.h"
 #include "FX.h"
 
-int16_t sawTable [TABLE_SIZE]; // empty array
+int16_t * sawTable; // empty array pointer
 
 unsigned long msNow = millis();
 unsigned long stepTime = msNow;
@@ -37,9 +37,10 @@ void seqGen() {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Osc::sawGen(sawTable);
+  Osc::allocateWaveMemory(&sawTable); // init the wavetable
+  Osc::sawGen(sawTable); // fill with a sawtooth waveform
   for (int i=0; i<voices; i++) {
-    oscillators[i].setTable(sawTable);
+    oscillators[i].setTable(sawTable); // assign all osc to the same wavetable to save memory
     oscillators[i].setPitch(60);
     oscillators[i].setSpread(rand(100) * 0.000001);
     ampEnvs[i].setAttack(10);
@@ -82,7 +83,7 @@ void audioUpdate() {
   int32_t leftVal = 0;
   int32_t leftOut, rightOut;
   for (int i=0; i<voices; i++) {
-    leftVal += (filters[i].nextLPF(oscillators[i].next()) * ampEnvs[i].getValue())>>16;
+    leftVal += (filters[i].nextLPF(oscillators[i].next()) * ampEnvs[i].getValue())>>15; // 16
     if (voices > 1) leftVal *= 0.9;
   }
   leftVal = clip16(leftVal);

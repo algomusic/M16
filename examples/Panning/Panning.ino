@@ -3,8 +3,7 @@
 #include "Osc.h"
 #include "Env.h"
 
-int16_t waveTable[TABLE_SIZE]; // empty wavetable
-Osc osc1(waveTable);
+Osc osc1;
 Env ampEnv1;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 float panPos = 0.5;
@@ -20,9 +19,9 @@ int8_t sweep = 2; // 0 to left, 1 to right, 2 no sweep
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Osc::triGen(waveTable); // fill the wavetable
+  osc1.triGen(); // fill the internal wavetable
   osc1.setPitch(69);
-  // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change ESP32 defaults
+  // seti2sPins(38, 39, 40, 41); // bck, ws, data_out, data_in // change ESP32 defaults
   audioStart();
 }
 

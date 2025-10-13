@@ -2,12 +2,7 @@
 #include "M16.h"
 #include "Osc.h"
 
-int16_t sineWave[TABLE_SIZE]; // empty wavetable
-int16_t squareWave[TABLE_SIZE]; // empty wavetable
-int16_t triangleWave[TABLE_SIZE]; // empty wavetable
-Osc osc1(squareWave); // experiment with different waveform combinations
-Osc osc2(triangleWave);
-
+Osc osc1, osc2;
 unsigned long msNow = millis();
 unsigned long modTime = msNow;
 float freqRatio = 0;
@@ -15,9 +10,8 @@ int modDelta = 10;
 
 void setup() {
   Serial.begin(115200);
-  Osc::sinGen(sineWave); // fill
-  Osc::sqrGen(squareWave); // fill
-  Osc::triGen(triangleWave); // fill
+  osc1.sqrGen(); // fill osc wavtetable
+  osc2.triGen(); // fill
   audioStart();
 }
 

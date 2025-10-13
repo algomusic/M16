@@ -8,11 +8,9 @@
 // #include "SVF.h" // for comparison
 // #include "EMA.h" // for comparison
 
-int16_t waveTable [TABLE_SIZE]; // empty wavetable
-int16_t sineTable [TABLE_SIZE]; // empty wavetable
-Osc osc1(waveTable);
-Osc lfo1(sineTable);
-Osc lfo2(sineTable);
+Osc osc1;
+Osc lfo1;
+Osc lfo2;
 Bob lpf;
 // SVF2 lpf; // for comparison
 // SVF lpf; // for comparison
@@ -25,8 +23,9 @@ int pitchDelta = 4000;
 
 void setup() {
   Serial.begin(115200);
-  Osc::sawGen(waveTable);
-  Osc::sinGen(sineTable);
+  osc1.sawGen();
+  lfo1.sinGen();
+  lfo2.sinGen();
   osc1.setPitch(55);
   // osc1.setSpread(0.0002, -0.0002);
   lfo1.setFreq(0.2);

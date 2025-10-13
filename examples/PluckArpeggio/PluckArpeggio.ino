@@ -6,8 +6,8 @@
 #include "SVF.h"
 #include "FX.h"
 
-int16_t noiseTable [TABLE_SIZE]; // empty wavetable
-Osc aOsc1(noiseTable);
+// int16_t noiseTable [TABLE_SIZE]; // empty wavetable
+Osc aOsc1;
 Env ampEnv1;
 Arp arp1;
 SVF filter;
@@ -23,7 +23,7 @@ float feedback = 0.9;
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Osc::noiseGen(noiseTable); aOsc1.setNoise(true); // fill wavetable and set noise flag
+  aOsc1.noiseGen(); aOsc1.setNoise(true); // fill internal wavetable and set noise flag
   ampEnv1.setAttack(0);
   ampEnv1.setRelease(2);
   int newSet [] = {48, 52, 55, 58, 60, 64};

@@ -2,11 +2,8 @@
 #include "M16.h"
 #include "Osc.h"
 
-int16_t sineTable[TABLE_SIZE]; // empty wavetable
-
-Osc aOsc1(sineTable);
-Osc aOsc2(sineTable);
-
+int16_t * sineTable; // empty wavetable for use by boith oscillators
+Osc aOsc1, aOsc2;
 float modIndex = 0.2;
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
@@ -14,7 +11,10 @@ int pitchDelta = 2000;
 
 void setup() {
   Serial.begin(115200);
+  Osc::allocateWaveMemory(&sineTable);
   Osc::sinGen(sineTable); // fill wavetable
+  aOsc1.setTable(sineTable); // assign wave to osc1
+  aOsc2.setTable(sineTable); // assign wave to osc2
   audioStart();
 }
 
@@ -23,12 +23,12 @@ void loop() {
 
   if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
     pitchTime += pitchDelta;
-    float pitch = rand(36) + 36;
+    float pitch = rand(36) + 48;
     aOsc1.setPitch(pitch);
     float ratio = rand(8) * 0.25 + 0.25;  // set carrier to modulator freq ratio
     Serial.print("Ratio: ");Serial.print(ratio);
     aOsc2.setFreq(mtof(pitch) * ratio);
-    modIndex = rand(50) * 0.1;  // set the modulation index (depth)
+    modIndex = rand(100) * 0.1;  // set the modulation index (depth)
     Serial.print(" Mod Index: ");Serial.println(modIndex);
   }
 }

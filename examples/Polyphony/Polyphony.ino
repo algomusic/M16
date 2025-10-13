@@ -5,9 +5,9 @@
 #include "SVF.h"
 #include "FX.h"
 
-int16_t waveTable[TABLE_SIZE]; // empty array
+int16_t * wavetable; // empty array pointer
 const int poly = 2; // change polyphony as desired, each MCU type will handle particular amounts
-Osc osc[poly];
+Osc osc[poly]; // an array of oscillators
 Env env[poly];
 SVF filter[poly];
 FX effect1;
@@ -22,9 +22,10 @@ int scale [] = {0, 2, 4, 0, 7, 9, 0, 0, 0, 0, 0};
 void setup() {
   Serial.begin(115200);
   // tone
-  Osc::sawGen(waveTable);
+  Osc::allocateWaveMemory(&wavetable);
+  Osc::sawGen(wavetable); // fill the wavetable
   for (int i=0; i<poly; i++) {
-    osc[i].setTable(waveTable);
+    osc[i].setTable(wavetable); // use the same wavetable for each osc to save memory
     osc[i].setPitch(60);
     env[i].setAttack(30);
     filter[i].setRes(0);
@@ -71,7 +72,7 @@ void audioUpdate() {
     #elif IS_ESP32()
       mix += filter[i].nextLPF((osc[i].next() * env[i].getValue())>>16);
     #endif
-    mix *= 0.6;
+    mix *= 0.7;
   }
   // stereo
   int32_t leftVal = mix; 

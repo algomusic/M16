@@ -3,8 +3,7 @@
 #include "Osc.h"
 #include "Arp.h"
 
-int16_t waveTable [TABLE_SIZE]; // empty wavetable
-Osc osc1(waveTable);
+Osc osc1;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
@@ -16,7 +15,7 @@ Arp arp1(arpPitches, 4, 2, ARP_UP_DOWN); // ARP_ORDER, ARP_UP, ARP_DOWN, ARP_UP_
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Osc::triGen(waveTable); // fill the wavetable
+  osc1.triGen(); // fill the wavetable with a tiangle waveform
   osc1.setPitch(69);
   // arp1.setValues(arpPitches, 3);
   // arp1.setDirection(ARP_UP);

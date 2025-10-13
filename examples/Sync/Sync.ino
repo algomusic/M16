@@ -13,8 +13,7 @@
 #include "Env.h"
 
 Sync audioSync(15, 33); // in and out GPIO pins
-int16_t waveTable[TABLE_SIZE]; // empty wavetable
-Osc aOsc1(waveTable);
+Osc aOsc1;
 Env ampEnv;
 int envVal = 0;
 unsigned long pitchTime = millis();
@@ -34,7 +33,7 @@ void playNote() {
 void setup() {
   Serial.begin(115200);
   audioSync.setOutBpm(120);
-  Osc::sinGen(waveTable); // fill the wavetable
+  aOsc1.sinGen(); // fill the wavetable with a sinewave
   aOsc1.setPitch(69);
   // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change ESP32 defaults
   audioStart();

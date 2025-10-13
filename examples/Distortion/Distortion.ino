@@ -6,8 +6,7 @@
 #include "SVF.h"
 #include "FX.h"
 
-int16_t triTable [TABLE_SIZE]; // empty wavetable
-Osc aOsc(triTable);
+Osc aOsc;
 Env ampEnv;
 // Arp arp1;
 SVF filter;
@@ -23,13 +22,14 @@ float feedback = 0.9;
 float pitch = 48;
 int stepDelta = 500;
 int envDelta = 1;
+int distLevel = 0;
 
 void setup() {
   Serial.begin(115200);
   delay(200);
   ampEnv.setAttack(0);
   ampEnv.setRelease(800);
-  Osc::triGen(triTable);
+  aOsc.triGen();
   int newSet [] = {48, 52, 55, 58, 60, 64};
   aOsc.setPitch(pitch);
   filter.setFreq(3500);
@@ -44,8 +44,10 @@ void loop() {
     pitch = clip(pitch + gaussRandNumb(24, 2) - 12, 36, 68); 
     Serial.println(pitch);
     aOsc.setPitch(pitch);
-    vol = 800 + rand(200);
+    vol = 200 + rand(800);
     aOsc.setPhase(0);
+    distLevel = rand(10) + 1;
+    Serial.println(distLevel);
     ampEnv.start();
   }
 
@@ -61,8 +63,8 @@ void loop() {
 */
 void audioUpdate() {
   int32_t leftVal = aOsc.next() * ampEnv.getValue() >> 16;
-  leftVal = effect1.overdrive(leftVal, 10); // applies some gain and distortion
-  // leftVal = effect1.softClip(leftVal, 30); // applies some compression and saturation
+  leftVal = effect1.overdrive(leftVal, distLevel); // applies some gain and distortion
+  // leftVal = effect1.softClip(leftVal, distLevel * 3); // applies some compression and saturation
   int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

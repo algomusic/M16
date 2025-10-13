@@ -5,8 +5,7 @@
 #include "Env.h"
 
 Del delay1(500); // max delay time in ms
-int16_t triTable [TABLE_SIZE]; // empty array
-Osc osc1(triTable);
+Osc osc1;
 Env ampEnv1;
 int noteDelta = 1000;
 
@@ -19,11 +18,12 @@ void setup() {
   Serial.println();Serial.println("M16 running");
   Serial.println(delay1.getBufferSize());
   delay1.setTime(300); // ms
-  delay1.setLevel(0.8); // 0 - 1
+  delay1.setLevel(0.9); // 0 - 1
   delay1.setFeedback(true); // bool
-  Osc::triGen(triTable);
+  osc1.triGen(); // fill the osc wavetable
   osc1.setPitch(60);
   ampEnv1.setAttack(10);
+  // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change ESP32 defaults
   audioStart();
 }
 

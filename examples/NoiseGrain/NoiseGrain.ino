@@ -3,8 +3,8 @@
 #include "Osc.h"
 #include "Env.h"
 
-int16_t waveTable [TABLE_SIZE]; // empty wavetable
-Osc aOsc1(waveTable);
+// int16_t waveTable [TABLE_SIZE]; // empty wavetable
+Osc aOsc1;
 Env ampEnv;
 unsigned long msNow, changeTime, envTime;
 int changeDelta = 1000;
@@ -12,7 +12,7 @@ int envDelta = 4;
 
 void setup() {
   Serial.begin(115200);
-  Osc::noiseGen(waveTable, 1); // fill the wavetable
+  aOsc1.noiseGen(1); // fill the wavetable with a specified grain size
   aOsc1.setNoise(true);
   ampEnv.setRelease(1000);
   audioStart();
@@ -24,7 +24,7 @@ void loop() {
   if ((unsigned long)(msNow - changeTime) >= changeDelta) {
     changeTime += changeDelta;
     int grain = random(1000)+1;
-    Osc::noiseGen(waveTable, grain);
+    aOsc1.noiseGen(grain);
     Serial.println(grain);
     ampEnv.start();
   }

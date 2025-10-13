@@ -3,8 +3,7 @@
 #include "Osc.h"
 #include "Env.h"
 
-int16_t waveTable[TABLE_SIZE]; // empty wavetable
-Osc osc1(waveTable);
+Osc osc1;
 Env ampEnv;
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
@@ -17,7 +16,7 @@ int8_t pitchClass [] = {0,2,4,7,9}; // major pentatonic
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Osc::triGen(waveTable); // fill the wavetable
+  osc1.triGen(); // fill the wavetable
   osc1.setPitch(69);
   ampEnv.setAttack(5);
   ampEnv.setRelease(500);
@@ -38,6 +37,8 @@ void loop() {
     int pitch = pitchQuantize(random(24) + 58, pitchClass, 0);
     Serial.println(pitch);
     osc1.setPitch(pitch);
+    ampEnv.setAttack(rand(100));
+    ampEnv.setRelease(rand(1000));
     ampEnv.start();
   }
 }

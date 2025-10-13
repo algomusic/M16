@@ -3,14 +3,11 @@
 #include "Osc.h"
 #include "FX.h"
 
-int16_t sawTable[TABLE_SIZE]; 
-int16_t triTable[TABLE_SIZE];
-Osc osc(sawTable);
+Osc osc, lfo;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 unsigned long lfoTime = msNow;
-Osc lfo(triTable);
 float lfoRate = 0.1; // hz
 float pitch = 60;
 int pitchDelta = 3000;
@@ -20,9 +17,9 @@ int lfoDelta = 51;
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Osc::sawGen(sawTable); // fill the sawTable
+  osc.sawGen(); // fill the sawTable
   osc.setPitch(pitch);
-  Osc::triGen(triTable); // fill the sawTable
+  lfo.triGen(); // fill the sawTable
   lfo.setFreq(lfoRate);
   audioStart();
 }
@@ -51,8 +48,14 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  int32_t oscVal = osc.next();
-  int32_t leftVal = (effects.chorus(oscVal) * vol)>>10;
-  int32_t rightVal = leftVal;
+  // mono version
+  // int32_t oscVal = osc.next();
+  // int32_t leftVal = (effects.chorus(oscVal) * vol)>>10;
+  // int32_t rightVal = leftVal;
+  // stereo version
+  int32_t oscVal = (osc.next() * vol)>>10;
+  int32_t leftVal, rightVal;
+  effects.chorusStereo(oscVal, oscVal, leftVal, rightVal);
+  //
   i2s_write_samples(leftVal, rightVal);
 }

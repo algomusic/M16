@@ -3,22 +3,22 @@
 #include "M16.h"
 #include "Osc.h"
 
-int16_t sawTable[TABLE_SIZE]; // empty wavetable
-int16_t triTable[TABLE_SIZE]; // empty wavetable
-Osc aOsc1(sawTable);
+int16_t * triTable; // empty wavetable
+Osc aOsc1;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 float morphVal = 0;
 bool morphUp = true;
 unsigned long msNow = millis();
 unsigned long noteTime = msNow;
 unsigned long morphTime = msNow;
-int noteDelta = 1000;
+int noteDelta = 5000;
 int morphDelta = 32;
 
 void setup() {
   Serial.begin(115200);
-  Osc::sawGen(sawTable); // fill the wavetable
-  Osc::triGen(triTable); // fill the wavetable
+  aOsc1.sinGen(); // fill the internal wavetable
+  Osc::allocateWaveMemory(&triTable); // setup the external wavetable
+  Osc::triGen(triTable); // fill the external wavetable
   aOsc1.setPitch(60);
   audioStart();
 }
