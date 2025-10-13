@@ -508,7 +508,6 @@ public:
       waveTable[i] = samp; // low
       waveTable[i + TABLE_SIZE] = samp; // mid
       waveTable[i + TABLE_SIZE * 2] = samp; // high
-      Serial.println(samp);
     }
   }
 
