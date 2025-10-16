@@ -144,10 +144,11 @@ public:
     int idx = (int)phase_fractional;
     int32_t sampVal = waveTable[idx];
     int32_t sampVal2 = secondWaveTable[idx];
-    if (morphAmount > 0) sampVal = (((sampVal2 * intMorphAmount) >> 10) +
-      ((sampVal * (1024 - intMorphAmount)) >> 10));
-    sampVal = (sampVal + prevSampVal)>>1; // smooth
-    prevSampVal = sampVal;
+    if (morphAmount > 0) {
+      sampVal = (((sampVal2 * intMorphAmount) >> 10) + ((sampVal * (1024 - intMorphAmount)) >> 10));
+      sampVal = (sampVal + prevSampVal)>>1; // smooth any discontinuities
+      prevSampVal = sampVal;
+    }
     incrementPhase();
     if (spreadActive) {
       sampVal = doSpread(sampVal);
