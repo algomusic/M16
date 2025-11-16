@@ -88,7 +88,7 @@ int16_t rightAudioOuputValue = 0;
 
 
   // Configuration macros/constants
-  #define SAMPLE_RATE         44100       // or whatever you use
+  // #define SAMPLE_RATE         48000       // defined above
   #define DMA_BUFFERS         8
   #define DMA_BUFFER_LENGTH   64
 
