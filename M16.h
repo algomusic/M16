@@ -281,8 +281,8 @@ int16_t rightAudioOuputValue = 0;
 
 
  /** change the default samplerate 
- * Typical rates fro DACs are 96000, 88200, 48000, 44100, 32000, 16000, 8000
- * Put this class prior to audioStart(), and prior to any Osc.setPitch calls.
+ * Typical rates for DACs are 96000, 88200, 48000, 44100, 32000, 16000, 8000
+ * Put this prior to audioStart() and prior to any Osc.setPitch calls
  */
   void setSampleRate(int newRate) {
     SAMPLE_RATE = newRate;
