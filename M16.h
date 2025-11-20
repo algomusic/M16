@@ -21,8 +21,8 @@
 #define IS_ESP32C3() (defined(CONFIG_IDF_TARGET_ESP32C3))
 
 // globals
-#define SAMPLE_RATE 48000
-const float SAMPLE_RATE_INV  = 1.0f / SAMPLE_RATE;
+int SAMPLE_RATE = 44100;
+float SAMPLE_RATE_INV = 1.0f / SAMPLE_RATE;
 #define MAX_16 32767
 #define MIN_16 -32767
 const float MAX_16_INV = 0.00003052;
@@ -88,7 +88,7 @@ int16_t rightAudioOuputValue = 0;
 
 
   // Configuration macros/constants
-  // #define SAMPLE_RATE         48000       // defined above
+  // #define SAMPLE_RATE         44100       // defined above
   #define DMA_BUFFERS         8
   #define DMA_BUFFER_LENGTH   64
 
@@ -151,7 +151,7 @@ int16_t rightAudioOuputValue = 0;
   // These handles can now be used for vTask things
   TaskHandle_t audioCallback1Handle = NULL;
   TaskHandle_t audioCallback2Handle = NULL;
-
+ 
   void audioStart() {
       // Create the channels
       i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle); // both TX and RX
@@ -278,6 +278,34 @@ int16_t rightAudioOuputValue = 0;
 // } else {
 //   Serial.println("unknown");
 // }
+
+
+ /** change the default samplerate 
+ * Typical rates fro DACs are 96000, 88200, 48000, 44100, 32000, 16000, 8000
+ * Put this class prior to audioStart(), and prior to any Osc.setPitch calls.
+ */
+  void setSampleRate(int newRate) {
+    SAMPLE_RATE = newRate;
+    SAMPLE_RATE_INV = 1.0f / SAMPLE_RATE;
+    #if IS_ESP32()
+      if (tx_handle == NULL) {
+        // Before audioStart() - update the config structure
+        std_cfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(newRate);
+        Serial.printf("Sample rate configured to %d Hz (pre-start)\n", newRate);
+      } else {
+        // After audioStart() - dynamically reconfigure the running I2S
+        i2s_channel_disable(tx_handle);
+        i2s_std_clk_config_t new_clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(newRate);
+        esp_err_t err = i2s_channel_reconfig_std_clock(tx_handle, &new_clk_cfg);
+        if (err == ESP_OK) {
+            Serial.printf("Sample rate updated to %d Hz (running)\n", newRate);
+        } else {
+            Serial.printf("Failed to update sample rate: %d\n", err);
+        }
+        i2s_channel_enable(tx_handle);
+      }
+    #endif
+  }
 
 /** Return freq from a MIDI pitch 
 * @pitch The MIDI pitch to be converted
