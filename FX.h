@@ -257,13 +257,27 @@ class FX {
     */
     inline
     void reverbStereo(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
-      // set up first time called
+      // Thread-safe lazy initialization with mutex
       if (!reverbInitiated) {
-        initReverb(reverbSize);
+        extern SemaphoreHandle_t audioInitMutex;
+        if (audioInitMutex != NULL && xSemaphoreTake(audioInitMutex, portMAX_DELAY)) {
+          // Double-check after acquiring mutex
+          if (!reverbInitiated) {
+            initReverb(reverbSize);
+          }
+          xSemaphoreGive(audioInitMutex);
+        } else {
+          // Fallback if mutex not available (shouldn't happen)
+          initReverb(reverbSize);
+        }
       }
+
       if (reverb2Initiated) {
         processReverb((audioInLeft + allpassRevOut)>>1, clip16(audioInRight + allpassRevOut)>>1);
-      } else  processReverb(clip16(audioInLeft), clip16(audioInRight));
+      } else {
+        processReverb(clip16(audioInLeft), clip16(audioInRight));
+      }
+
       audioOutLeft = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
       audioOutRight = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
     }
@@ -322,6 +336,32 @@ class FX {
     void setReverbSize(float newSize) {
       reverbSize = max(1.0f, newSize);
       initReverb(reverbSize);
+    }
+
+    /* This prevents PSRAM detection and memory allocation from happening in ISR context */
+    inline
+    void initReverbSafe() {
+      if (!reverbInitiated) {
+        // Use global PSRAM check instead of direct call
+        if (isPSRAMAvailable()) {
+          Serial.println("PSRAM available for reverb delays");
+        } else {
+          Serial.println("No PSRAM - using regular RAM for reverb");
+        }
+        initReverb(reverbSize);
+
+        // Pre-initialize allpass filters to prevent lazy init in audio tasks
+        allpass1.setDelayTime(49.6);
+        allpass1.setFeedbackLevel(0.83);
+        allpass2.setDelayTime(34.65);
+        allpass2.setFeedbackLevel(0.79);
+        // Force buffer allocation by calling next() once
+        allpass1.next(0);
+        allpass2.next(0);
+        reverb2Initiated = true;
+
+        Serial.println("Reverb and allpass filters pre-initialized");
+      }
     }
 
     /** A mono chorus using a modulated delay line.
@@ -489,14 +529,15 @@ class FX {
 
     void initChorus() {
       #if IS_ESP32()
-        if (psramFound() && ESP.getFreePsram() > FULL_TABLE_SIZE * sizeof(int16_t)) {
+        // Use cached global PSRAM availability
+        if (isPSRAMAvailable() && ESP.getFreePsram() > FULL_TABLE_SIZE * sizeof(int16_t)) {
           chorusLfoTable = (int16_t *) ps_calloc(FULL_TABLE_SIZE, sizeof(int16_t)); // calloc fills array with zeros
           Serial.println("PSRAM is availible in chorus");
         } else {
           chorusLfoTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
           Serial.println("PSRAM not available in chorus");
         }
-      #else 
+      #else
         chorusLfoTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
       #endif
       Osc::sinGen(chorusLfoTable); // fill the wavetable
