@@ -20,7 +20,7 @@ class All {
 
   public:
     /** Constructor */
-    All() {}
+    All() : inputBuffer(nullptr), outputBuffer(nullptr) {} 
 
     /** Constructor */
     All(float delay, float feedback) {
@@ -39,22 +39,26 @@ class All {
       if (!allpassInitiated) {
         initAllpass();
       }
+
+      if (!inputBuffer || !outputBuffer) return 0;
+      if (bufferSize_samples == 0) return 0;
+
       //write input to delay buffer
       inputBuffer[bufferWriteIndex] = input;
       // increment read index
-      bufferReadIndex = bufferReadIndex + 1; 
+      bufferReadIndex = bufferReadIndex + 1;
       if (bufferReadIndex >= bufferSize_samples) {
         bufferReadIndex = 0;
       }
       //get delayed values of x and y
       int delX = inputBuffer[bufferReadIndex];
-      int delY = outputBuffer[bufferReadIndex]; 
+      int delY = outputBuffer[bufferReadIndex];
       //figure out your current y term: y[n] = -a*x[n] + x[n-d] + a*y[n-d]
       int output = clip16(((feedbackLevel * -1 * input)>>10) + delX + ((feedbackLevel * delY)>>10));
       //stick the output in the ybuffer
       outputBuffer[bufferWriteIndex] = output;
       //increment write index
-      bufferWriteIndex = bufferWriteIndex + 1; 
+      bufferWriteIndex = bufferWriteIndex + 1;
       if (bufferWriteIndex >= bufferSize_samples) {
         bufferWriteIndex = 0;
       }
@@ -101,13 +105,13 @@ class All {
   private:
 
     bool allpassInitiated = false;
-    int allpassSize = 100; // in ms 
+    int allpassSize = 100; // in ms
     int bufferSize_samples;
     float delayTime = 1; // in ms // 0 - allpassSize
     int delayTime_samples;
     int feedbackLevel = 700; // 0-1024
-    int * inputBuffer;
-    int * outputBuffer;
+    int * inputBuffer = nullptr;   
+    int * outputBuffer = nullptr; 
     int bufferWriteIndex = 0;
     int bufferReadIndex = 0;
     int prevOutput = 0;
@@ -116,16 +120,35 @@ class All {
      /** Create the allpass filter input signal buffer */
     void createInputBuffer() {
       if (inputBuffer) { delete[] inputBuffer; inputBuffer = nullptr; }
-      // delete[] inputBuffer; // remove any previous memory allocation
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
+
       #if IS_ESP32()
         if (usePSRAM) {
-          inputBuffer = (int *) ps_malloc(bufferSize_samples * sizeof(int)); // calloc fills array with zeros
-        } else inputBuffer = new int[bufferSize_samples]; // create a new buffer
+          inputBuffer = (int *) ps_malloc(bufferSize_samples * sizeof(int));
+          if (!inputBuffer) {  
+            Serial.println("PSRAM alloc failed for allpass input, using regular RAM");
+            usePSRAM = false;
+            inputBuffer = new int[bufferSize_samples];
+          }
+        } else {
+          inputBuffer = new int[bufferSize_samples];
+        }
+
+        if (!inputBuffer) {
+          Serial.println("ERROR: Allpass input buffer allocation failed!");
+          bufferSize_samples = 0;
+          return;
+        }
       #else
-        inputBuffer = new int[bufferSize_samples]; // create a new buffer
+        inputBuffer = new int[bufferSize_samples];
+        if (!inputBuffer) {  
+          Serial.println("ERROR: Allpass input buffer allocation failed!");
+          bufferSize_samples = 0;
+          return;
+        }
       #endif
+
       for(int i=0; i<bufferSize_samples; i++) {
         inputBuffer[i] = 0; // zero out the buffer
       }
@@ -134,16 +157,35 @@ class All {
     /** Create the allpass filter output signal buffer */
     void createOutputBuffer() {
       if (outputBuffer) { delete[] outputBuffer; outputBuffer = nullptr; }
-      // delete[] outputBuffer; // remove any previous memory allocation
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
+
       #if IS_ESP32()
         if (usePSRAM && ESP.getFreePsram() > bufferSize_samples * sizeof(int)) {
-          outputBuffer = (int *) ps_calloc(bufferSize_samples, sizeof(int)); // calloc fills array with zeros
-        } else outputBuffer = new int[bufferSize_samples]; // create a new buffer
+          outputBuffer = (int *) ps_calloc(bufferSize_samples, sizeof(int));
+          if (!outputBuffer) { 
+            Serial.println("PSRAM alloc failed for allpass output, using regular RAM");
+            usePSRAM = false;
+            outputBuffer = new int[bufferSize_samples];
+          }
+        } else {
+          outputBuffer = new int[bufferSize_samples];
+        }
+
+        if (!outputBuffer) {
+          Serial.println("ERROR: Allpass output buffer allocation failed!");
+          bufferSize_samples = 0;
+          return;
+        }
       #else
-        inputBuffer = new int[bufferSize_samples]; // create a new buffer
+        outputBuffer = new int[bufferSize_samples];
+        if (!outputBuffer) {  
+          Serial.println("ERROR: Allpass output buffer allocation failed!");
+          bufferSize_samples = 0;
+          return;
+        }
       #endif
+
       for(int i=0; i<bufferSize_samples; i++) {
         outputBuffer[i] = 0; // zero out the buffer
       }
@@ -152,13 +194,8 @@ class All {
     /** Set the allpass filter params */
     void initAllpass() {
       #if IS_ESP32()
-        if (psramFound()) {
-          // Serial.println("PSRAM is availible in allpass");
-          usePSRAM = true;
-        } else {
-          // Serial.println("PSRAM not available in allpass");
-          usePSRAM = false;
-        }
+        // Use global PSRAM check instead of direct call
+        usePSRAM = isPSRAMAvailable();
       #endif
       createInputBuffer();
       createOutputBuffer();

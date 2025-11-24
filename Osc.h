@@ -144,11 +144,10 @@ public:
     int idx = (int)phase_fractional;
     int32_t sampVal = waveTable[idx];
     int32_t sampVal2 = secondWaveTable[idx];
-    if (morphAmount > 0) {
-      sampVal = (((sampVal2 * intMorphAmount) >> 10) + ((sampVal * (1024 - intMorphAmount)) >> 10));
-      sampVal = (sampVal + prevSampVal)>>1; // smooth any discontinuities
-      prevSampVal = sampVal;
-    }
+    if (morphAmount > 0) sampVal = (((sampVal2 * intMorphAmount) >> 10) +
+      ((sampVal * (1024 - intMorphAmount)) >> 10));
+    sampVal = (sampVal + prevSampVal)>>1; // smooth
+    prevSampVal = sampVal;
     incrementPhase();
     if (spreadActive) {
       sampVal = doSpread(sampVal);
@@ -752,7 +751,8 @@ public:
   */
   static void allocateWaveMemory(int16_t** theTable) {
     #if IS_ESP32()
-    if (psramFound() && ESP.getFreePsram() > FULL_TABLE_SIZE * sizeof(int16_t)) {
+    // Use cached global PSRAM availability
+    if (isPSRAMAvailable() && ESP.getFreePsram() > FULL_TABLE_SIZE * sizeof(int16_t)) {
       *theTable = (int16_t*) ps_calloc(FULL_TABLE_SIZE, sizeof(int16_t));
       Serial.println("PSRAM is availible for wavetable");
     } else {
@@ -805,20 +805,15 @@ private:
   void allocateWavetable() {
     if (!allocated) {
       #if IS_ESP32()
-        if (psramFound()) {
-          Serial.println("PSRAM is availible in osc");
-          usePSRAM = true;
-        } else {
-          Serial.println("PSRAM not available in osc");
-          usePSRAM = false;
-        }
+        // Use global PSRAM check instead of direct call
+        usePSRAM = isPSRAMAvailable();
         if (usePSRAM && ESP.getFreePsram() > FULL_TABLE_SIZE * sizeof(int16_t)) {
           waveTable = (int16_t *) ps_calloc(FULL_TABLE_SIZE, sizeof(int16_t)); // calloc fills array with zeros
         } else {
           waveTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
           empty(waveTable);
         }
-      #else 
+      #else
         waveTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
         empty(waveTable);
       #endif

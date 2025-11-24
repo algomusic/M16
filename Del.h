@@ -18,7 +18,7 @@
 class Del {
 
 private:
-  int16_t * delayBuffer;
+  int16_t * delayBuffer = nullptr; 
   unsigned int writePos = 0;
   float delayTime_ms = 0.0f;
   unsigned int delayTime_samples = 0;
@@ -36,7 +36,7 @@ public:
 	* Create but don't setup delay.
   * To use, setMaxDecayTime() must be called to initiate the audio buffer.
 	*/
-	Del() {};
+	Del() : delayBuffer(nullptr) {}; 
 
   /** Constructor.
 	* Create and setup delay.
@@ -52,30 +52,53 @@ public:
     setFeedback(feedback);
   }
 
-  /** 
+  /**
    * Set the maximum delay time in milliseconds
    * @param maxDelayTime The maximum delay time in milliseconds
    */
   void setMaxDelayTime(unsigned int maxDelayTime) {
     if (delayBuffer) { delete[] delayBuffer; delayBuffer = nullptr; }
     maxDelayTime_ms = max((unsigned int)0, maxDelayTime);
+
+    const unsigned int MAX_SAFE_DELAY_MS = 4294967295U / SAMPLE_RATE;  // ~97,000ms at 44.1kHz
+    if (maxDelayTime_ms > MAX_SAFE_DELAY_MS) {
+      Serial.print("WARNING: Delay time ");
+      Serial.print(maxDelayTime_ms);
+      Serial.print("ms exceeds safe maximum ");
+      Serial.print(MAX_SAFE_DELAY_MS);
+      Serial.println("ms, capping to maximum");
+      maxDelayTime_ms = MAX_SAFE_DELAY_MS;
+    }
+
     delayBufferSize_samples = maxDelayTime_ms * SAMPLE_RATE * 0.001;
+
     #if IS_ESP32()
-      if (psramFound()) {
-        // Serial.println("PSRAM is availible in delay");
-        usePSRAM = true;
+      // Use cached global PSRAM availability
+      if (isPSRAMAvailable() && ESP.getFreePsram() > delayBufferSize_samples * sizeof(int16_t)) {
+        delayBuffer = (int16_t *) ps_calloc(delayBufferSize_samples, sizeof(int16_t));
+        if (!delayBuffer) {
+          Serial.println("PSRAM alloc failed, using regular RAM");
+          delayBuffer = new int16_t[delayBufferSize_samples];
+        }
       } else {
-        // Serial.println("PSRAM not available in delay");
-        usePSRAM = false;
+        delayBuffer = new int16_t[delayBufferSize_samples];
       }
-      if (usePSRAM && ESP.getFreePsram() > delayBufferSize_samples * sizeof(int16_t)) {
-        delayBuffer = (int16_t *) ps_calloc(delayBufferSize_samples, sizeof(int16_t)); // calloc fills array with zeros
-      } else {
-        delayBuffer = new int16_t[delayBufferSize_samples]; // create a new audio buffer
-        empty();
+
+      if (!delayBuffer) {
+        Serial.println("ERROR: Del buffer allocation failed!");
+        delayBufferSize_samples = 0;
+        maxDelayTime_ms = 0;
+        return;  // Don't call empty() with NULL buffer!
       }
-    #else 
-      delayBuffer = new int16_t[delayBufferSize_samples]; // create a new audio buffer
+      empty();
+    #else
+      delayBuffer = new int16_t[delayBufferSize_samples];
+      if (!delayBuffer) {  
+        Serial.println("ERROR: Del buffer allocation failed!");
+        delayBufferSize_samples = 0;
+        maxDelayTime_ms = 0;
+        return;
+      }
       empty();
     #endif
   }
@@ -150,6 +173,7 @@ public:
 
   /** Fill the delay with silence */
   void empty() {
+    if (!delayBuffer) return; 
     for(int i=0; i<delayBufferSize_samples; i++) {
       delayBuffer[i] = 0; // zero out the buffer
     }
@@ -181,11 +205,12 @@ public:
     return read(0);
   }
 
-  /** Read the buffer at the delayTime + an offset without incrementing read/write index 
+  /** Read the buffer at the delayTime + an offset without incrementing read/write index
    * @param pos The delay offset in samples, can be positive or negative
   */
   inline
 	int16_t read(int pos) {
+    if (!delayBuffer) return 0;  
     int outValue = 0;
     int readPos = writePos - delayTime_samples + pos;
     if (readPos < 0) readPos += delayBufferSize_samples;
@@ -210,6 +235,8 @@ public:
   */
   inline
 	void write(int inValue) {
+    if (!delayBuffer) return;  
+    if (delayBufferSize_samples == 0) return;  // Prevent divide by zero
     delayBuffer[writePos] = min(MAX_16, max(MIN_16, inValue));
     writePos = (writePos + 1) % delayBufferSize_samples;
   }
