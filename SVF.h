@@ -21,6 +21,14 @@ class SVF {
   public:
     /** Constructor */
     SVF() {
+      // Initialize filter state to prevent garbage values
+      low = 0;
+      band = 0;
+      high = 0;
+      notch = 0;
+      allpassPrevIn = 0;
+      allpassPrevOut = 0;
+      simplePrev = 0;
       setRes(0.2);
     }
 
@@ -38,11 +46,20 @@ class SVF {
     }
 
     /** Set the cutoff or centre frequency of the filter.
-    * @param freq_val  40 - 10k Hz (SAMPLE_RATE/4).
+    * @param freq_val  40 Hz to ~21% of sample rate (safe range to prevent overflow).
+    *                  At 44.1kHz: 40-9200 Hz, At 48kHz: 40-10000 Hz
     */
     inline
     void setFreq(int32_t freq_val) {
-      f = 2 * sin(3.1459 * max((int32_t)0, (int32_t)min(maxFreq, freq_val)) * SAMPLE_RATE_INV);
+      // Calculate safe maximum frequency to prevent state variable overflow
+      // Limits the 'f' coefficient to ~1.25 for numerical stability
+      // This prevents the exponential accumulation that causes int32_t overflow
+      int32_t safeMaxFreq = SAMPLE_RATE * 0.21;  // 21% of sample rate
+
+      // Clamp frequency to safe range
+      freq_val = max((int32_t)40, min(safeMaxFreq, freq_val));
+
+      f = 2 * sin(3.1459 * freq_val * SAMPLE_RATE_INV);
     }
 
     /** Return the cutoff or centre frequency of the filter.*/
@@ -52,16 +69,23 @@ class SVF {
     }
 
     /** Set the cutoff or corner frequency of the filter.
-    * @param cutoff_val 0.0 - 1.0 which equates to 40 - 10k Hz (SAMPLE_RATE/4).
+    * @param cutoff_val 0.0 - 1.0 which maps to safe frequency range (40 Hz to 21% of sample rate).
     * Sweeping the cutoff value linearly is mapped to a non-linear frequency sweep
     */
     inline
     void setCutoff(float cutoff_val) {
       cutoff_val = max(0.0f, min(1.0f, cutoff_val));
       float cutoff_freq = 0;
+      int32_t safeMaxFreq = SAMPLE_RATE * 0.21;  // Match setFreq() safety limit
+
       if (cutoff_val > 0.7) {
-        cutoff_freq = pow(cutoff_val, 3) * SAMPLE_RATE * 0.2222;
-      } else cutoff_freq = pow(cutoff_val * 1.43, 2) * 3500 + 40;
+        cutoff_freq = pow(cutoff_val, 3) * safeMaxFreq;
+      } else {
+        cutoff_freq = pow(cutoff_val * 1.43, 2) * (safeMaxFreq * 0.38) + 40;
+      }
+
+      // Safety clamp
+      cutoff_freq = max(40.0f, min((float)safeMaxFreq, cutoff_freq));
       f = 2 * sin(3.1459 * cutoff_freq * SAMPLE_RATE_INV);
     }
 
@@ -169,7 +193,7 @@ class SVF {
     volatile float f = 1.0;
     int32_t centFreq = 10000;
     float resOffset;
-    int32_t maxFreq = SAMPLE_RATE * 0.2222;
+    // maxFreq removed - now calculated dynamically in setFreq() based on sample rate
 
     void calcFilter(int32_t input) {
       input *= resOffset;
@@ -178,6 +202,12 @@ class SVF {
       high = ((scale * input) >> 14) - low - ((q * band) >> 15);
       band += f * high;
       notch = high + low;
+
+      // Prevent state variable overflow - critical for audio stability
+      // Clamp to reasonable range to prevent int32_t overflow
+      low = max((int32_t)-200000000, min((int32_t)200000000, low));
+      band = max((int32_t)-200000000, min((int32_t)200000000, band));
+      high = max((int32_t)-200000000, min((int32_t)200000000, high));
     }
 };
 
