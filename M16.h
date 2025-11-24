@@ -27,14 +27,47 @@ float SAMPLE_RATE_INV = 1.0f / SAMPLE_RATE;
 #define MIN_16 -32767
 const float MAX_16_INV = 0.00003052;
 
-const int16_t TABLE_SIZE = 4096; //4096; //8192; // 2048 // 4096 // 8192 // 16384 //32768 // 65536 //uint16_t
+// TABLE_SIZE can be overridden by defining it in your sketch BEFORE including M16.h
+// Example: #define TABLE_SIZE 2048
+#ifndef TABLE_SIZE
+  #define TABLE_SIZE 4096 //4096; //8192; // 2048 // 4096 // 8192 // 16384 //32768 // 65536
+#endif
+#ifndef HALF_TABLE_SIZE
+  #define HALF_TABLE_SIZE (TABLE_SIZE / 2)
+#endif
+#ifndef FULL_TABLE_SIZE
+  #define FULL_TABLE_SIZE (TABLE_SIZE * 3) // accomodates low, mid, and high freq band limited waves
+#endif
+
+const int16_t _TABLE_SIZE = TABLE_SIZE;  // For backwards compatibility
 const float TABLE_SIZE_INV = 1.0f / TABLE_SIZE;
-const int16_t HALF_TABLE_SIZE = 2048; //TABLE_SIZE / 2;
-const int16_t FULL_TABLE_SIZE = 12288; //TABLE_SIZE * 3; // accomodates low, mid, and high freq band limited waves
+const int16_t _HALF_TABLE_SIZE = HALF_TABLE_SIZE;
+const int16_t _FULL_TABLE_SIZE = FULL_TABLE_SIZE;
 
 int16_t prevWaveVal = 0;
 int16_t leftAudioOuputValue = 0;
 int16_t rightAudioOuputValue = 0;
+
+// Global PSRAM availability flag - set once at startup
+static bool g_psramAvailable = false;
+static bool g_psramChecked = false;
+
+inline bool isPSRAMAvailable() {
+  if (!g_psramChecked) {
+    #if IS_ESP32()
+      g_psramAvailable = psramFound();
+      if (g_psramAvailable) {
+        Serial.print("PSRAM detected: ");
+        Serial.print(ESP.getFreePsram() / 1024);
+        Serial.println(" KB free");
+      } else {
+        Serial.println("No PSRAM detected");
+      }
+    #endif
+    g_psramChecked = true;
+  }
+  return g_psramAvailable;
+}
 
 // ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)
 // ESP8266 I2S interface (D1 mini pins) BCLK->BCK (D8 GPIO15), I2SO->DOUT (RX GPIO3), and LRCLK(WS)->LCK (D4 GPIO2) [SCK to GND on some boards]
@@ -151,8 +184,16 @@ int16_t rightAudioOuputValue = 0;
   // These handles can now be used for vTask things
   TaskHandle_t audioCallback1Handle = NULL;
   TaskHandle_t audioCallback2Handle = NULL;
- 
+
+  // Mutex for thread-safe initialization
+  static SemaphoreHandle_t audioInitMutex = NULL;
+
   void audioStart() {
+      // Create mutex for initialization protection
+      if (audioInitMutex == NULL) {
+          audioInitMutex = xSemaphoreCreateMutex();
+      }
+
       // Create the channels
       i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle); // both TX and RX
 
@@ -164,10 +205,27 @@ int16_t rightAudioOuputValue = 0;
       i2s_channel_enable(tx_handle);
       i2s_channel_enable(rx_handle);
 
-      // RTOS task as before
-      xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 2048, NULL, configMAX_PRIORITIES - 1, &audioCallback1Handle, 0);
-      xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer1", 2048, NULL, 2, &audioCallback2Handle, 1);
-      Serial.println("M16 is running");
+      // Dual-core audio tasks with INCREASED stack size for complex DSP
+      // Stack increased from 2048 to 8192 bytes to prevent overflow
+      xTaskCreatePinnedToCore(
+          audioCallback,
+          "FillAudioBuffer0",
+          8192,  // Increased from 2048
+          NULL,
+          configMAX_PRIORITIES - 1,
+          &audioCallback1Handle,
+          0
+      );
+      xTaskCreatePinnedToCore(
+          audioCallback,
+          "FillAudioBuffer1",
+          8192,  // Increased from 2048
+          NULL,
+          2,
+          &audioCallback2Handle,
+          1
+      );
+      Serial.println("M16 is running (dual-core mode)");
   }
   /*
   // ESP32 Arduino Core V2
