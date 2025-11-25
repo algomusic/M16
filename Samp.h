@@ -3,7 +3,7 @@
  *
  * A sample wavetable playback class
  *
- * by Andrew R. Brown 2021
+ * by Andrew R. Brown 2021 updated 2025
  *
  * This file is part of the M16 audio library.
  *
