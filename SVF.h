@@ -36,13 +36,11 @@ class SVF {
     * 0.01 > res < 1.0
     */
     inline
-    void setRes(float resonance) { // An odd dip in level at around 70% resonance???
+    void setRes(float resonance) {
       resOffset = max(0.01f, min(0.84f, resonance));
       q = (1.0 - resOffset) * MAX_16;
-      // q = sqrt(1.0 - atan(sqrt(resonance * MAX_16)) * 2.0 / 3.1459); // alternative
       scale = sqrt(max(0.1f, resOffset)) * MAX_16;
       resOffset = 1.2 - resOffset * 1.6;
-      // scale = sqrt(q) * MAX_16; // alternative
     }
 
     /** Set the cutoff or centre frequency of the filter.
@@ -52,13 +50,9 @@ class SVF {
     inline
     void setFreq(int32_t freq_val) {
       // Calculate safe maximum frequency to prevent state variable overflow
-      // Limits the 'f' coefficient to ~1.25 for numerical stability
-      // This prevents the exponential accumulation that causes int32_t overflow
       int32_t safeMaxFreq = SAMPLE_RATE * 0.21;  // 21% of sample rate
-
       // Clamp frequency to safe range
       freq_val = max((int32_t)40, min(safeMaxFreq, freq_val));
-
       f = 2 * sin(3.1459 * freq_val * SAMPLE_RATE_INV);
     }
 
@@ -165,15 +159,30 @@ class SVF {
     int16_t nextFiltMix(int input, float mix) {
       input = clip16(input);
       calcFilter(input);
+
+      // Fast linear crossfade (avoids expensive pow/sqrt calls)
       int32_t lpfAmnt = 0;
-      if (mix < 0.5) lpfAmnt = low * pow((1 - mix * 2), 0.5);
       int32_t bpfAmnt = 0;
-      if (mix > 0.25 || mix < 0.75) {
-        bpfAmnt = band * pow(1 - (abs(mix - 0.5) * 2), 0.5);
-      }
       int32_t hpfAmnt = 0;
-      if (mix > 0.5) hpfAmnt = clip16(high * pow((mix - 0.5) * 2, 0.5));
-      return max(-MAX_16, min(MAX_16, (int)(lpfAmnt + bpfAmnt + hpfAmnt)));
+
+      if (mix < 0.5f) {
+          // LPF to BPF transition
+          float lpfMix = 1.0f - mix * 2.0f;
+          float bpfMix = mix * 2.0f;
+          lpfAmnt = (int32_t)(low * lpfMix);
+          bpfAmnt = (int32_t)(band * bpfMix);
+      } else {
+          // BPF to HPF transition
+          float bpfMix = 1.0f - (mix - 0.5f) * 2.0f;
+          float hpfMix = (mix - 0.5f) * 2.0f;
+          bpfAmnt = (int32_t)(band * bpfMix);
+          hpfAmnt = (int32_t)(high * hpfMix);
+      }
+
+      int32_t sum = lpfAmnt + bpfAmnt + hpfAmnt;
+      if (sum > MAX_16) return MAX_16;
+      if (sum < -MAX_16) return -MAX_16;
+      return (int16_t)sum;
     }
 
     /** Calculate the next Notch filter sample, given an input signal.
@@ -198,13 +207,11 @@ class SVF {
     void calcFilter(int32_t input) {
       input *= resOffset;
       low += f * band;
-      // high = ((scale * input) >> 7) - low - ((q * band) >> 8);
       high = ((scale * input) >> 14) - low - ((q * band) >> 15);
       band += f * high;
       notch = high + low;
 
       // Prevent state variable overflow - critical for audio stability
-      // Clamp to reasonable range to prevent int32_t overflow
       low = max((int32_t)-200000000, min((int32_t)200000000, low));
       band = max((int32_t)-200000000, min((int32_t)200000000, band));
       high = max((int32_t)-200000000, min((int32_t)200000000, high));
