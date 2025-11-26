@@ -260,7 +260,7 @@ public:
    * @return number of frames (for stereo, one frame = L+R pair)
    */
   inline
-  unsigned long getSampleCount() const {
+  unsigned long getFrameCount() const {
     return totalSamples;
   }
 
