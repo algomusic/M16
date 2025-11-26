@@ -26,11 +26,11 @@ public:
   * @param BUFFER_SIZE the number of samples in the buffer.
   * @param NUM_CHANNELS ths number of audio channels, 1 = mono, 2 = stereo
   */
-  Samp(const int16_t * BUFFER_NAME, unsigned long BUFFER_SIZE, uint8_t NUM_CHANNELS): buffer(BUFFER_NAME), 
-              buffer_size((unsigned long) BUFFER_SIZE), 
+  Samp(const int16_t * BUFFER_NAME, unsigned long BUFFER_SIZE, uint8_t NUM_CHANNELS): buffer(BUFFER_NAME),
+              buffer_size((unsigned long) BUFFER_SIZE),
               num_channels(NUM_CHANNELS) {
     setLoopingOff();
-    endpos_fractional = buffer_size;
+    endpos_fractional = buffer_size << 16; // 16.16 fixed-point
     startpos_fractional = 0;
     num_channels = NUM_CHANNELS;
   }
@@ -54,7 +54,7 @@ public:
     // Use 16.16 fixed-point: phase_increment = (buffer_rate / M16_rate) * 65536
     phase_increment_fractional = ((uint64_t)buffer_sample_rate << 16) / SAMPLE_RATE;
 
-    Serial.println("buffer size: " + String(buffer_size) + " chans: " + String(num_channels) +
+    Serial.println("buffer size: " + String(buffer_size) + " chans: " + String(num_channels) + " frames: " + String(buffer_size / num_channels) +
       " SR: " + String(buffer_sample_rate) + " Hz, phase_inc: " + String(phase_increment_fractional));
   }
 
@@ -172,12 +172,30 @@ public:
     return phase_fractional < endpos_fractional;
   }
 
-  /** Set the sample frequency.
-  * @param frequency to play the wave buffer.
+  /** Set the base pitch of the sample (the pitch at normal playback speed).
+  * @param hz frequency in Hz of the sample's natural pitch (default 440 Hz / A4)
+  */
+  inline
+  void setBasePitch(float hz) {
+    if (hz > 0) base_pitch = hz;
+  }
+
+  /** Get the current base pitch setting.
+  * @return the base pitch in Hz
+  */
+  inline
+  float getBasePitch() {
+    return base_pitch;
+  }
+
+  /** Set the playback pitch - sample plays faster/slower relative to base_pitch.
+  * @param frequency target pitch in Hz (e.g., 440 for A4, 261.63 for C4)
   */
   inline
   void setFreq(float frequency) {
-    phase_increment_fractional = (unsigned long)((float)buffer_size * frequency / buffer_sample_rate);
+    // 16.16 fixed-point with sample rate conversion and pitch shifting
+    // phase_inc = 65536 * (buffer_sample_rate / SAMPLE_RATE) * (frequency / base_pitch)
+    phase_increment_fractional = (unsigned long)(((uint64_t)buffer_sample_rate << 16) * frequency / (SAMPLE_RATE * base_pitch));
   }
 
   /**  Returns the sample at the given buffer index.
@@ -214,12 +232,29 @@ public:
    *              - 1.0: 50% attack, 0% sustain, 50% release
    */
   inline
-  void generateLinearEnvelopeInt16(int tableSize, float curveAmount) {
+  void generateLinearEnvelope(int tableSize, float curveAmount) {
     if (tableSize <= 0) return;
     if (envTable) {
       free(envTable); // clean up any prev memory
     }
-    envTable = (int16_t*)malloc(tableSize * sizeof(int16_t)); // reallocate memory
+    // Allocate memory, using PSRAM if available on ESP32
+    #if IS_ESP32()
+      if (isPSRAMAvailable() && ESP.getFreePsram() > tableSize * sizeof(int16_t)) {
+        envTable = (int16_t *) ps_calloc(tableSize, sizeof(int16_t));
+        if (!envTable) {
+          envTable = (int16_t*)malloc(tableSize * sizeof(int16_t));
+        }
+      } else {
+        envTable = (int16_t*)malloc(tableSize * sizeof(int16_t));
+      }
+    #else
+      envTable = (int16_t*)malloc(tableSize * sizeof(int16_t));
+    #endif
+
+    if (!envTable) {
+      envelopeOn = false;
+      return;
+    }
     envelopeOn = true;
 
     curveAmount = max(0.0f, min(1.0f, curveAmount));
@@ -259,14 +294,29 @@ public:
    *
    */
   inline
-  // void generateCosineEnvelopeInt16(int16_t* table, int tableSize, float curveAmount) {
-  void generateCosineEnvelopeInt16(int tableSize, float curveAmount) {
+  void generateCosineEnvelope(int tableSize, float curveAmount) {
     if (tableSize <= 0) return;
-    // envTable = table;
     if (envTable) {
       free(envTable); // clean up any prev memory
     }
-    envTable = (int16_t*)malloc(tableSize * sizeof(int16_t)); // reallocate memory
+    // Allocate memory, using PSRAM if available on ESP32
+    #if IS_ESP32()
+      if (isPSRAMAvailable() && ESP.getFreePsram() > tableSize * sizeof(int16_t)) {
+        envTable = (int16_t *) ps_calloc(tableSize, sizeof(int16_t));
+        if (!envTable) {
+          envTable = (int16_t*)malloc(tableSize * sizeof(int16_t));
+        }
+      } else {
+        envTable = (int16_t*)malloc(tableSize * sizeof(int16_t));
+      }
+    #else
+      envTable = (int16_t*)malloc(tableSize * sizeof(int16_t));
+    #endif
+
+    if (!envTable) {
+      envelopeOn = false;
+      return;
+    }
     envelopeOn = true;
     curveAmount = max(0.0f, min(1.0f, curveAmount));
 
@@ -311,12 +361,13 @@ private:
   }
 
   volatile unsigned long phase_fractional = 0;
-  volatile unsigned long phase_increment_fractional = 1;
+  volatile unsigned long phase_increment_fractional = 65536; // 1.0 in 16.16 fixed-point (normal speed)
   const int16_t * buffer;
   bool looping = false;
   unsigned long startpos_fractional, endpos_fractional, buffer_size;
   uint8_t num_channels = 0; // 1 = mono, 2 = stereo
   uint16_t buffer_sample_rate = SAMPLE_RATE;
+  float base_pitch = 440.0f; // A4 - the pitch at which sample plays at normal speed
   int16_t * envTable;
   bool envelopeOn = false;
 };

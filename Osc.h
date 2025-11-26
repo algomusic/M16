@@ -37,8 +37,8 @@ public:
 	*/
 	inline
 	int16_t next() {
-    int idx = (int)phase_fractional;
-    int32_t sampVal = 0; // rand(MAX_16);
+    int idx = phase_fractional >> 16; // 16.16 fixed-point: extract integer index
+    int32_t sampVal = 0;
     if (frequency > 831) { // midi pitch ~80 // high
       sampVal = waveTable[idx + TABLE_SIZE + TABLE_SIZE];
     } else if (frequency > 208) { // midi pitch ~56 // mid
@@ -89,15 +89,18 @@ public:
 	/** Set the phase of the Oscil. Phase ranges from 0.0 - 1.0 */
 	inline
   void setPhase(float phase) {
-		phase_fractional = phase;
-    phase_fractional_s1 = phase;
-    phase_fractional_s2 = phase;
+    // Convert 0.0-1.0 to 16.16 fixed-point (0 to TABLE_SIZE << 16)
+		phase_fractional = (uint32_t)(phase * TABLE_SIZE * 65536.0f);
+    // Spread phases also 16.16
+    phase_fractional_s1 = phase_fractional;
+    phase_fractional_s2 = phase_fractional;
 	}
 
-	/** Get the phase of the Oscil in fractional format. */
+	/** Get the phase of the Oscil in fractional format (0.0 - 1.0). */
 	inline
   float getPhase() {
-		return phase_fractional;
+    // Convert 16.16 fixed-point back to 0.0-1.0
+		return (float)phase_fractional / (TABLE_SIZE * 65536.0f);
 	}
 
   /** Set the spread value of the Oscil.
@@ -130,7 +133,7 @@ public:
 
   /** Return the current value of the Oscil. */
   int16_t getValue() {
-    int idx = (int)phase_fractional;
+    int idx = phase_fractional >> 16; // 16.16 fixed-point
     return waveTable[idx];
   }
 
@@ -141,7 +144,7 @@ public:
 	inline
   int16_t nextMorph(int16_t * secondWaveTable, float morphAmount) {
     int intMorphAmount = max(0, min (1024, (int)(1024 * morphAmount)));
-    int idx = (int)phase_fractional;
+    int idx = phase_fractional >> 16; // 16.16 fixed-point
     int32_t sampVal = waveTable[idx];
     int32_t sampVal2 = secondWaveTable[idx];
     if (morphAmount > 0) sampVal = (((sampVal2 * intMorphAmount) >> 10) +
@@ -162,7 +165,7 @@ public:
 	inline
   int16_t currentMorph(int16_t * secondWaveTable, float morphAmount) {
     int intMorphAmount = max(0, min(1024, (int)(1024 * morphAmount)));
-    int idx = (int)phase_fractional;
+    int idx = phase_fractional >> 16; // 16.16 fixed-point
     int32_t sampVal = waveTable[idx];
     int32_t sampVal2 = secondWaveTable[idx];
     if (morphAmount > 0) sampVal = (((sampVal2 * intMorphAmount) >> 10) +
@@ -190,10 +193,11 @@ public:
     int threeQuarterTable = quarterTable * 3;
     int portion14 = quarterTable * windowSize;
     int32_t sampVal = 0;
+    int phaseIdx = phase_fractional >> 16; // 16.16: extract integer index for comparisons
     if (duel) {
-      if (phase_fractional < (quarterTable - portion14) || (phase_fractional > (quarterTable + portion14) &&
-          phase_fractional < (threeQuarterTable - portion14)) || phase_fractional > (threeQuarterTable + portion14)) {
-        int idx = (int)phase_fractional;
+      if (phaseIdx < (quarterTable - portion14) || (phaseIdx > (quarterTable + portion14) &&
+          phaseIdx < (threeQuarterTable - portion14)) || phaseIdx > (threeQuarterTable + portion14)) {
+        int idx = phaseIdx;
         if (frequency > 831) { // midi pitch ~80 // high
           sampVal = waveTable[idx + TABLE_SIZE + TABLE_SIZE];
         } else if (frequency > 208) { // midi pitch ~56 // mid
@@ -206,19 +210,19 @@ public:
           sampVal = doSpread(sampVal);
         }
       } else {
-        sampVal = secondWaveTable[(int)phase_fractional];
+        sampVal = secondWaveTable[phaseIdx];
         if (invert) sampVal *= -1;
         if (spreadActive) {
-          int32_t spreadSamp1 = secondWaveTable[(int)phase_fractional];
+          int32_t spreadSamp1 = secondWaveTable[phaseIdx];
           sampVal = (sampVal + spreadSamp1)>>1;
-          int32_t spreadSamp2 = secondWaveTable[(int)phase_fractional];
+          int32_t spreadSamp2 = secondWaveTable[phaseIdx];
           sampVal = (sampVal + spreadSamp2)>>1;
           incrementSpreadPhase();
         }
       }
     } else {
-      if (phase_fractional < (halfTable - portion12) || phase_fractional > (halfTable + portion12)) {
-        int idx = (int)phase_fractional;
+      if (phaseIdx < (halfTable - portion12) || phaseIdx > (halfTable + portion12)) {
+        int idx = phaseIdx;
         if (frequency > 831) { // midi pitch ~80 // high
           sampVal = waveTable[idx + TABLE_SIZE + TABLE_SIZE];
         } else if (frequency > 208) { // midi pitch ~56 // mid
@@ -231,12 +235,12 @@ public:
           sampVal = doSpread(sampVal);
         }
       } else {
-        sampVal = secondWaveTable[(int)phase_fractional];
+        sampVal = secondWaveTable[phaseIdx];
         if (invert) sampVal *= -1;
         if (spreadActive) {
-          int32_t spreadSamp1 = secondWaveTable[(int)phase_fractional];
+          int32_t spreadSamp1 = secondWaveTable[phaseIdx];
           sampVal = (sampVal + spreadSamp1)>>1;
-          int32_t spreadSamp2 = secondWaveTable[(int)phase_fractional];
+          int32_t spreadSamp2 = secondWaveTable[phaseIdx];
           sampVal = (sampVal + spreadSamp2)>>1;
           incrementSpreadPhase();
         }
@@ -248,38 +252,53 @@ public:
     return sampVal;
   }
 
-  /** Phase Modulation (FM)
-   * Pass in a second oscillator and multiply its value to change mod depth
+  /** Phase Modulation (FM) - Fast integer version
    * @param modulator - The next sample from the modulating waveform
-   * @param modIndex - The depth value to amplify the modulator by
-   * ModIndex values between 0.0 - 10.0 are normally enough, higher values are possible
+   * @param modIndexScaled - Pre-scaled mod index: use (int)(modIndex * 4096)
+   * Call setModIndex() once to cache, then use phMod(modulator) for best performance
    */
-  inline int16_t phMod(int16_t modulator, float modIndex) {
-    const float modScale = modIndex * (1.0f / 16.0f);
-    // Modulated phase in "table index units"
-    float p = phase_fractional + (float)modulator * modScale;
-    // Integer index and fractional part
-    int i0 = (int)p;                 // floor for positive p; trunc for negative is fine with mask below
-    float frac = p - (float)i0;      // [0,1) if p>=0; may be negative but handled by mask on indices
-    // Wrap indices (fast when TABLE_SIZE is power of two)
-    const int idx0 = i0 & (TABLE_SIZE - 1);
-    const int idx1 = (idx0 + 1) & (TABLE_SIZE - 1);
-    // Linear interpolation between adjacent samples
+  inline int16_t phMod(int16_t modulator, int32_t modIndexScaled) {
+    // All integer math - no float operations
+    int32_t modOffset = (modulator * modIndexScaled) >> 12; // Scale back down
+    modOffset <<= 4; // Adjust to 16.16 range
+    uint32_t p = phase_fractional + modOffset;
+    // Extract index and 8-bit fractional
+    int idx0 = (p >> 16) & (TABLE_SIZE - 1);
+    int idx1 = (idx0 + 1) & (TABLE_SIZE - 1);
+    int32_t frac8 = (p >> 8) & 0xFF;
+    // Linear interpolation
     const int32_t a = waveTable[idx0];
     const int32_t b = waveTable[idx1];
-    int32_t sampVal = a + (int32_t)((b - a) * frac);
-    // Advance the carrier phase
+    int32_t sampVal = a + (((b - a) * frac8) >> 8);
     incrementPhase();
-    // Optional detune/spread
-    if (spreadActive) {
-        sampVal = doSpread(sampVal);
-    }
-    // Interpolating two 16-bit values stays within 16-bit range, but clamp just in case
-    if (sampVal > MAX_16)  sampVal = MAX_16;
-    if (sampVal < MIN_16)  sampVal = MIN_16;
-    int16_t outSamp = (sampVal + prevSampVal)>>1; // smooth
+    if (spreadActive) sampVal = doSpread(sampVal);
+    // Smoothing filter for better sound quality
+    int16_t outSamp = (sampVal + prevSampVal) >> 1;
     prevSampVal = outSamp;
     return outSamp;
+  }
+
+  /** Phase Modulation (FM) - Convenient float version
+   * @param modulator - The next sample from the modulating waveform
+   * @param modIndex - The depth value (0.0 - 10.0 typical)
+   * For maximum performance, use the integer version with pre-scaled modIndex
+   */
+  inline int16_t phMod(int16_t modulator, float modIndex) {
+    return phMod(modulator, (int32_t)(modIndex * 4096.0f));
+  }
+
+  /** Set cached mod index for fastest FM performance
+   * @param modIndex - The depth value (0.0 - 10.0 typical)
+   */
+  inline void setModIndex(float modIndex) {
+    cachedModIndex = (int32_t)(modIndex * 4096.0f);
+  }
+
+  /** Phase Modulation using cached mod index - fastest version
+   * Call setModIndex() first, then use this in the audio loop
+   */
+  inline int16_t phMod(int16_t modulator) {
+    return phMod(modulator, cachedModIndex);
   }
 
   /** Ring Modulation
@@ -289,7 +308,7 @@ public:
   inline
   int16_t ringMod(int audioIn) {
     incrementPhase();
-    int idx = (int)phase_fractional;
+    int idx = phase_fractional >> 16; // 16.16 fixed-point
     int32_t currSamp = waveTable[idx];
     int16_t sampVal = (currSamp * audioIn)>>15;
     if (spreadActive) {
@@ -305,7 +324,7 @@ public:
    */
   inline
   int16_t particle(float thresh) {
-    int idx = (int)phase_fractional;
+    int idx = phase_fractional >> 16; // 16.16 fixed-point
     int32_t noiseVal = waveTable[idx];
     if (noiseVal > (MAX_16 * thresh)) {
       particleEnv = noiseVal - (MAX_16 - noiseVal) - (MAX_16 - noiseVal);
@@ -332,21 +351,20 @@ public:
    */
   inline
   int16_t feedback(int32_t modIndex) {
-  	int16_t y = waveTable[(int)feedback_phase_fractional] >> 3;
-  	int16_t s = waveTable[y]; 
-  	int f = (modIndex * (int32_t)s) >> 16;
-		phase_fractional += f + phase_increment_fractional;
-		if (phase_fractional > TABLE_SIZE) {
-			phase_fractional -= TABLE_SIZE;
-		} else if (phase_fractional < 0) {
-			phase_fractional += TABLE_SIZE;
-		}
-		feedback_phase_fractional += phase_increment_fractional;
-		if (feedback_phase_fractional > TABLE_SIZE) {
-			feedback_phase_fractional -= TABLE_SIZE;
-		}
-    int16_t out = waveTable[(int16_t)phase_fractional & (TABLE_SIZE - 1)];
-  	return out;
+    // Read feedback sample using 16.16 index
+    int16_t y = waveTable[feedback_phase_fractional >> 16] >> 3;
+    int16_t s = waveTable[y & (TABLE_SIZE - 1)];
+    // Calculate feedback offset and convert to 16.16
+    int32_t f_fp = ((modIndex * (int32_t)s) >> 16) << 16;
+    // Update phase with feedback (signed arithmetic then fast wrap)
+    phase_fractional = (uint32_t)((int32_t)phase_fractional + f_fp + (int32_t)phase_increment_fractional);
+    phase_fractional &= TABLE_SIZE_FP_MASK; // Fast wrap
+    // Increment feedback phase with fast wrap
+    feedback_phase_fractional += phase_increment_fractional;
+    feedback_phase_fractional &= TABLE_SIZE_FP_MASK;
+    // Return sample at current phase
+    int16_t out = waveTable[(phase_fractional >> 16) & (TABLE_SIZE - 1)];
+    return out;
   }
 
   /** Glide toward the frequency of the oscillator in Hz.
@@ -365,26 +383,30 @@ public:
     }
   }
 
-	/** Set the frequency of the oscillator. 
+	/** Set the frequency of the oscillator.
    * @freq The desired frequency in Hz
   */
 	inline
 	void setFreq(float freq) {
 		if (freq > 0) {
       frequency = freq;
-		  phase_increment_fractional = freq / 440.0f * (float)TABLE_SIZE / (SAMPLE_RATE / 440.0f);
+      // 16.16 fixed-point: phase_inc = (freq * TABLE_SIZE / SAMPLE_RATE) * 65536
+      phase_increment_fractional = (uint32_t)(freq * TABLE_SIZE * 65536.0f / SAMPLE_RATE);
       if (pulseWidthOn) {
-        phase_increment_fractional_w1 = phase_increment_fractional * 0.5 / pulseWidth;
-        phase_increment_fractional_w2 = phase_increment_fractional * 0.5 / (1.0 - pulseWidth);
+        // Calculate pulse width variants in 16.16
+        uint32_t halfInc = phase_increment_fractional >> 1;
+        phase_increment_fractional_w1 = (uint32_t)(halfInc / pulseWidth);
+        phase_increment_fractional_w2 = (uint32_t)(halfInc / (1.0f - pulseWidth));
       }
       if (spreadActive) {
-        phase_increment_fractional_s1 = phase_increment_fractional * spread1;
-        phase_increment_fractional_s2 = phase_increment_fractional * spread2;
+        // 16.16 spread increments
+        phase_increment_fractional_s1 = (uint32_t)(phase_increment_fractional * spread1);
+        phase_increment_fractional_s2 = (uint32_t)(phase_increment_fractional * spread2);
       } else {
         phase_increment_fractional_s1 = phase_increment_fractional;
         phase_increment_fractional_s2 = phase_increment_fractional;
       }
-      cycleLengthPerMS = frequency * 0.001f; /// 1000.0f;
+      cycleLengthPerMS = frequency * 0.001f;
     }
 	}
 
@@ -412,11 +434,12 @@ public:
     return midiPitch;
   }
 
-	/** Set a specific phase increment.
-  * @phaseinc_fractional, value between 0.0 to 1.0
+	/** Set a specific phase increment in 16.16 fixed-point format.
+  * @phaseinc_fractional 16.16 fixed-point increment value
+  * For reference: 65536 = 1 table index per sample
   */
 	inline
-	void setPhaseInc(float phaseinc_fractional) {
+	void setPhaseInc(uint32_t phaseinc_fractional) {
 		phase_increment_fractional = phaseinc_fractional;
 	}
 
@@ -455,10 +478,10 @@ public:
 	void setPulseWidth(float width) {
     pulseWidthOn = true;
     pulseWidth = max(0.05f, min(0.95f, width));
-    float pwInv = 1.0f / pulseWidth;
-    float halfPhaseInc = phase_increment_fractional * 0.5f;
-    phase_increment_fractional_w1 = halfPhaseInc * pwInv;
-    phase_increment_fractional_w2 = halfPhaseInc / (1.0f - pulseWidth);
+    // Calculate 16.16 pulse width increments
+    uint32_t halfPhaseInc = phase_increment_fractional >> 1;
+    phase_increment_fractional_w1 = (uint32_t)(halfPhaseInc / pulseWidth);
+    phase_increment_fractional_w2 = (uint32_t)(halfPhaseInc / (1.0f - pulseWidth));
   }
 
   /** Set using pulse width for the waveform
@@ -765,17 +788,24 @@ public:
   }
 
 private:
-  float phase_fractional = 0.0;
-  float spread1 = 1.0;
-  float spread2 = 1.0;
+  // 16.16 fixed-point constants (compile-time for efficiency)
+  static constexpr uint32_t TABLE_SIZE_FP_CONST = TABLE_SIZE << 16;
+  static constexpr uint32_t HALF_TABLE_SIZE_FP = HALF_TABLE_SIZE << 16;
+  static constexpr uint32_t TABLE_SIZE_FP_MASK = TABLE_SIZE_FP_CONST - 1; // For fast wrapping
+
+  // 16.16 fixed-point: upper 16 bits = table index, lower 16 bits = fractional
+  uint32_t phase_fractional = 0;
+  uint32_t phase_increment_fractional = 1228800; // ~440Hz default: (440 * TABLE_SIZE << 16) / SAMPLE_RATE
+  uint32_t phase_increment_fractional_w1 = 1228800; // pulse width variant 1
+  uint32_t phase_increment_fractional_w2 = 1228800; // pulse width variant 2
+  // Spread variables (16.16 fixed-point for phase, float for ratios)
+  float spread1 = 1.0f;
+  float spread2 = 1.0f;
   bool spreadActive = false;
-  float phase_fractional_s1 = 0.0;
-  float phase_fractional_s2 = 0.0;
-	float phase_increment_fractional = 18.75;
-  float phase_increment_fractional_s1 = 18.75;
-  float phase_increment_fractional_s2 = 18.75;
-  float phase_increment_fractional_w1 = phase_increment_fractional;
-  float phase_increment_fractional_w2 = phase_increment_fractional;
+  uint32_t phase_fractional_s1 = 0;
+  uint32_t phase_fractional_s2 = 0;
+  uint32_t phase_increment_fractional_s1 = 1228800; // ~440Hz default
+  uint32_t phase_increment_fractional_s2 = 1228800;
   int16_t * waveTable = nullptr; 
   bool allocated = false;
   int32_t prevSampVal = 0;
@@ -788,7 +818,8 @@ private:
   bool pulseWidthOn = false;
   int16_t prevParticle, particleEnv, particleThreshold = 0.993; //MAX_16 * 0.993;
   float particleEnvReleaseRate = 0.92; // thresh and rate = number of apparent particles
-  float feedback_phase_fractional = 0;
+  uint32_t feedback_phase_fractional = 0; // 16.16 fixed-point
+  int32_t cachedModIndex = 4096; // Pre-scaled mod index (1.0 * 4096)
   float testVal = 1.3;
   float cycleLengthPerMS = frequency * 0.001f; // / 1000.0f;
   float midiPitch = 69;
@@ -870,9 +901,9 @@ private:
 
   /** Increments the phase of the oscillator without returning a sample. */
   inline void incrementPhase() {
+      // Increment phase (pulse width uses different increments per half-cycle)
       if (pulseWidthOn) {
-          // Adjust phase increment based on pulse width section
-          if (phase_fractional < HALF_TABLE_SIZE) {
+          if (phase_fractional < HALF_TABLE_SIZE_FP) {
               phase_fractional += phase_increment_fractional_w1;
           } else {
               phase_fractional += phase_increment_fractional_w2;
@@ -881,30 +912,21 @@ private:
           phase_fractional += phase_increment_fractional;
       }
 
-      // Fast path: normal wrapping when not noise or crackle
+      // Fast path: normal wrapping using bitwise AND (TABLE_SIZE must be power of 2)
       if (!isNoise && !isCrackle) {
-          if (phase_fractional >= TABLE_SIZE) {
-              phase_fractional -= TABLE_SIZE;
-              // Light random pitch drift for realism (±3 steps)
-              phase_increment_fractional *= (1.0f + ((audioRand(8) - 3) * 0.000001f));
-              if (pulseWidthOn) {
-                  float halfInc = phase_increment_fractional * 0.5f;
-                  phase_increment_fractional_w1 = halfInc / pulseWidth;
-                  phase_increment_fractional_w2 = halfInc / (1.0f - pulseWidth);
-              }
-          }
-          return; // Done
+          phase_fractional &= TABLE_SIZE_FP_MASK; // Fast wrap: equivalent to modulo
+          return;
       }
 
-      // Noise / crackle modes
-      if (phase_fractional >= TABLE_SIZE) {
+      // Noise / crackle modes (slower path, less common)
+      if (phase_fractional >= TABLE_SIZE_FP_CONST) {
           if (isNoise) {
-              phase_fractional = audioRand(TABLE_SIZE); // fast wrap
+              phase_fractional = audioRand(TABLE_SIZE) << 16;
           } else { // crackle
               if (audioRand(0x8000) > crackleAmnt) {
-                  phase_fractional = 1;
+                  phase_fractional = 1 << 16;
               } else {
-                  phase_fractional = audioRand(TABLE_SIZE);
+                  phase_fractional = audioRand(TABLE_SIZE) << 16;
               }
           }
       }
@@ -915,16 +937,16 @@ private:
 	inline
 	void incrementSpreadPhase() {
 		phase_fractional_s1 += phase_increment_fractional_s1;
-    if (phase_fractional_s1 > TABLE_SIZE) phase_fractional_s1 -= TABLE_SIZE;
+    phase_fractional_s1 &= TABLE_SIZE_FP_MASK; // Fast wrap
     phase_fractional_s2 += phase_increment_fractional_s2;
-    if (phase_fractional_s2 > TABLE_SIZE) phase_fractional_s2 -= TABLE_SIZE;
+    phase_fractional_s2 &= TABLE_SIZE_FP_MASK; // Fast wrap
   }
 
   /** Returns a spread sample. */
 	inline
 	int16_t doSpread(int32_t sampVal) {
-    int32_t spreadSamp1 = waveTable[(int)phase_fractional_s1];
-    int32_t spreadSamp2 = waveTable[(int)phase_fractional_s2];
+    int32_t spreadSamp1 = waveTable[phase_fractional_s1 >> 16]; // 16.16 fixed-point
+    int32_t spreadSamp2 = waveTable[phase_fractional_s2 >> 16];
     sampVal = clip16((sampVal + ((spreadSamp1 * 500)>>10) + ((spreadSamp2 * 500)>>10))>>1);
     incrementSpreadPhase();
     return sampVal;
