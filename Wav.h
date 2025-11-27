@@ -22,7 +22,9 @@ class Wav {
 
 public:
   /** Constructor */
-  Wav() : audioBuffer(nullptr), totalSamples(0), wavSampleRate(44100), numChannels(0), bitsPerSample(16), sd(nullptr) {}
+  Wav() : audioBuffer(nullptr), totalSamples(0), wavSampleRate(44100), numChannels(0), bitsPerSample(16), wavAudioFormat(1), sd(nullptr), currentFileIndex(-1), wavFileCount(0) {
+    currentFilename[0] = '\0';
+  }
 
   /** Destructor - free allocated memory */
   ~Wav() {
@@ -43,19 +45,21 @@ public:
    */
   bool initSD(SdFs& sdObject, uint8_t csPin, uint8_t sckPin, uint8_t misoPin, uint8_t mosiPin, uint8_t spiSpeed = 16) {
     sd = &sdObject;
-
     // Initialize SPI with custom pins
     SPI.begin(sckPin, misoPin, mosiPin, csPin);
-
     // Initialize SdFat with SPI configuration
     if (!sd->begin(SdSpiConfig(csPin, DEDICATED_SPI, SD_SCK_MHZ(spiSpeed)))) {
       Serial.println("Wav: SD Card mount failed!");
       return false;
     }
     Serial.println("Wav: SD Card mounted successfully.");
+
+    // List valid WAV files on the SD card
+    countWavFiles(true);
+
     return true;
   }
-
+  
   /** Load WAV file from SD card into memory
    * @param filename Path to WAV file (e.g. "/audio.wav")
    * @return true if successful
@@ -66,19 +70,16 @@ public:
       Serial.println("Wav: SD card not initialized. Call initSD() first.");
       return false;
     }
-
     // Free previous buffer if exists
     if (audioBuffer != nullptr) {
       free(audioBuffer);
       audioBuffer = nullptr;
     }
-
     FsFile wavFile;
     if (!wavFile.open(filename, O_RDONLY)) {
       Serial.println("Wav: Error opening file.");
       return false;
     }
-
     // Read first 512 bytes to find RIFF/WAVE and chunks
     const int HEADER_SCAN_SIZE = 512;
     uint8_t header[HEADER_SCAN_SIZE];
@@ -88,7 +89,6 @@ public:
       wavFile.close();
       return false;
     }
-
     // Find RIFF/WAVE
     int riffPos = findChunkStart(header, bytesRead, "RIFF", 0);
     if (riffPos == -1 || !checkWaveFormat(header, riffPos)) {
@@ -96,7 +96,6 @@ public:
       wavFile.close();
       return false;
     }
-
     // Find fmt chunk
     int fmtChunkPos = findChunkStart(header, bytesRead, "fmt ", riffPos + 12);
     if (fmtChunkPos == -1) {
@@ -104,7 +103,6 @@ public:
       wavFile.close();
       return false;
     }
-
     // Parse format chunk (fmtChunkPos points to "fmt " chunk start)
     // +8: audio format, +10: num channels, +12: sample rate, +22: bits per sample
     uint16_t audioFormat = header[fmtChunkPos + 8] | (header[fmtChunkPos + 9] << 8);
@@ -112,14 +110,14 @@ public:
     wavSampleRate = header[fmtChunkPos + 12] | (header[fmtChunkPos + 13] << 8) |
                  (header[fmtChunkPos + 14] << 16) | (header[fmtChunkPos + 15] << 24);
     bitsPerSample = header[fmtChunkPos + 22] | (header[fmtChunkPos + 23] << 8);
-
-    // Validate PCM format
-    if (audioFormat != 1) {
-      Serial.printf("Wav: Unsupported audio format %d (only PCM supported)\n", audioFormat);
+    // Validate audio format (1 = PCM integer, 3 = IEEE float)
+    if (audioFormat != 1 && audioFormat != 3) {
+      Serial.printf("Wav: Unsupported audio format %d (only PCM and IEEE float supported)\n", audioFormat);
       wavFile.close();
       return false;
     }
-
+    // Store format for use in readAudioData
+    wavAudioFormat = audioFormat;
     // Find data chunk
     int dataChunkPos = findChunkStart(header, bytesRead, "data", fmtChunkPos + 24);
     if (dataChunkPos == -1) {
@@ -127,10 +125,8 @@ public:
       wavFile.close();
       return false;
     }
-
     uint32_t dataSize = header[dataChunkPos + 4] | (header[dataChunkPos + 5] << 8) |
                         (header[dataChunkPos + 6] << 16) | (header[dataChunkPos + 7] << 24);
-
     // Print WAV info
     Serial.println("---- WAV Info ----");
     Serial.printf("File: %s\n", filename);
@@ -139,21 +135,18 @@ public:
     Serial.printf("Bits: %d\n", bitsPerSample);
     Serial.printf("Data Size: %d bytes\n", dataSize);
     Serial.println("------------------");
-
-    // Validate bit depth (8, 16, or 24-bit PCM supported)
-    if (bitsPerSample != 8 && bitsPerSample != 16 && bitsPerSample != 24) {
-      Serial.printf("Wav: Unsupported bit depth %d (only 8, 16, 24-bit PCM supported)\n", bitsPerSample);
+    // Validate bit depth (8, 16, 24, or 32-bit supported)
+    if (bitsPerSample != 8 && bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) {
+      Serial.printf("Wav: Unsupported bit depth %d (only 8, 16, 24, 32-bit supported)\n", bitsPerSample);
       wavFile.close();
       return false;
     }
-
     // Calculate buffer size
     // totalSamples is number of frames (mono sample or L/R pair)
     size_t bytesPerSample = bitsPerSample / 8;
     totalSamples = dataSize / (numChannels * bytesPerSample);
     // Always allocate as 16-bit (conversion happens during load)
     size_t bufferSize = totalSamples * numChannels * sizeof(int16_t);
-
     // Try to allocate in PSRAM first (ESP32 only)
     #if IS_ESP32()
       if (isPSRAMAvailable()) {
@@ -170,7 +163,6 @@ public:
         }
       }
     #endif
-
     // Fallback to regular RAM if PSRAM failed or unavailable
     if (audioBuffer == nullptr) {
       audioBuffer = (int16_t*)malloc(bufferSize);
@@ -182,7 +174,6 @@ public:
         return false;
       }
     }
-
     // Seek to audio data
     if (!wavFile.seekSet(dataChunkPos + 8)) {
       Serial.println("Wav: Failed to seek to audio data.");
@@ -191,7 +182,6 @@ public:
       wavFile.close();
       return false;
     }
-
     // Read audio data in chunks
     if (!readAudioData(wavFile)) {
       free(audioBuffer);
@@ -199,53 +189,177 @@ public:
       wavFile.close();
       return false;
     }
-
     wavFile.close();
     Serial.printf("Wav: Loaded %lu samples\n", totalSamples);
+    Serial.println("------------------");
     return true;
   }
 
-  /** Find and load first WAV file on SD card
-   * @return true if successful
+  /** Count WAV files on SD card and optionally print them
+   * @param printFiles If true, print filenames to Serial
+   * @return number of WAV files found
    */
-  bool loadFirst() {
+  int countWavFiles(bool printFiles = false) {
     if (sd == nullptr) {
       Serial.println("Wav: SD card not initialized.");
-      return false;
+      return 0;
     }
-
     FsFile root;
     FsFile file;
-
+    int count = 0;
     if (!root.open("/")) {
       Serial.println("Wav: Failed to open root directory.");
-      return false;
+      return 0;
     }
-
-    Serial.println("Wav: Scanning SD card for WAV files...");
-
+    if (printFiles) Serial.println("Wav: WAV files on SD card:");
     while (file.openNext(&root, O_RDONLY)) {
       char filename[64];
       file.getName(filename, sizeof(filename));
 
-      if (!file.isDir()) {
-        Serial.printf("Found file: %s\n", filename);
-
-        if (isWavFile(filename)) {
-          Serial.printf("  -> WAV file: %s\n", filename);
-          char fullPath[128];
-          snprintf(fullPath, sizeof(fullPath), "/%s", filename);
-          file.close();
-          root.close();
-          return load(fullPath);
-        }
+      if (!file.isDir() && isValidFile(filename)) {
+        if (printFiles) Serial.printf("  [%d] %s\n", count, filename);
+        count++;
       }
       file.close();
     }
-
     root.close();
-    Serial.println("Wav: No WAV files found on SD card.");
+    wavFileCount = count;
+    return count;
+  }
+
+  /** Find and load first valid WAV file on SD card (skips invalid files)
+   * @return true if successful
+   */
+  bool loadFirst() {
+    // Count files and reset index
+    countWavFiles(true);
+    if (wavFileCount == 0) {
+      Serial.println("Wav: No WAV files found on SD card.");
+      return false;
+    }
+    // Try each file until we find a valid one
+    for (int i = 0; i < wavFileCount; i++) {
+      Serial.printf("Wav: Trying file %d of %d\n", i + 1, wavFileCount);
+      if (loadByIndex(i)) {
+        currentFileIndex = i;
+        return true;
+      }
+      Serial.printf("Wav: Skipping invalid file at index %d\n", i);
+    }
+    Serial.println("Wav: No valid WAV files found on SD card.");
+    currentFileIndex = -1;
     return false;
+  }
+
+  /** Load next WAV file on SD card (wraps around, skips invalid files)
+   * @return true if successful
+   */
+  bool loadNext() {
+    if (sd == nullptr) {
+      Serial.println("Wav: SD card not initialized.");
+      return false;
+    }
+    // If not initialized, start with first file
+    if (currentFileIndex < 0 || wavFileCount == 0) {
+      return loadFirst();
+    }
+    // Try each file, skipping invalid ones
+    int startIndex = currentFileIndex;
+    for (int attempts = 0; attempts < wavFileCount; attempts++) {
+      currentFileIndex = (currentFileIndex + 1) % wavFileCount;
+      Serial.printf("Wav: Loading file %d of %d\n", currentFileIndex + 1, wavFileCount);
+      if (loadByIndex(currentFileIndex)) {
+        return true;  // Found a valid file
+      }
+      Serial.printf("Wav: Skipping invalid file at index %d\n", currentFileIndex);
+    }
+
+    // All files failed, restore original index
+    currentFileIndex = startIndex;
+    Serial.println("Wav: No valid WAV files found.");
+    return false;
+  }
+
+  /** Load a specific WAV file by number (0-based index)
+   * @param fileNumber Index of file to load (0 = first, 1 = second, etc.)
+   * @return true if successful
+   */
+  bool loadNumber(int fileNumber) {
+    if (sd == nullptr) {
+      Serial.println("Wav: SD card not initialized.");
+      return false;
+    }
+    // Count files if not already done
+    if (wavFileCount == 0) {
+      countWavFiles(false);
+    }
+    // Check bounds
+    if (fileNumber < 0) {
+      Serial.println("Wav: Invalid file number (must be >= 0).");
+      return false;
+    }
+    if (fileNumber >= wavFileCount) {
+      Serial.printf("Wav: File number %d out of range. Only %d WAV file(s) on SD card.\n",
+                    fileNumber, wavFileCount);
+      return false;
+    }
+    // Try to load the specific file
+    Serial.printf("Wav: Loading file %d of %d\n", fileNumber + 1, wavFileCount);
+    if (loadByIndex(fileNumber)) {
+      currentFileIndex = fileNumber;
+      return true;
+    }
+    Serial.printf("Wav: File at index %d is not a valid WAV file.\n", fileNumber);
+    return false;
+  }
+
+  /** Load previous WAV file on SD card (wraps around, skips invalid files)
+   * @return true if successful
+   */
+  bool loadPrev() {
+    if (sd == nullptr) {
+      Serial.println("Wav: SD card not initialized.");
+      return false;
+    }
+    // If not initialized, start with first file
+    if (currentFileIndex < 0 || wavFileCount == 0) {
+      return loadFirst();
+    }
+    // Try each file backwards, skipping invalid ones
+    int startIndex = currentFileIndex;
+    for (int attempts = 0; attempts < wavFileCount; attempts++) {
+      currentFileIndex = (currentFileIndex - 1 + wavFileCount) % wavFileCount;
+      Serial.printf("Wav: Loading file %d of %d\n", currentFileIndex + 1, wavFileCount);
+      if (loadByIndex(currentFileIndex)) {
+        return true;  // Found a valid file
+      }
+      Serial.printf("Wav: Skipping invalid file at index %d\n", currentFileIndex);
+    }
+    // All files failed, restore original index
+    currentFileIndex = startIndex;
+    Serial.println("Wav: No valid WAV files found.");
+    return false;
+  }
+
+  /** Get current file index (0-based)
+   * @return current file index, or -1 if no file loaded
+   */
+  int getCurrentFileIndex() const {
+    return currentFileIndex;
+  }
+
+  /** Get total number of WAV files on SD card
+   * @return number of WAV files
+   */
+  int getFileCount() const {
+    return wavFileCount;
+  }
+
+  /** Get current filename
+   * @return pointer to current filename string
+   */
+  const char* getFilename() const {
+    return currentFilename;
   }
 
   /** Get pointer to audio buffer
@@ -316,7 +430,51 @@ private:
   uint32_t wavSampleRate;
   uint8_t numChannels;
   uint8_t bitsPerSample;
+  uint8_t wavAudioFormat;     // 1 = PCM integer, 3 = IEEE float
   SdFs* sd;
+  int currentFileIndex;       // Current file index (0-based), -1 if none loaded
+  int wavFileCount;           // Total number of WAV files on SD card
+  char currentFilename[128];  // Current loaded filename
+
+  /** Load WAV file by index (0-based)
+   * @param index Index of file to load
+   * @return true if successful
+   */
+  bool loadByIndex(int index) {
+    if (sd == nullptr || index < 0) {
+      return false;
+    }
+
+    FsFile root;
+    FsFile file;
+    int count = 0;
+
+    if (!root.open("/")) {
+      Serial.println("Wav: Failed to open root directory.");
+      return false;
+    }
+
+    while (file.openNext(&root, O_RDONLY)) {
+      char filename[64];
+      file.getName(filename, sizeof(filename));
+
+      if (!file.isDir() && isValidFile(filename)) {
+        if (count == index) {
+          // Found the file we want
+          snprintf(currentFilename, sizeof(currentFilename), "/%s", filename);
+          file.close();
+          root.close();
+          return load(currentFilename);
+        }
+        count++;
+      }
+      file.close();
+    }
+
+    root.close();
+    Serial.printf("Wav: File index %d not found.\n", index);
+    return false;
+  }
 
   /** Find chunk start position in header
    * @param header Buffer containing WAV header
@@ -345,13 +503,20 @@ private:
             header[riffPos + 10] == 'V' && header[riffPos + 11] == 'E');
   }
 
-  /** Check if filename has WAV extension
+  /** Check if filename is a valid WAV file (not hidden/system)
    * @param filename Filename to check
-   * @return true if .wav or .WAV extension
+   * @return true if .wav or .WAV extension and not a hidden file
    */
-  bool isWavFile(const char* filename) {
+  bool isValidFile(const char* filename) {
     size_t len = strlen(filename);
     if (len < 4) return false;
+
+    // Skip macOS resource fork files (start with "._")
+    if (filename[0] == '.' && filename[1] == '_') return false;
+
+    // Skip other hidden files (start with ".")
+    if (filename[0] == '.') return false;
+
     const char* ext = filename + len - 4;
     return (strcasecmp(ext, ".wav") == 0);
   }
@@ -394,6 +559,35 @@ private:
           sample24 = (sample24 << 8) | tempBuffer[bytePos];
           // Take upper 16 bits by shifting right 8 bits
           audioBuffer[bufferIndex++] = (int16_t)(sample24 >> 8);
+        }
+      } else if (bitsPerSample == 32) {
+        if (wavAudioFormat == 3) {
+          // 32-bit IEEE float: convert from -1.0..1.0 to -32768..32767
+          for (size_t i = 0; i < chunkSamples * numChannels; i++) {
+            size_t bytePos = i * 4;
+            // Read 32-bit float (little-endian)
+            union { uint32_t u; float f; } converter;
+            converter.u = tempBuffer[bytePos] |
+                         (tempBuffer[bytePos + 1] << 8) |
+                         (tempBuffer[bytePos + 2] << 16) |
+                         (tempBuffer[bytePos + 3] << 24);
+            // Clamp and convert to 16-bit
+            float sample = converter.f;
+            if (sample > 1.0f) sample = 1.0f;
+            if (sample < -1.0f) sample = -1.0f;
+            audioBuffer[bufferIndex++] = (int16_t)(sample * 32767.0f);
+          }
+        } else {
+          // 32-bit integer PCM: take upper 16 bits
+          for (size_t i = 0; i < chunkSamples * numChannels; i++) {
+            size_t bytePos = i * 4;
+            // Read 32-bit signed integer (little-endian), take upper 16 bits
+            int32_t sample32 = tempBuffer[bytePos] |
+                              (tempBuffer[bytePos + 1] << 8) |
+                              (tempBuffer[bytePos + 2] << 16) |
+                              ((int8_t)tempBuffer[bytePos + 3] << 24);
+            audioBuffer[bufferIndex++] = (int16_t)(sample32 >> 16);
+          }
         }
       }
 
