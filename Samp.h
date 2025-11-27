@@ -23,48 +23,48 @@ public:
    
   /** Constructor.
   * @param BUFFER_NAME the name of the array with sample data in it.
-  * @param BUFFER_SIZE the number of samples in the buffer.
-  * @param NUM_CHANNELS ths number of audio channels, 1 = mono, 2 = stereo
+  * @param FRAME_COUNT the number of frames in the buffer (for stereo: total_samples / 2).
+  * @param NUM_CHANNELS the number of audio channels, 1 = mono, 2 = stereo
   */
-  Samp(const int16_t * BUFFER_NAME, unsigned long BUFFER_SIZE, uint8_t NUM_CHANNELS): buffer(BUFFER_NAME),
-              buffer_size((unsigned long) BUFFER_SIZE),
+  Samp(const int16_t * BUFFER_NAME, unsigned long FRAME_COUNT, uint8_t NUM_CHANNELS): buffer(BUFFER_NAME),
+              buffer_size((unsigned long) FRAME_COUNT),
               num_channels(NUM_CHANNELS) {
     setLoopingOff();
-    endpos_fractional = buffer_size << 16; // 16.16 fixed-point
+    endpos_fractional = (uint64_t)buffer_size << 32; // 32.32 fixed-point for long audio support
     startpos_fractional = 0;
-    num_channels = NUM_CHANNELS;
   }
 
   /** Change the sound buffer which will be played by Samp.
   * @param BUFFER_NAME is the name of the array you're using.
-  * @param BUFFER_SIZE is the length of the buffer in sample frames
+  * @param FRAME_COUNT the number of frames in the buffer (for stereo: total_samples / 2).
   * @param BUFFER_SAMPLE_RATE the sample rate of the buffer data
-  * @param NUM_CHANNELS ths number of audio channels, 1 = mono, 2 = stereo
+  * @param NUM_CHANNELS the number of audio channels, 1 = mono, 2 = stereo
   */
   inline
-  void setTable(int16_t * BUFFER_NAME, unsigned long BUFFER_SIZE, int16_t BUFFER_SAMPLE_RATE, uint8_t NUM_CHANNELS) {
+  void setTable(int16_t * BUFFER_NAME, unsigned long FRAME_COUNT, uint32_t BUFFER_SAMPLE_RATE, uint8_t NUM_CHANNELS) {
     buffer = BUFFER_NAME;
-    buffer_size = BUFFER_SIZE;
+    buffer_size = FRAME_COUNT;  // buffer_size stores frame count
     buffer_sample_rate = BUFFER_SAMPLE_RATE;
     num_channels = NUM_CHANNELS;
     startpos_fractional = 0;
-    endpos_fractional = buffer_size << 16; // Convert to 16.16 fixed point
+    endpos_fractional = (uint64_t)buffer_size << 32; // 32.32 fixed-point for long audio support
 
     // Calculate phase increment for correct playback speed
     // Use 16.16 fixed-point: phase_increment = (buffer_rate / M16_rate) * 65536
     phase_increment_fractional = ((uint64_t)buffer_sample_rate << 16) / SAMPLE_RATE;
 
-    Serial.println("buffer size: " + String(buffer_size) + " chans: " + String(num_channels) + " frames: " + String(buffer_size / num_channels) +
+    Serial.println("frames: " + String(buffer_size) + " chans: " + String(num_channels) +
+      " samples: " + String(buffer_size * num_channels) +
       " SR: " + String(buffer_sample_rate) + " Hz, phase_inc: " + String(phase_increment_fractional));
   }
 
-  /** Sets the starting position in samples.
-  * @param startpos is the offset position in samples.
+  /** Sets the starting position in frames.
+  * @param startpos is the offset position in frames (for stereo, 1 frame = L+R pair).
   */
   inline
   void setStart(unsigned int startpos)
   {
-    startpos_fractional = (unsigned long)startpos << 16; // Convert to 16.16 fixed point
+    startpos_fractional = (uint64_t)startpos << 32; // Convert to 32.32 fixed point
   }
 
   /** Resets the phase (the playhead) to the start position,
@@ -75,8 +75,8 @@ public:
     phase_fractional = startpos_fractional;
   }
 
-  /** Sets a new start position plays the sample from that position.
-  * @param startpos position in samples from the beginning of the sound.
+  /** Sets a new start position and plays the sample from that position.
+  * @param startpos position in frames from the beginning of the sound.
   */
   inline
   void start(unsigned int startpos) {
@@ -84,12 +84,12 @@ public:
     start();
   }
 
-  /** Sets the end position in samples from the beginning of the sound.
-  * @param end position in samples.
+  /** Sets the end position in frames from the beginning of the sound.
+  * @param end position in frames (for stereo, 1 frame = L+R pair).
   */
   inline
   void setEnd(unsigned int end) {
-    endpos_fractional = (unsigned long)end << 16; // Convert to 16.16 fixed point
+    endpos_fractional = (uint64_t)end << 32; // Convert to 32.32 fixed point
   }
 
   /** Turns looping on */
@@ -115,8 +115,8 @@ public:
         return 0;
       }
     }
-    // Extract integer part from 16.16 fixed-point
-    int16_t out = buffer[phase_fractional >> 16];
+    // Extract integer part from 32.32 fixed-point
+    int16_t out = buffer[phase_fractional >> 32];
     incrementPhase();
     return out;
   }
@@ -136,10 +136,10 @@ public:
       }
     }
     // For stereo interleaved data: L, R, L, R...
-    // Left channel is at even indices: (phase >> 16) * 2
-    unsigned long sampleIndex = phase_fractional >> 16;
+    // Left channel is at even indices: (phase >> 32) * 2
+    uint32_t sampleIndex = phase_fractional >> 32;
     int16_t out = buffer[sampleIndex * 2];
-    if (envelopeOn) out = clip16((out * envTable[sampleIndex - (startpos_fractional >> 16)])>>15);
+    if (envelopeOn) out = clip16((out * envTable[sampleIndex - (uint32_t)(startpos_fractional >> 32)])>>15);
     return out;
   }
 
@@ -158,10 +158,10 @@ public:
       }
     }
     // For stereo interleaved data: L, R, L, R...
-    // Right channel is at odd indices: (phase >> 16) * 2 + 1
-    unsigned long sampleIndex = phase_fractional >> 16;
+    // Right channel is at odd indices: (phase >> 32) * 2 + 1
+    uint32_t sampleIndex = phase_fractional >> 32;
     int16_t out = buffer[sampleIndex * 2 + 1];
-    if (envelopeOn) out = clip16((out * envTable[sampleIndex - (startpos_fractional >> 16)])>>15);
+    if (envelopeOn) out = clip16((out * envTable[sampleIndex - (uint32_t)(startpos_fractional >> 32)])>>15);
     incrementPhase();  // Increment after reading right channel
     return out;
   }
@@ -206,17 +206,29 @@ public:
     return buffer[index];
   }
 
-  /** Set a specific phase increment.
-  * @param phaseinc_fractional A phase increment value.
+  /** Set playback speed as a multiplier.
+  * @param speed Playback speed multiplier (1.0 = normal, 2.0 = double speed, 0.5 = half speed)
    */
   inline
-  void setPhaseInc(unsigned long phaseinc_fractional) {
-    phase_increment_fractional = phaseinc_fractional;
+  void setSpeed(float speed) {
+    if (speed <= 0) speed = 1.0f;
+    // Calculate phase increment: base_increment * speed
+    // base_increment = (buffer_sample_rate / SAMPLE_RATE) * 65536
+    phase_increment_fractional = (unsigned long)(((uint64_t)buffer_sample_rate << 16) * speed / SAMPLE_RATE);
+  }
+
+  /** Get the current playback speed multiplier.
+  * @return Current speed (1.0 = normal, 2.0 = double speed, 0.5 = half speed)
+   */
+  inline
+  float getSpeed() {
+    // Reverse the calculation: speed = phase_increment * SAMPLE_RATE / (buffer_sample_rate * 65536)
+    return (float)phase_increment_fractional * SAMPLE_RATE / ((float)buffer_sample_rate * 65536.0f);
   }
 
   unsigned long getPhaseIndex() {
-    // Extract integer part from 16.16 fixed-point
-    return phase_fractional >> 16;
+    // Extract integer part from 32.32 fixed-point
+    return phase_fractional >> 32;
   }
 
   /** Generate a linear amplitude envelope
@@ -357,18 +369,22 @@ private:
   /** Increments the phase of the buffer index without returning a sample. */
   inline
   void incrementPhase() {
-    phase_fractional += phase_increment_fractional;
+    // phase_fractional is 32.32, phase_increment_fractional is 16.16
+    // Shift increment left by 16 to align fractional parts
+    phase_fractional += (uint64_t)phase_increment_fractional << 16;
   }
 
-  volatile unsigned long phase_fractional = 0;
-  volatile unsigned long phase_increment_fractional = 65536; // 1.0 in 16.16 fixed-point (normal speed)
+  volatile uint64_t phase_fractional = 0;           // 32.32 fixed-point for long audio support
+  volatile uint32_t phase_increment_fractional = 65536; // 16.16 fixed-point (1.0 = normal speed)
   const int16_t * buffer;
   bool looping = false;
-  unsigned long startpos_fractional, endpos_fractional, buffer_size;
-  uint8_t num_channels = 0; // 1 = mono, 2 = stereo
-  uint16_t buffer_sample_rate = SAMPLE_RATE;
+  uint64_t startpos_fractional = 0;   // 32.32 fixed-point
+  uint64_t endpos_fractional = 0;     // 32.32 fixed-point
+  uint32_t buffer_size = 0;           // frame count (not fixed-point)
+  uint8_t num_channels = 0;           // 1 = mono, 2 = stereo
+  uint32_t buffer_sample_rate = SAMPLE_RATE;
   float base_pitch = 440.0f; // A4 - the pitch at which sample plays at normal speed
-  int16_t * envTable;
+  int16_t * envTable = nullptr;
   bool envelopeOn = false;
 };
 
