@@ -129,10 +129,19 @@ public:
     return delayBufferSize_samples;
   }
 
-  /** Specify the delay duration in milliseconds */
+  /** Specify the delay duration in milliseconds.
+   *  Automatically allocates buffer if not yet allocated or if too small.
+   */
   void setTime(float msDur) {
-    delayTime_ms = min(maxDelayTime_ms - 1.0f, max(0.0f, msDur));
-    delayTime_samples = msDur * SAMPLE_RATE * 0.001;
+    msDur = max(0.0f, msDur);
+    // Auto-allocate buffer if needed (not allocated or too small)
+    if (!delayBuffer || msDur > maxDelayTime_ms) {
+      // Add 10% headroom to reduce reallocations from small time changes
+      unsigned int newMaxTime = (unsigned int)(msDur * 1.1f) + 1;
+      setMaxDelayTime(newMaxTime);
+    }
+    delayTime_ms = min(maxDelayTime_ms - 1.0f, msDur);
+    delayTime_samples = (unsigned int)(msDur * SAMPLE_RATE * 0.001f);
   }
 
   /** Return the delay duration in milliseconds */
