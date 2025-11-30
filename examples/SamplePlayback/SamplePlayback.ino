@@ -33,10 +33,7 @@ SdFs sd;
 Wav wav;
 Samp sample;
 
-int16_t* ampEnv = nullptr;  // Pointer to envelope array (allocated in setup)
-int sampCnt = 0;             // Sample count
-int ampEnvIndex = 0;         // Envelope index counter
-int panLevelL = 700; 
+int panLevelL = 700;
 int panLevelR = 700; // 0-1024 10bit
 int start = 0;
 int end;
@@ -65,7 +62,9 @@ void setup() {
                    wav.getChannels());
 
     end = wav.getFrameCount();
-    currentSpeed = sample.getSpeed();  // 1.0 for initial playback 
+    currentSpeed = sample.getSpeed();  // 1.0 for initial playback
+    // Initialize shared envelope (2048 samples, cosine type)
+    Samp::initSharedEnvelope(2048, 0.2, 1);
     // Initialize I2S audio
     // seti2sPins(I2S_BCK, I2S_WS, I2S_DOUT, I2S_DIN_NOT_USED); // if not using default
     audioStart();
@@ -86,7 +85,6 @@ void setup() {
 
       sample.setStart(start);
       sample.setEnd(end);
-      sample.generateCosineEnvelope(end - start, 0.2);
       sample.setFreq(mtof(random(36) + 48));
 
       currentSpeed = sample.getSpeed(); 
@@ -117,9 +115,6 @@ void audioUpdate() {
     // panning
     leftVal = (leftVal * panLevelL)>>10;
     rightVal = (rightVal * panLevelR)>>10;
-    // update envelope position
-    ampEnvIndex++;
-    if (ampEnvIndex >= sampCnt) ampEnvIndex = 0; // reset to start
     // Write samples to I2S DAC
     i2s_write_samples(leftVal, rightVal);
 }
