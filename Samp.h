@@ -16,14 +16,125 @@
 class Samp {
 
 public:
+  // Shared envelope table (static - single copy for all instances)
+  static uint8_t* sharedEnvTable;
+  static int sharedEnvSize;
+  static bool sharedEnvInitialized;
+
+  /** Initialize the shared envelope table (call once in setup() before audioStart())
+   * @param size Number of samples in envelope table (default 2048, power of 2 recommended)
+   * @param curveAmount Proportion for attack/release curves 0.0-1.0 (default 0.8)
+   * @param type Envelope type: 0=Gaussian, 1=Cosine, 2=Linear (default 0)
+   */
+  static void initSharedEnvelope(int size = 2048, float curveAmount = 0.8f, int type = 0) {
+    // Free existing table if any
+    if (sharedEnvTable) {
+      free(sharedEnvTable);
+      sharedEnvTable = nullptr;
+    }
+
+    sharedEnvSize = size;
+
+    // Allocate - try PSRAM first on ESP32
+    #if IS_ESP32()
+      if (isPSRAMAvailable() && ESP.getFreePsram() > (size_t)size + 1024) {
+        sharedEnvTable = (uint8_t*)ps_calloc(size, sizeof(uint8_t));
+      }
+      if (!sharedEnvTable) {
+        sharedEnvTable = (uint8_t*)calloc(size, sizeof(uint8_t));
+      }
+    #else
+      sharedEnvTable = (uint8_t*)calloc(size, sizeof(uint8_t));
+    #endif
+
+    if (!sharedEnvTable) {
+      Serial.println("ERROR: Failed to allocate shared envelope");
+      sharedEnvInitialized = false;
+      sharedEnvSize = 0;
+      return;
+    }
+
+    // Calculate segment sizes
+    curveAmount = max(0.0f, min(1.0f, curveAmount));
+    int attackSamples = (int)(size * curveAmount * 0.5f);
+    int releaseSamples = attackSamples;
+    int sustainSamples = size - attackSamples - releaseSamples;
+
+    int index = 0;
+
+    if (type == 0) {
+      // Gaussian envelope
+      float sigma = 0.4f;
+      float invSigma = 1.0f / sigma;
+      float g0 = expf(-(invSigma * invSigma));
+      float scale = 1.0f / (1.0f - g0);
+
+      // Attack
+      for (int i = 0; i < attackSamples && index < size; i++) {
+        float t = (attackSamples > 1) ? (float)i / (float)(attackSamples - 1) : 0.0f;
+        float x = (1.0f - t) * invSigma;
+        sharedEnvTable[index++] = (uint8_t)((expf(-(x * x)) - g0) * scale * 255.0f);
+      }
+      // Sustain
+      for (int i = 0; i < sustainSamples && index < size; i++) {
+        sharedEnvTable[index++] = 255;
+      }
+      // Release
+      for (int i = 0; i < releaseSamples && index < size; i++) {
+        float t = (releaseSamples > 1) ? (float)i / (float)(releaseSamples - 1) : 1.0f;
+        float x = t * invSigma;
+        sharedEnvTable[index++] = (uint8_t)((expf(-(x * x)) - g0) * scale * 255.0f);
+      }
+    } else if (type == 1) {
+      // Cosine envelope
+      for (int i = 0; i < attackSamples && index < size; i++) {
+        float t = (attackSamples > 1) ? (float)i / (float)(attackSamples - 1) : 0.0f;
+        sharedEnvTable[index++] = (uint8_t)((1.0f - cosf(M_PI * t)) * 0.5f * 255.0f);
+      }
+      for (int i = 0; i < sustainSamples && index < size; i++) {
+        sharedEnvTable[index++] = 255;
+      }
+      for (int i = 0; i < releaseSamples && index < size; i++) {
+        float t = (releaseSamples > 1) ? (float)i / (float)(releaseSamples - 1) : 1.0f;
+        sharedEnvTable[index++] = (uint8_t)((1.0f + cosf(M_PI * t)) * 0.5f * 255.0f);
+      }
+    } else {
+      // Linear envelope
+      for (int i = 0; i < attackSamples && index < size; i++) {
+        float t = (attackSamples > 1) ? (float)i / (float)(attackSamples - 1) : 0.0f;
+        sharedEnvTable[index++] = (uint8_t)(t * 255.0f);
+      }
+      for (int i = 0; i < sustainSamples && index < size; i++) {
+        sharedEnvTable[index++] = 255;
+      }
+      for (int i = 0; i < releaseSamples && index < size; i++) {
+        float t = (releaseSamples > 1) ? (float)i / (float)(releaseSamples - 1) : 1.0f;
+        sharedEnvTable[index++] = (uint8_t)((1.0f - t) * 255.0f);
+      }
+    }
+
+    sharedEnvInitialized = true;
+    Serial.println("Shared envelope initialized: " + String(size) + " bytes, type " + String(type));
+  }
+
+  /** Free the shared envelope table */
+  static void freeSharedEnvelope() {
+    if (sharedEnvTable) {
+      free(sharedEnvTable);
+      sharedEnvTable = nullptr;
+    }
+    sharedEnvSize = 0;
+    sharedEnvInitialized = false;
+  }
+
   /** Constructor.
    *
    */
   Samp() {}
 
-  /** Destructor - free allocated envelope buffers */
+  /** Destructor */
   ~Samp() {
-    freeEnvelopeBuffers();
+    // Note: Shared envelope is static, not freed per-instance
   }
 
   /** Disable copy constructor to prevent double-free issues */
@@ -86,17 +197,20 @@ public:
     // Reset envelope phase to start of envelope
     envPhase = 0;
     envComplete = false;
-    // Calculate envelope increment to complete envelope before segment ends
-    // Add ~3% margin to ensure envelope completes early with zero-padding
-    // rather than risking discontinuity if next segment starts before envelope finishes
+
+    // Calculate envelope increment to traverse shared envelope over segment duration
+    // Uses shared envelope size instead of per-instance size
     uint32_t segmentFrames = (uint32_t)((endpos_fractional - startpos_fractional) >> 32);
-    if (segmentFrames > 0 && activeEnvSize > 0) {
-      uint64_t numerator = (uint64_t)activeEnvSize * phase_increment_fractional;
+    if (segmentFrames > 0 && sharedEnvInitialized && sharedEnvSize > 0) {
+      // envPhaseIncrement = (sharedEnvSize * phase_increment_fractional) / segmentFrames
+      uint64_t numerator = (uint64_t)sharedEnvSize * phase_increment_fractional;
       envPhaseIncrement = (uint32_t)((numerator + segmentFrames - 1) / segmentFrames);
-      // Add ~5% margin (>> 4 = divide by 16 ≈ 6.25%)
+      // Add ~6% margin to ensure envelope completes before segment ends
       envPhaseIncrement += (envPhaseIncrement + 15) >> 4;
+      envelopeOn = true;
     } else {
       envPhaseIncrement = 65536; // Default to 1.0 in 16.16 fixed-point
+      envelopeOn = false;
     }
 
     // Now reset audio phase
@@ -166,14 +280,15 @@ public:
     uint32_t sampleIndex = phase_fractional >> 32;
     if (sampleIndex >= buffer_size || sampleIndex > 0x7FFFFFFF) return 0;
     int16_t out = buffer[sampleIndex];
-    // Apply envelope using independent envelope phase (not tied to audio playback speed)
-    if (envelopeOn && activeEnvTable) {
+    // Apply shared 8-bit envelope using independent envelope phase
+    if (envelopeOn && sharedEnvTable && sharedEnvInitialized) {
       if (envComplete) {
         out = 0; // Envelope already complete, output silence
       } else {
         uint32_t envIndex = envPhase >> 16; // Extract integer part from 16.16 fixed-point
-        if (envIndex < (uint32_t)activeEnvSize) {
-          out = clip16(((int32_t)out * activeEnvTable[envIndex]) >> 15);
+        if (envIndex < (uint32_t)sharedEnvSize) {
+          // 8-bit envelope: multiply and shift right by 8
+          out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
           uint32_t newEnvPhase = envPhase + envPhaseIncrement;
           if (newEnvPhase >= envPhase) {
             envPhase = newEnvPhase; // Normal advance
@@ -216,15 +331,15 @@ public:
     // For stereo, actual buffer index is sampleIndex * 2, so check more strictly
     if (sampleIndex >= buffer_size || sampleIndex > 0x3FFFFFFF) return 0;
     int16_t out = buffer[sampleIndex * 2];
-    // Apply envelope using independent envelope phase (not tied to audio playback speed)
-    // Note: envelope phase is advanced in nextRight() to keep L/R in sync
-    if (envelopeOn && activeEnvTable) {
+    // Apply shared 8-bit envelope (phase is advanced in nextRight() to keep L/R in sync)
+    if (envelopeOn && sharedEnvTable && sharedEnvInitialized) {
       if (envComplete) {
         out = 0; // Envelope already complete, output silence
       } else {
         uint32_t envIndex = envPhase >> 16; // Extract integer part from 16.16 fixed-point
-        if (envIndex < (uint32_t)activeEnvSize) {
-          out = clip16(((int32_t)out * activeEnvTable[envIndex]) >> 15);
+        if (envIndex < (uint32_t)sharedEnvSize) {
+          // 8-bit envelope: multiply and shift right by 8
+          out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
         } else {
           envComplete = true; // Envelope index reached end
           out = 0; // Ensure silence to prevent clicks
@@ -257,14 +372,15 @@ public:
     uint32_t sampleIndex = phase_fractional >> 32;
     if (sampleIndex >= buffer_size || sampleIndex > 0x3FFFFFFF) return 0;
     int16_t out = buffer[sampleIndex * 2 + 1];
-    // Apply envelope using independent envelope phase (not tied to audio playback speed)
-    if (envelopeOn && activeEnvTable) {
+    // Apply shared 8-bit envelope
+    if (envelopeOn && sharedEnvTable && sharedEnvInitialized) {
       if (envComplete) {
         out = 0; // Envelope already complete, output silence
       } else {
         uint32_t envIndex = envPhase >> 16; // Extract integer part from 16.16 fixed-point
-        if (envIndex < (uint32_t)activeEnvSize) {
-          out = clip16(((int32_t)out * activeEnvTable[envIndex]) >> 15);
+        if (envIndex < (uint32_t)sharedEnvSize) {
+          // 8-bit envelope: multiply and shift right by 8
+          out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
           // Advance envelope with overflow detection to prevent wrap-around jumps
           uint32_t newEnvPhase = envPhase + envPhaseIncrement;
           if (newEnvPhase >= envPhase) {
@@ -349,132 +465,37 @@ public:
     return phase_fractional >> 32;
   }
 
-  /** Generate a linear amplitude envelope (double-buffered for thread safety)
-   * @param tableSize Length of the envelope table
-   * @param curveAmount Amount of table used for attack/release ramps (0.0 to 1.0)
-   */
-  inline
-  void generateLinearEnvelope(int tableSize, float curveAmount) {
-    int16_t* envTable;
-    int attackSamples, sustainSamples, releaseSamples;
-    if (!prepareEnvelope(tableSize, curveAmount, envTable, attackSamples, sustainSamples, releaseSamples)) return;
-
-    int index = 0;
-    // Attack: linear ramp 0 to 1 (t spans exactly 0.0 to 1.0)
-    for (int i = 0; i < attackSamples && index < tableSize; i++) {
-      float t = (attackSamples > 1) ? (float)i / (float)(attackSamples - 1) : 0.0f;
-      envTable[index++] = (int16_t)(t * 32767.0f);
-    }
-    // Sustain
-    fillSustain(envTable, index, sustainSamples, tableSize);
-    // Release: linear ramp 1 to 0 (t spans exactly 0.0 to 1.0)
-    for (int i = 0; i < releaseSamples && index < tableSize; i++) {
-      float t = (releaseSamples > 1) ? (float)i / (float)(releaseSamples - 1) : 1.0f;
-      envTable[index++] = (int16_t)((1.0f - t) * 32767.0f);
-    }
-    finalizeEnvelope(envTable, tableSize);
-  }
-
-  /** Generate a cosine envelope lookup table (double-buffered for thread safety)
-   * @param tableSize Length of the envelope table
-   * @param curveAmount Amount of table used for attack/release curves (0.0 to 1.0)
-   */
-  inline
-  void generateCosineEnvelope(int tableSize, float curveAmount) {
-    int16_t* envTable;
-    int attackSamples, sustainSamples, releaseSamples;
-    if (!prepareEnvelope(tableSize, curveAmount, envTable, attackSamples, sustainSamples, releaseSamples)) return;
-
-    int index = 0;
-    // Attack: cosine curve 0 to 1 (t spans exactly 0.0 to 1.0)
-    for (int i = 0; i < attackSamples && index < tableSize; i++) {
-      float t = (attackSamples > 1) ? (float)i / (float)(attackSamples - 1) : 0.0f;
-      envTable[index++] = (int16_t)((1.0f - cosf(M_PI * t)) * 0.5f * 32767.0f);
-    }
-    // Sustain
-    fillSustain(envTable, index, sustainSamples, tableSize);
-    // Release: cosine curve 1 to 0 (t spans exactly 0.0 to 1.0)
-    for (int i = 0; i < releaseSamples && index < tableSize; i++) {
-      float t = (releaseSamples > 1) ? (float)i / (float)(releaseSamples - 1) : 1.0f;
-      envTable[index++] = (int16_t)((1.0f + cosf(M_PI * t)) * 0.5f * 32767.0f);
-    }
-    finalizeEnvelope(envTable, tableSize);
-  }
-
-  /** Generate a Gaussian envelope lookup table (double-buffered for thread safety)
-   * @param tableSize Length of the envelope table
-   * @param curveAmount Amount of table used for attack/release curves (0.0 to 1.0)
-   * @param sigma Controls steepness (default 0.4, lower = steeper, range 0.1 to 1.0)
-   */
-  inline
-  void generateGaussianEnvelope(int tableSize, float curveAmount, float sigma = 0.4f) {
-    int16_t* envTable;
-    int attackSamples, sustainSamples, releaseSamples;
-    if (!prepareEnvelope(tableSize, curveAmount, envTable, attackSamples, sustainSamples, releaseSamples)) return;
-
-    // Gaussian normalization constants
-    sigma = max(0.1f, min(1.0f, sigma));
-    float invSigma = 1.0f / sigma;
-    float g0 = expf(-(invSigma * invSigma));
-    float scale = 1.0f / (1.0f - g0);
-
-    int index = 0;
-    // Attack: Gaussian rise 0 to 1 (t spans exactly 0.0 to 1.0)
-    for (int i = 0; i < attackSamples && index < tableSize; i++) {
-      float t = (attackSamples > 1) ? (float)i / (float)(attackSamples - 1) : 0.0f;
-      float x = (1.0f - t) * invSigma;
-      envTable[index++] = (int16_t)((expf(-(x * x)) - g0) * scale * 32767.0f);
-    }
-    // Sustain
-    fillSustain(envTable, index, sustainSamples, tableSize);
-    // Release: Gaussian fall 1 to 0 (t spans exactly 0.0 to 1.0)
-    for (int i = 0; i < releaseSamples && index < tableSize; i++) {
-      float t = (releaseSamples > 1) ? (float)i / (float)(releaseSamples - 1) : 1.0f;
-      float x = t * invSigma;
-      envTable[index++] = (int16_t)((expf(-(x * x)) - g0) * scale * 32767.0f);
-    }
-    finalizeEnvelope(envTable, tableSize);
-  }
-
-  /** Turn amplitude envelope off if already on */
+  /** Turn amplitude envelope off */
   void setEnvelopeOff() {
     envelopeOn = false;
   }
 
-  /** Free envelope buffers to reclaim memory
-   * Call this when you no longer need envelope functionality for this Samp instance
-   */
-  void freeEnvelopes() {
-    freeEnvelopeBuffers();
-  }
-
-  /** Print envelope values graphically to Serial for debugging
+  /** Print shared envelope values graphically to Serial for debugging
    * @param displayRows Number of rows to display (samples envelope, default 32)
    * @param displayWidth Width of the bar graph in characters (default 50)
    */
-  void printEnvelope(int displayRows = 32, int displayWidth = 50) {
-    if (!activeEnvTable || activeEnvSize <= 0) {
-      Serial.println("Samp: No active envelope to display");
+  static void printEnvelope(int displayRows = 32, int displayWidth = 50) {
+    if (!sharedEnvTable || !sharedEnvInitialized || sharedEnvSize <= 0) {
+      Serial.println("Samp: No shared envelope to display");
       return;
     }
 
     Serial.println();
-    Serial.println("=== Envelope ===");
-    Serial.println("Size: " + String(activeEnvSize) + " samples (" +
-                   String(framesToMs(activeEnvSize)) + " ms)");
+    Serial.println("=== Shared Envelope ===");
+    Serial.println("Size: " + String(sharedEnvSize) + " samples");
     Serial.println();
 
     // Sample the envelope at regular intervals
-    int step = max(1, activeEnvSize / displayRows);
-    int actualRows = (activeEnvSize + step - 1) / step;
+    int step = max(1, sharedEnvSize / displayRows);
+    int actualRows = (sharedEnvSize + step - 1) / step;
 
     for (int row = 0; row < actualRows && row < displayRows; row++) {
       int envIndex = row * step;
-      if (envIndex >= activeEnvSize) break;
+      if (envIndex >= sharedEnvSize) break;
 
-      int16_t value = activeEnvTable[envIndex];
-      // Scale value (0-32767) to display width
-      int barLength = (int)((long)value * displayWidth / 32767);
+      uint8_t value = sharedEnvTable[envIndex];
+      // Scale value (0-255) to display width
+      int barLength = (int)((long)value * displayWidth / 255);
       barLength = max(0, min(displayWidth, barLength));
 
       // Print index (right-aligned)
@@ -589,146 +610,6 @@ private:
     phase_fractional += (uint64_t)phase_increment_fractional << 16;
   }
 
-  /** Prepare envelope buffer for writing (validation, allocation, segment calculation)
-   * @return true if buffer is ready, false if envelope should be disabled
-   */
-  bool prepareEnvelope(int tableSize, float curveAmount, int16_t*& envTable,
-                       int& attackSamples, int& sustainSamples, int& releaseSamples) {
-    if (tableSize <= 0 || tableSize > 1000000) return false;
-    if (curveAmount <= 0) {
-      envelopeOn = false;
-      return false;
-    }
-
-    // Determine which buffer is inactive
-    int16_t** inactiveBuffer;
-    int* inactiveSize;
-    if (activeEnvTable == envTableA) {
-      inactiveBuffer = &envTableB;
-      inactiveSize = &envTableSizeB;
-    } else {
-      inactiveBuffer = &envTableA;
-      inactiveSize = &envTableSizeA;
-    }
-
-    // Reallocate if needed
-    if (*inactiveSize < tableSize) {
-      if (*inactiveBuffer) {
-        free(*inactiveBuffer);
-        *inactiveBuffer = nullptr;
-        *inactiveSize = 0;
-      }
-      *inactiveBuffer = allocEnvBuffer(tableSize);
-      if (!*inactiveBuffer) {
-        Serial.println("Samp: envelope allocation failed");
-        envelopeOn = false;
-        return false;
-      }
-      *inactiveSize = tableSize;
-    }
-
-    envTable = *inactiveBuffer;
-    curveAmount = max(0.0f, min(1.0f, curveAmount));
-    attackSamples = (int)(tableSize * curveAmount * 0.5f);
-    releaseSamples = attackSamples;
-    sustainSamples = tableSize - attackSamples - releaseSamples;
-    return true;
-  }
-
-  /** Fill sustain section of envelope */
-  inline void fillSustain(int16_t* envTable, int& index, int sustainSamples, int tableSize) {
-    for (int i = 0; i < sustainSamples && index < tableSize; i++) {
-      envTable[index++] = 32767;
-    }
-  }
-
-  /** Finalize envelope (atomic swap to make it active) */
-  inline void finalizeEnvelope(int16_t* envTable, int tableSize) {
-    // Disable envelope during swap to prevent race condition where ISR reads
-    // new size with old pointer (could read beyond buffer bounds)
-    envelopeOn = false;
-
-    // Memory barrier to ensure envelope buffer writes are visible to other core
-    // before we update the pointer (ESP32 dual-core cache coherency)
-    #if defined(ESP32)
-      __sync_synchronize();
-    #endif
-
-    activeEnvTable = envTable;
-    activeEnvSize = tableSize;
-    envelopeOn = true;
-  }
-
-  /** Free envelope buffers safely */
-  void freeEnvelopeBuffers() {
-    envelopeOn = false;
-    activeEnvTable = nullptr;
-    activeEnvSize = 0;
-    if (envTableA) {
-      free(envTableA);
-      envTableA = nullptr;
-      envTableSizeA = 0;
-    }
-    if (envTableB) {
-      free(envTableB);
-      envTableB = nullptr;
-      envTableSizeB = 0;
-    }
-  }
-
-  /** Allocate envelope buffer, preferring PSRAM on ESP32, falling back to heap RAM
-   * @param size Number of int16_t samples to allocate
-   * @return Pointer to allocated buffer, or nullptr if allocation failed
-   */
-  int16_t* allocEnvBuffer(int size) {
-    // Sanity check for invalid sizes (negative from underflow, zero, or unreasonably large)
-    if (size <= 0 || size > 1000000) {
-      Serial.println("Samp: allocEnvBuffer - invalid size requested: " + String(size));
-      return nullptr;
-    }
-
-    size_t bytesNeeded = (size_t)size * sizeof(int16_t);
-    int16_t* buf = nullptr;
-
-    #if IS_ESP32()
-      // Try PSRAM first if available and has enough space
-      if (isPSRAMAvailable()) {
-        size_t freePsram = ESP.getFreePsram();
-        if (freePsram > bytesNeeded + 1024) {  // Keep 1KB headroom
-          buf = (int16_t*)ps_calloc(size, sizeof(int16_t));
-          if (buf) {
-            // Serial.println("Samp: Allocated " + String(bytesNeeded) + " bytes in PSRAM");
-            return buf;
-          }
-          Serial.println("Samp: PSRAM allocation failed despite available space");
-        }
-      }
-
-      // Fall back to regular heap RAM
-      size_t freeHeap = ESP.getFreeHeap();
-      if (freeHeap > bytesNeeded + 4096) {  // Keep 4KB headroom for system
-        buf = (int16_t*)calloc(size, sizeof(int16_t));
-        if (buf) {
-          // Serial.println("Samp: Allocated " + String(bytesNeeded) + " bytes in heap RAM");
-          return buf;
-        }
-      }
-
-      // Allocation failed
-      Serial.println("Samp: Memory allocation failed! Requested: " + String(bytesNeeded) +
-                     " bytes, Free heap: " + String(freeHeap) + " bytes");
-    #else
-      // Non-ESP32 platform - just use regular malloc
-      buf = (int16_t*)calloc(size, sizeof(int16_t));
-      if (buf) {
-        return buf;
-      }
-      Serial.println("Samp: Memory allocation failed for " + String(bytesNeeded) + " bytes");
-    #endif
-
-    return nullptr;
-  }
-
   volatile uint64_t phase_fractional = 0;           // 32.32 fixed-point for long audio support
   volatile uint32_t phase_increment_fractional = 65536; // 16.16 fixed-point (1.0 = normal speed)
   const int16_t * buffer = nullptr;  // Initialize to nullptr to prevent undefined behavior
@@ -741,19 +622,16 @@ private:
   uint32_t buffer_sample_rate = SAMPLE_RATE;
   float base_pitch = 440.0f; // A4 - the pitch at which sample plays at normal speed
 
-  // Double-buffered envelope tables to avoid race conditions
-  int16_t* envTableA = nullptr;       // Envelope buffer A
-  int16_t* envTableB = nullptr;       // Envelope buffer B
-  int16_t* volatile activeEnvTable = nullptr;  // Volatile POINTER to active buffer (ISR must re-read)
-  int envTableSizeA = 0;              // Allocated size of buffer A
-  int envTableSizeB = 0;              // Allocated size of buffer B
+  // Per-instance envelope state (uses shared envelope table)
   volatile bool envelopeOn = false;
-  volatile int activeEnvSize = 0;     // Size of active envelope
-
-  // Envelope phase tracking (independent of audio playback speed)
   volatile uint32_t envPhase = 0;           // 16.16 fixed-point envelope position
   volatile uint32_t envPhaseIncrement = 0;  // 16.16 fixed-point increment per output sample
-  volatile bool envComplete = false;        // Flag to prevent wrap-around issues with long envelopes
+  volatile bool envComplete = false;        // Flag to prevent wrap-around issues
 };
+
+// Static member definitions (must be outside class)
+uint8_t* Samp::sharedEnvTable = nullptr;
+int Samp::sharedEnvSize = 0;
+bool Samp::sharedEnvInitialized = false;
 
 #endif /* SAMP_H_ */
