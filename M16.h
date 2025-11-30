@@ -384,6 +384,12 @@ float ftom(float freq) {
   return ( ( 12 * log(freq / 220.0) / log(2.0) ) + 57.01 );
 }
 
+/** Convert beats per minute to milliseconds per beat */
+inline
+float bpmToMs(float bpm) {
+  return 60000.0f / bpm;
+}
+
 /** Return closest scale pitch to a given MIDI pitch
 * @pitch MIDI pitch number
 * @pitchClassSet an int array of chromatic values, 0-11, of size 12 (padded with zeros as required)
