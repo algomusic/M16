@@ -158,7 +158,7 @@ class Env {
         else if (elapsedTime <= jitEnvAttack) {
           double attackPortion = elapsedTime / (double)jitEnvAttack;
           envVal = max(envVal, min(JIT_MAX_ENV_LEVEL,
-                    (uint32_t)(JIT_MAX_ENV_LEVEL * attackPortion)));
+                    (uint16_t)(JIT_MAX_ENV_LEVEL * attackPortion)));
         } 
         else {
           envVal = JIT_MAX_ENV_LEVEL;
@@ -258,18 +258,21 @@ class Env {
     }
 
   private:
-    uint32_t MAX_ENV_LEVEL = MAX_16 * 2 - 1;
-    uint32_t JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
-    uint32_t jitEnvAttack, envAttack, envHold, envDecay, jitEnvDecay, sustainLevel, sustainTriggerLevel;
-    float invJitEnvDecay;
+    // Envelope level values (0 to MAX_16 * 2 - 1 = 65534)
+    uint16_t MAX_ENV_LEVEL = MAX_16 * 2 - 1;
+    uint16_t JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
+    uint16_t sustainLevel = 0, sustainTriggerLevel = 0;
+    uint16_t envVal = 0;
+    uint16_t releaseStartLevelDiff = MAX_ENV_LEVEL;
+    uint16_t decayStartLevel = 0, decayStartLevelDiff = 0, releaseStartlevel = 0;
+    // Timing values (microseconds - can be millions)
+    unsigned long jitEnvAttack = 0, envAttack = 0, envHold = 0, envDecay = 10000, jitEnvDecay = 10000;
+    unsigned long envRelease = 600 * 1000; // ms to micros
+    unsigned long jitEnvRelease = envRelease;
+    unsigned long envStartTime = 0, releaseStartTime = 0, decayStartTime = 0;
+    float invJitEnvDecay = 0.0001f;
     float envSustain = 0.0f;
-    uint32_t envRelease = 600 * 1000; // ms to micros
-    uint32_t jitEnvRelease = envRelease;
     bool peaked = false;
-    unsigned long envStartTime, releaseStartTime, decayStartTime;
-    uint32_t envVal = 0;
-    uint32_t releaseStartLevelDiff = MAX_ENV_LEVEL;
-    uint32_t decayStartLevel, decayStartLevelDiff, releaseStartlevel;
     int decayRepeats = 0;
     int currDecayRepeats = 0;
 
