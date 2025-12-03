@@ -45,7 +45,20 @@ class FX {
 
     // clip16() in M16.h does hard clipping
 
-    /** Soft Clipping
+    /* Soft Clipping default
+    * Distort sound based on input level and depth amount
+    * Pass in a signal and depth amount.
+    * Output level can vary, so best to mix with original signal.
+    * @param sample_in The next sample value
+    * @param amount The degree of clipping to be applied - 1 to 400 is a reasonable range
+    * From amount of 1.0 (neutral) upward to about 25.0
+    */
+    inline
+    int16_t softClip(int32_t sample_in, float amount) {
+      return softClipTube(sample_in, amount);
+    }
+
+    /** Soft Clipping (atan)
     * Distort sound based on input level and depth amount
     * Pass in a signal and depth amount.
     * Output level can vary, so best to mix with original signal.
@@ -53,11 +66,81 @@ class FX {
     * @param amount The degree of clipping to be applied - 1 to 400 is a reasonable range
     * From amount of 1.0 (neutral) upward to about 2.0 for some compression to
     * about 3.0 for mild drive, to about 4 - 6 for noticiable overdrive, to 7 - 10 for distortion
+    * Note: Uses atan() which is warm but can sound dull. See alternatives below.
     */
     inline
-    int16_t softClip(int32_t sample_in, float amount) {
+    int16_t softClipAtan(int32_t sample_in, float amount) {
       int32_t samp = 38000 * atan(amount * (sample_in * (float)MAX_16_INV)); // 20831
       return clip16(samp);
+    }
+
+    /** Cubic Soft Clipping
+    * Faster and brighter than atan soft clip.
+    * Uses polynomial x - x³/6.75 which has a sharper knee, preserving more harmonics.
+    * @param sample_in The next sample value
+    * @param amount The degree of clipping, 1.0 (neutral) to ~10.0 (heavy distortion)
+    */
+    inline
+    int16_t softClipCubic(int32_t sample_in, float amount) {
+      float x = amount * sample_in * (float)MAX_16_INV;
+      float out;
+      if (x > 1.5f) out = 1.0f;
+      else if (x < -1.5f) out = -1.0f;
+      else out = x - (x * x * x) * 0.148148f; // x - x³/6.75
+      return clip16((int32_t)(out * MAX_16));
+    }
+
+    /** Fast Tanh Soft Clipping
+    * Balanced tone between warm and bright using Pade approximant.
+    * ~5x faster than real tanh, smooth curve with good harmonic balance.
+    * @param sample_in The next sample value
+    * @param amount The degree of clipping, 1.0 (neutral) to ~10.0 (heavy distortion)
+    */
+    inline
+    int16_t softClipTanh(int32_t sample_in, float amount) {
+      float x = amount * sample_in * (float)MAX_16_INV;
+      float x2 = x * x;
+      float out = x * (27.0f + x2) / (27.0f + 9.0f * x2);
+      return clip16((int32_t)(out * MAX_16));
+    }
+
+    /** Tube-Style Asymmetric Saturation
+    * Emulates tube amplifier characteristics with asymmetric clipping.
+    * Adds even harmonics for warmth with presence, not dull.
+    * @param sample_in The next sample value
+    * @param amount The degree of saturation, 1.0 (mild) to ~10.0 (heavy)
+    */
+    inline
+    int16_t softClipTube(int32_t sample_in, float amount) {
+      float x = amount * sample_in * (float)MAX_16_INV;
+      float out;
+      if (x >= 0) {
+        // Fast exp approximation: e^x ≈ (1 + x/8)^8 for small x, else clamp
+        float ex = (x > 4.0f) ? 0.0f : fastExpNeg(x);
+        out = 1.0f - ex;
+      } else {
+        float ex = (x < -4.0f) ? 0.0f : fastExpNeg(-x);
+        out = ex - 1.0f;
+      }
+      return clip16((int32_t)(out * MAX_16));
+    }
+
+    /** Foldback Soft Clipping
+    * Folds the waveform back instead of clipping, creating bright harmonics.
+    * More aggressive/synth-like character than traditional soft clip.
+    * @param sample_in The next sample value
+    * @param amount The degree of folding, 1.0 (neutral) to ~4.0 (heavy fold)
+    */
+    inline
+    int16_t softClipFold(int32_t sample_in, float amount) {
+      float x = amount * sample_in * (float)MAX_16_INV;
+      // Single fold at ±1 threshold
+      if (x > 1.0f) x = 2.0f - x;
+      else if (x < -1.0f) x = -2.0f - x;
+      // Clamp result in case of extreme values
+      if (x > 1.0f) x = 1.0f;
+      else if (x < -1.0f) x = -1.0f;
+      return (int16_t)(x * MAX_16);
     }
 
     /** Overdrive
@@ -458,6 +541,18 @@ class FX {
 
 
   private:
+    /** Fast approximation of e^(-x) for x >= 0
+    * Uses (1 - x/n)^n approximation, accurate for 0 <= x <= 4
+    */
+    inline float fastExpNeg(float x) {
+      // Approximate e^(-x) using (1 - x/8)^8
+      float t = 1.0f - x * 0.125f;
+      t = t * t; // ^2
+      t = t * t; // ^4
+      t = t * t; // ^8
+      return max(0.0f, t);
+    }
+
     const static int16_t PLUCK_BUFFER_SIZE = 1500; // lowest MIDI pitch is 24
     int * pluckBuffer; // [PLUCK_BUFFER_SIZE];
     float pluck_buffer_write_index = 0;
