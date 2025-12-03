@@ -38,13 +38,10 @@ public:
 	inline
 	int16_t next() {
     int idx = phase_fractional >> 16; // 16.16 fixed-point: extract integer index
-    int32_t sampVal = 0;
-    if (frequency > 831) { // midi pitch ~80 // high
-      sampVal = waveTable[idx + TABLE_SIZE + TABLE_SIZE];
-    } else if (frequency > 208) { // midi pitch ~56 // mid
-      sampVal = waveTable[idx + TABLE_SIZE];
-    } else {
-      sampVal = (waveTable[idx] + prevSampVal)>>1; // low
+    int32_t sampVal = bandPtr[idx];
+    // Low-frequency smoothing (bandPtr == waveTable means low band)
+    if (bandPtr == waveTable) {
+      sampVal = (sampVal + prevSampVal) >> 1;
       prevSampVal = sampVal;
     }
     incrementPhase();
@@ -81,9 +78,15 @@ public:
 	*/
   inline
 	void setTable(int16_t * TABLE_NAME) { // const
-    // TABLE_NAME = waveTable;
 		waveTable = TABLE_NAME;
-    // allocateWavetable();
+    // Update bandPtr based on current frequency
+    if (frequency > 831) {
+      bandPtr = waveTable + TABLE_SIZE * 2;
+    } else if (frequency > 208) {
+      bandPtr = waveTable + TABLE_SIZE;
+    } else {
+      bandPtr = waveTable;
+    }
 	}
 
 	/** Set the phase of the Oscil. Phase ranges from 0.0 - 1.0 */
@@ -134,7 +137,7 @@ public:
   /** Return the current value of the Oscil. */
   int16_t getValue() {
     int idx = phase_fractional >> 16; // 16.16 fixed-point
-    return waveTable[idx];
+    return bandPtr[idx];
   }
 
   /** Get a blend of this Osc and another.
@@ -252,53 +255,54 @@ public:
     return sampVal;
   }
 
-  /** Phase Modulation (FM) - Fast integer version
-   * @param modulator - The next sample from the modulating waveform
-   * @param modIndexScaled - Pre-scaled mod index: use (int)(modIndex * 4096)
-   * Call setModIndex() once to cache, then use phMod(modulator) for best performance
-   */
-  inline int16_t phMod(int16_t modulator, int32_t modIndexScaled) {
-    // All integer math - no float operations
-    int32_t modOffset = (modulator * modIndexScaled) >> 12; // Scale back down
-    modOffset <<= 4; // Adjust to 16.16 range
-    uint32_t p = phase_fractional + modOffset;
-    // Extract index and 8-bit fractional
-    int idx0 = (p >> 16) & (TABLE_SIZE - 1);
-    int idx1 = (idx0 + 1) & (TABLE_SIZE - 1);
-    int32_t frac8 = (p >> 8) & 0xFF;
-    // Linear interpolation
-    const int32_t a = waveTable[idx0];
-    const int32_t b = waveTable[idx1];
-    int32_t sampVal = a + (((b - a) * frac8) >> 8);
-    incrementPhase();
-    if (spreadActive) sampVal = doSpread(sampVal);
-    // Smoothing filter for better sound quality
-    int16_t outSamp = (sampVal + prevSampVal) >> 1;
-    prevSampVal = outSamp;
-    return outSamp;
-  }
-
-  /** Phase Modulation (FM) - Convenient float version
-   * @param modulator - The next sample from the modulating waveform
-   * @param modIndex - The depth value (0.0 - 10.0 typical)
-   * For maximum performance, use the integer version with pre-scaled modIndex
+  /** Phase Modulation (FM)
+   * @param modulator - The next sample from the modulating waveform (int16_t)
+   * @param modIndex - Modulation depth, 0.0 to ~10.0 typical
+   *   0.5-1.0: Subtle FM shimmer
+   *   2.0-4.0: Classic FM tones
+   *   5.0-10.0: Aggressive FM
    */
   inline int16_t phMod(int16_t modulator, float modIndex) {
-    return phMod(modulator, (int32_t)(modIndex * 4096.0f));
+    // Calculate phase offset in 16.16 format
+    int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
+
+    // Anti-aliasing: reduce mod depth at high carrier frequencies
+    modOffset = (modOffset * modDepthScale) >> 10;
+
+    modOffset <<= 8; // Scale to 16.16 format
+
+    // Add modulation offset to phase (both 16.16)
+    uint32_t p = phase_fractional + modOffset;
+
+    // Extract table index and fractional part for interpolation
+    int idx = (p >> 16) & (TABLE_SIZE - 1);
+    int frac = (p >> 6) & 0x3FF;  // 10-bit fractional (0-1023)
+
+    // Linear interpolation between adjacent samples
+    int16_t s0 = bandPtr[idx];
+    int16_t s1 = bandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+    int32_t sampVal = s0 + (((s1 - s0) * frac) >> 10);
+
+    incrementPhase();
+
+    if (spreadActive) {
+      sampVal = doSpread(sampVal);
+    }
+    return sampVal;
   }
 
-  /** Set cached mod index for fastest FM performance
+  /** Set cached mod index for use with single-argument phMod
    * @param modIndex - The depth value (0.0 - 10.0 typical)
    */
   inline void setModIndex(float modIndex) {
-    cachedModIndex = (int32_t)(modIndex * 4096.0f);
+    cachedModIndexF = modIndex;
   }
 
-  /** Phase Modulation using cached mod index - fastest version
+  /** Phase Modulation using cached mod index
    * Call setModIndex() first, then use this in the audio loop
    */
   inline int16_t phMod(int16_t modulator) {
-    return phMod(modulator, cachedModIndex);
+    return phMod(modulator, cachedModIndexF);
   }
 
   /** Ring Modulation
@@ -407,6 +411,30 @@ public:
         phase_increment_fractional_s2 = phase_increment_fractional;
       }
       cycleLengthPerMS = frequency * 0.001f;
+
+      // Frequency-adaptive mod depth scaling for anti-aliasing in phMod
+      // Below 1500Hz: full depth. Above: reduce proportionally to headroom to Nyquist.
+      // This reduces FM sidebands that would alias at higher carrier frequencies.
+      const float nyquist = SAMPLE_RATE * 0.5f;
+      const float thresholdFreq = 1500.0f;
+      if (freq <= thresholdFreq) {
+        modDepthScale = 1024; // Full depth
+      } else {
+        // Scale down based on remaining headroom: (nyquist - freq) / (nyquist - threshold)
+        float headroom = (nyquist - freq) / (nyquist - thresholdFreq);
+        modDepthScale = (int32_t)(1024.0f * fmaxf(0.05f, fminf(1.0f, headroom)));
+      }
+
+      // Pre-compute band pointer to avoid per-sample branching in next()
+      if (waveTable != nullptr) {
+        if (freq > 831) {
+          bandPtr = waveTable + TABLE_SIZE * 2;  // high band
+        } else if (freq > 208) {
+          bandPtr = waveTable + TABLE_SIZE;      // mid band
+        } else {
+          bandPtr = waveTable;                   // low band
+        }
+      }
     }
 	}
 
@@ -806,7 +834,8 @@ private:
   uint32_t phase_fractional_s2 = 0;
   uint32_t phase_increment_fractional_s1 = 1228800; // ~440Hz default
   uint32_t phase_increment_fractional_s2 = 1228800;
-  int16_t * waveTable = nullptr; 
+  int16_t * waveTable = nullptr;
+  int16_t * bandPtr = nullptr;  // Pre-computed pointer to current frequency band
   bool allocated = false;
   int32_t prevSampVal = 0;
   bool isNoise = false;
@@ -819,7 +848,8 @@ private:
   int16_t prevParticle, particleEnv, particleThreshold = 0.993; //MAX_16 * 0.993;
   float particleEnvReleaseRate = 0.92; // thresh and rate = number of apparent particles
   uint32_t feedback_phase_fractional = 0; // 16.16 fixed-point
-  int32_t cachedModIndex = 4096; // Pre-scaled mod index (1.0 * 4096)
+  float cachedModIndexF = 1.0f; // Cached mod index for single-arg phMod
+  int32_t modDepthScale = 1024;  // Frequency-adaptive mod depth (0-1024, 1024 = full)
   float testVal = 1.3;
   float cycleLengthPerMS = frequency * 0.001f; // / 1000.0f;
   float midiPitch = 69;
@@ -848,6 +878,8 @@ private:
         waveTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
         empty(waveTable);
       #endif
+      // Initialize bandPtr for default frequency (440Hz = mid band)
+      bandPtr = waveTable + TABLE_SIZE;
       allocated = true;
     }
   }
