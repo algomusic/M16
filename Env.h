@@ -36,9 +36,11 @@ class Env {
       if (val >= 0) envHold = val * 1000;
     }
 
-    /** Set envDecay time in ms. */
+    /** Set envDecay time in ms.
+     * Set to 0 to skip decay phase (useful for AR envelopes with sustain=0)
+     */
     void setDecay(float val) {
-      if (val >= 0) envDecay = fmaxf(10.0f, val) * 1000;
+      if (val >= 0) envDecay = val * 1000;
     }
 
     /** Set the number of times to repeat the decay segment.
@@ -93,7 +95,7 @@ class Env {
       jitEnvRelease = envRelease + audioRand(envRelease * 0.05);
       jitEnvAttack = envAttack;
       jitEnvDecay = envDecay;
-      invJitEnvDecay = 1.0f / jitEnvDecay;
+      invJitEnvDecay = (jitEnvDecay > 0) ? (1.0f / jitEnvDecay) : 0.0f;
       envStartTime = micros(); 
       currDecayRepeats = decayRepeats;
       next();
@@ -169,12 +171,26 @@ class Env {
         // hold
         if (envHold > 0 && (unsigned long)(elapsedTime) <= (jitEnvAttack + envHold)) {
           // still holding
-        } 
+        }
         else {
-          decayStartLevel = envVal; 
-          decayStartTime = microsTime;
-          decayStartLevelDiff = decayStartLevel - sustainTriggerLevel;
-          envState = 3; // go to decay
+          // If decay=0, skip decay phase entirely
+          if (jitEnvDecay == 0) {
+            if (sustainLevel == 0) {
+              // AR envelope: skip directly to release
+              releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
+              releaseStartlevel = envVal;
+              releaseStartTime = microsTime;
+              envState = 5; // skip to release
+            } else {
+              // ASR envelope: skip to sustain
+              envState = 4; // skip to sustain
+            }
+          } else {
+            decayStartLevel = envVal;
+            decayStartTime = microsTime;
+            decayStartLevelDiff = decayStartLevel - sustainTriggerLevel;
+            envState = 3; // go to decay
+          }
         }
       }
       else if (envState == 3) {
@@ -266,7 +282,7 @@ class Env {
     uint16_t releaseStartLevelDiff = MAX_ENV_LEVEL;
     uint16_t decayStartLevel = 0, decayStartLevelDiff = 0, releaseStartlevel = 0;
     // Timing values (microseconds - can be millions)
-    unsigned long jitEnvAttack = 0, envAttack = 0, envHold = 0, envDecay = 10000, jitEnvDecay = 10000;
+    unsigned long jitEnvAttack = 0, envAttack = 0, envHold = 0, envDecay = 0, jitEnvDecay = 0;
     unsigned long envRelease = 600 * 1000; // ms to micros
     unsigned long jitEnvRelease = envRelease;
     unsigned long envStartTime = 0, releaseStartTime = 0, decayStartTime = 0;
