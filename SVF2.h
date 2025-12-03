@@ -22,7 +22,23 @@ class SVF2 {
   public:
     /** Constructor */
     SVF2() {
+      reset();
       setRes(0.2);
+    }
+
+    /** Reset all filter state to zero - call when reusing filter or to clear artifacts */
+    void reset() {
+      buf0 = 0.0f;
+      buf1 = 0.0f;
+      low = 0;
+      band = 0;
+      high = 0;
+      notch = 0;
+      allpassPrevIn = 0;
+      allpassPrevOut = 0;
+      simplePrev = 0;
+      dcPrev = 0.0f;
+      dcOut = 0.0f;
     }
 
     /** Set how resonant the filter will be.
@@ -176,6 +192,7 @@ class SVF2 {
     /** Calculate the next Allpass filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
      *  Perhaps not technically a state variable filter, but...
+     *  Includes DC blocking to prevent offset accumulation over time.
      */
     inline
     int16_t nextAllpass(int32_t input) {
@@ -184,7 +201,15 @@ class SVF2 {
       int32_t output = input + allpassPrevIn - allpassPrevOut;
       allpassPrevIn = input;
       allpassPrevOut = output;
-      return max(-MAX_16, (int)min((int32_t)MAX_16, output));
+
+      // Apply DC blocking filter to prevent accumulation: y[n] = x[n] - x[n-1] + 0.995 * y[n-1]
+      float outF = (float)output;
+      dcOut = outF - dcPrev + 0.995f * dcOut;
+      dcPrev = outF;
+      // Flush denormal in DC blocker state
+      dcOut = flushDenormal(dcOut);
+
+      return max(-MAX_16, (int)min((int32_t)MAX_16, (int32_t)dcOut));
     }
 
     /** Calculate the next Notch filter sample, given an input signal.
@@ -198,19 +223,42 @@ class SVF2 {
     }
 
   private:
-    int32_t low, band, high, notch, allpassPrevIn, allpassPrevOut, simplePrev;
+    // Threshold for flushing denormal floats (values below this become zero)
+    static constexpr float DENORMAL_THRESHOLD = 1e-15f;
+
+    int32_t low = 0;
+    int32_t band = 0;
+    int32_t high = 0;
+    int32_t notch = 0;
+    int32_t allpassPrevIn = 0;
+    int32_t allpassPrevOut = 0;
+    int32_t simplePrev = 0;
     int32_t maxFreq = SAMPLE_RATE * 0.195;
     int32_t freq = 0;
-    float f = 1.0;
-    float q = 0.0;
-    float fb = 0.0;
-    float buf0 = 0.0;
-    float buf1 = 0.0;
+    float f = 1.0f;
+    float q = 0.0f;
+    float fb = 0.0f;
+    float buf0 = 0.0f;
+    float buf1 = 0.0f;
+    // DC blocking state
+    float dcPrev = 0.0f;
+    float dcOut = 0.0f;
+
+    /** Flush denormal floats to zero to prevent CPU slowdown */
+    inline float flushDenormal(float value) {
+      // Use absolute value comparison - faster than std::fpclassify
+      return (value > DENORMAL_THRESHOLD || value < -DENORMAL_THRESHOLD) ? value : 0.0f;
+    }
 
     void calcFilter(int32_t input) {
-      float in =  max(-1.0f, min(1.0f, (float)(input * MAX_16_INV)));
+      float in = max(-1.0f, min(1.0f, (float)(input * MAX_16_INV)));
       buf0 = buf0 + f * (in - buf0 + fb * (buf0 - buf1));
       buf1 = buf1 + f * (buf0 - buf1);
+
+      // Flush denormals to prevent CPU slowdown during silence/quiet passages
+      buf0 = flushDenormal(buf0);
+      buf1 = flushDenormal(buf1);
+
       low = buf1 * MAX_16; // LowPass
       high = (in - buf0) * MAX_16; // HighPass
       band = (buf0 - buf1) * MAX_16; // BandPass
