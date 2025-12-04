@@ -51,7 +51,54 @@ public:
     return sampVal;
 	}
 
-  /** Returns the sample at for the oscillator phase at specified time in milliseconds.
+  /** Updates the phase and returns the next sample with interpolation.
+   * Uses cubic interpolation above 1kHz, linear interpolation above 500Hz, average filter below.
+   * Higher quality than next() at ~5-15% more CPU cost.
+   * @return sampVal The next sample.
+   */
+  inline
+  int16_t next2() {
+    // Extract table index and fractional part for interpolation
+    int idx = (phase_fractional >> 16) & (TABLE_SIZE - 1);
+    int32_t sampVal;
+    if (frequency > 1000.0f) {
+      // Cubic interpolation for high frequencies (4-point Hermite)
+      float t = (float)((phase_fractional >> 6) & 0x3FF) * 0.0009765625f;  // 0-1
+      float t2 = t * t;
+      float t3 = t2 * t;
+      // Get 4 samples: s[-1], s[0], s[1], s[2]
+      int16_t sm1 = bandPtr[(idx - 1) & (TABLE_SIZE - 1)];
+      int16_t s0 = bandPtr[idx];
+      int16_t s1 = bandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+      int16_t s2 = bandPtr[(idx + 2) & (TABLE_SIZE - 1)];
+      // Hermite interpolation coefficients
+      float a0 = -0.5f * sm1 + 1.5f * s0 - 1.5f * s1 + 0.5f * s2;
+      float a1 = sm1 - 2.5f * s0 + 2.0f * s1 - 0.5f * s2;
+      float a2 = -0.5f * sm1 + 0.5f * s1;
+      float a3 = s0;
+      sampVal = (int32_t)(a0 * t3 + a1 * t2 + a2 * t + a3);
+    } else if (frequency > 500.0f) {
+      // Linear interpolation for lower frequencies
+      int frac = (phase_fractional >> 6) & 0x3FF;  // 10-bit fractional (0-1023)
+      int16_t s0 = bandPtr[idx];
+      int16_t s1 = bandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+      sampVal = s0 + (((s1 - s0) * frac) >> 10);
+    } else {
+      int32_t sampVal = bandPtr[idx];
+      // Low-frequency smoothing (bandPtr == waveTable means low band)
+      if (bandPtr == waveTable) {
+        sampVal = (sampVal + prevSampVal) >> 1;
+        prevSampVal = sampVal;
+      }
+    }
+    incrementPhase();
+    if (spreadActive) {
+      sampVal = doSpread(sampVal);
+    }
+    return sampVal;
+  }
+
+  /** Returns the sample at a specified time in milliseconds.
   * Used for LFOs. Assumes the Osc started at time = 0;
 	* @return outSamp The sample value at the calculated phase position - range MIN_16 to MAX_16.
 	*/
@@ -303,6 +350,60 @@ public:
    */
   inline int16_t phMod(int16_t modulator) {
     return phMod(modulator, cachedModIndexF);
+  }
+
+  /** Phase Modulation with 2x oversampling (FM)
+   * Higher quality anti-aliasing at ~2x CPU cost
+   * @param modulator - The next sample from the modulating waveform (int16_t)
+   * @param modIndex - Modulation depth, 0.0 to ~10.0 typical
+   */
+  inline int16_t phMod2(int16_t modulator, float modIndex) {
+    // Calculate phase offset in 16.16 format
+    int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
+
+    // Anti-aliasing: reduce mod depth at high carrier frequencies
+    modOffset = (modOffset * modDepthScale) >> 10;
+    modOffset <<= 8; // Scale to 16.16 format
+
+    // Half phase increment for 2x oversampling
+    uint32_t halfInc = phase_increment_fractional >> 1;
+
+    // --- Sample 1: at current phase ---
+    uint32_t p1 = phase_fractional + modOffset;
+    int idx1 = (p1 >> 16) & (TABLE_SIZE - 1);
+    int frac1 = (p1 >> 6) & 0x3FF;
+    int16_t s0 = bandPtr[idx1];
+    int16_t s1 = bandPtr[(idx1 + 1) & (TABLE_SIZE - 1)];
+    int32_t samp1 = s0 + (((s1 - s0) * frac1) >> 10);
+
+    // Advance phase by half increment
+    phase_fractional += halfInc;
+    phase_fractional &= TABLE_SIZE_FP_MASK;
+
+    // --- Sample 2: at half-step advanced phase ---
+    uint32_t p2 = phase_fractional + modOffset;
+    int idx2 = (p2 >> 16) & (TABLE_SIZE - 1);
+    int frac2 = (p2 >> 6) & 0x3FF;
+    s0 = bandPtr[idx2];
+    s1 = bandPtr[(idx2 + 1) & (TABLE_SIZE - 1)];
+    int32_t samp2 = s0 + (((s1 - s0) * frac2) >> 10);
+
+    // Advance phase by remaining half increment
+    phase_fractional += halfInc;
+    phase_fractional &= TABLE_SIZE_FP_MASK;
+
+    // Average the two samples (simple 2-tap lowpass)
+    int32_t sampVal = (samp1 + samp2) >> 1;
+
+    if (spreadActive) {
+      sampVal = doSpread(sampVal);
+    }
+    return sampVal;
+  }
+
+  /** Phase Modulation with 2x oversampling using cached mod index */
+  inline int16_t phMod2(int16_t modulator) {
+    return phMod2(modulator, cachedModIndexF);
   }
 
   /** Ring Modulation
