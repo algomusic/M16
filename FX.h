@@ -125,6 +125,40 @@ class FX {
       return clip16((int32_t)(out * MAX_16));
     }
 
+    /** Integer-only Soft Clipping (no floats)
+    * Warm approximation of tube saturation using only integer math.
+    * Uses rational function: out = x / (1 + |x|/threshold)
+    * Optimized to avoid int64 division for better ESP32 performance.
+    * @param sample_in The next sample value
+    * @param amount The drive amount as integer, 1024 = unity, 2048 = 2x drive, etc.
+    *               Useful range: 1024 (mild) to 10240 (heavy distortion)
+    */
+    inline
+    int16_t softClipInt(int32_t sample_in, int32_t amount) {
+      // Scale input by amount (amount is 10-bit fixed point, 1024 = 1.0)
+      int32_t x = (sample_in * amount) >> 10;
+
+      // Clamp input to prevent overflow
+      if (x > 98304) x = 98304;         // 3x MAX_16
+      else if (x < -98304) x = -98304;
+
+      // Rational soft clip: out = x * threshold / (threshold + |x|)
+      // Use threshold = 32768, scaled math to stay in 32-bit
+      int32_t absX = (x >= 0) ? x : -x;
+
+      // Scale down, compute, scale back up to avoid overflow
+      // out = x * 32768 / (32768 + absX)
+      // Rewrite as: out = x / (1 + absX/32768) = x / (1 + absX>>15)
+      int32_t denom = 32768 + (absX >> 1);  // Approximate: threshold + absX/2
+      int32_t out = (x << 14) / (denom >> 1);  // Scaled 32-bit division
+
+      // Final clamp to valid 16-bit range
+      if (out > MAX_16) out = MAX_16;
+      else if (out < MIN_16) out = MIN_16;
+
+      return (int16_t)out;
+    }
+
     /** Foldback Soft Clipping
     * Folds the waveform back instead of clipping, creating bright harmonics.
     * More aggressive/synth-like character than traditional soft clip.
@@ -365,6 +399,69 @@ class FX {
       audioOutRight = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
     }
 
+    /** Half-rate stereo reverb with interpolation for reduced CPU usage.
+    * Processes reverb every other sample and applies smoothing to reduce artifacts.
+    * Saves ~40-50% CPU compared to full-rate reverb.
+    * @audioInLeft A mono audio signal for left channel
+    * @audioInRight A mono audio signal for right channel
+    * @audioOutLeft A mono audio destination variable for the left channel
+    * @audioOutRight A mono audio destination variable for the right channel
+    */
+    inline
+    void reverbStereoInterp(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
+      // Thread-safe lazy initialization with mutex
+      if (!reverbInitiated) {
+        extern SemaphoreHandle_t audioInitMutex;
+        if (audioInitMutex != NULL && xSemaphoreTake(audioInitMutex, portMAX_DELAY)) {
+          if (!reverbInitiated) {
+            initReverb(reverbSize);
+          }
+          xSemaphoreGive(audioInitMutex);
+        } else {
+          initReverb(reverbSize);
+        }
+      }
+
+      int32_t outL, outR;
+      reverbInterpToggle = !reverbInterpToggle;
+
+      if (reverbInterpToggle) {
+        // Process reverb this sample
+        if (reverb2Initiated) {
+          processReverb((audioInLeft + allpassRevOut)>>1, clip16(audioInRight + allpassRevOut)>>1);
+        } else {
+          processReverb(clip16(audioInLeft), clip16(audioInRight));
+        }
+        outL = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
+        outR = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
+        reverbInterpPrevL = outL;
+        reverbInterpPrevR = outR;
+      } else {
+        // Skip reverb processing, use previous output
+        outL = reverbInterpPrevL;
+        outR = reverbInterpPrevR;
+      }
+
+      // Smooth output with 1-pole lowpass to reduce half-rate artifacts
+      reverbInterpSmoothL += (outL - reverbInterpSmoothL) >> 2;
+      reverbInterpSmoothR += (outR - reverbInterpSmoothR) >> 2;
+      audioOutLeft = reverbInterpSmoothL;
+      audioOutRight = reverbInterpSmoothR;
+    }
+
+    /** Reset the interpolated reverb smoothing state.
+    * Call when enabling reverb after it was disabled to avoid transients.
+    * @seedL Initial value for left channel smoother
+    * @seedR Initial value for right channel smoother
+    */
+    inline
+    void resetReverbInterp(int32_t seedL = 0, int32_t seedR = 0) {
+      reverbInterpSmoothL = seedL;
+      reverbInterpSmoothR = seedR;
+      reverbInterpPrevL = seedL;
+      reverbInterpPrevR = seedR;
+    }
+
     /** A simple 'Chamberlin' reverb using allpass filter preprocessor and recursive delay lines. */
     inline
     void reverbStereo2(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
@@ -583,6 +680,10 @@ class FX {
     All allpass1, allpass2;
     bool reverb2Initiated = false;
     int32_t allpassRevOut = 0;
+    // Half-rate reverb interpolation state
+    bool reverbInterpToggle = false;
+    int32_t reverbInterpPrevL = 0, reverbInterpPrevR = 0;
+    int32_t reverbInterpSmoothL = 0, reverbInterpSmoothR = 0;
     int32_t prevSaturationOutput = 0;
     EMA aveFilter;
 
