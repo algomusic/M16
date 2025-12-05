@@ -149,6 +149,22 @@ public:
     return delayTime_ms;
   }
 
+  /** Set delay time via scan rate (BBD.h API compatibility)
+   *  @param rate Scan rate 0.01-1.0, where 1.0 = ~93ms, 0.1 = ~930ms
+   */
+  void setScanRate(float rate) {
+    const float BASE_DELAY_MS = 92.88f; // 4096 samples at 44100Hz
+    rate = max(0.01f, min(1.0f, rate));
+    setTime(BASE_DELAY_MS / rate);
+  }
+
+  /** Return current scan rate (BBD.h API compatibility) */
+  float getScanRate() {
+    const float BASE_DELAY_MS = 92.88f;
+    if (delayTime_ms < BASE_DELAY_MS) return 1.0f;
+    return max(0.01f, BASE_DELAY_MS / delayTime_ms);
+  }
+
   /** Specify the delay feedback level, from 0.0 to 1.0 */
   void setLevel(float level) {
     delayLevel = min((int32_t)1024, max((int32_t)0, (int32_t)(pow(level, 0.8) * 1024.0f)));
