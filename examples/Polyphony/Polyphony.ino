@@ -6,7 +6,7 @@
 #include "FX.h"
 
 int16_t * wavetable; // empty array pointer
-const int poly = 17; // change polyphony as desired, each MCU type will handle particular amounts
+const int poly = 2; // change polyphony as desired, each MCU type will handle particular amounts
 Osc osc[poly]; // an array of oscillators
 Env env[poly];
 SVF filter[poly];
@@ -69,10 +69,10 @@ void audioUpdate() {
   for (int i=0; i<poly; i++) {
     #if IS_ESP8266()
       mix += filter[i].simpleLPF(filter[i].simpleLPF((osc[i].next() * env[i].getValue())>>16));
-    #elif IS_ESP32()
+    #else // ESP32 and RP2040
       mix += filter[i].nextLPF((osc[i].next() * env[i].getValue())>>16);
     #endif
-    mix *= 0.7;
+    mix = (mix * 717) >> 10;  // 717/1024 ≈ 0.7, integer multiply
   }
   // stereo
   int32_t leftVal = mix; 
