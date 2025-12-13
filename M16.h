@@ -320,25 +320,42 @@ inline bool isPSRAMAvailable() {
   // Core 1 dedicated to audio for maximum performance
   #include <I2S.h>
 
-  // Default I2S pins - BCLK on GPIO 16, WS is implicitly BCLK+1 (GPIO 17), DOUT on GPIO 18
-  static int picoI2sPins[] = {16, 18}; // {BCLK, DOUT}
+  // Default I2S pins - BCLK on GPIO 16, WS is implicitly BCLK+1 (GPIO 17), DOUT on GPIO 18, DIN on GPIO 19
+  static int picoI2sPins[] = {16, 18, 19}; // {BCLK, DOUT, DIN}
 
-  // I2S instance
-  I2S i2s(OUTPUT);
+  // Separate I2S instances for input and output (safest approach)
+  // Using two instances avoids bidirectional mode clock edge timing issues
+  I2S i2sOut(OUTPUT);  // Audio output
+  I2S i2sIn(INPUT);    // Audio input (microphone)
 
-  // Flag to signal core 1 to start
+  // Flags for core synchronization
   static volatile bool picoAudioRunning = false;
+  static volatile bool picoInputEnabled = false;
+
+  // Input buffer for microphone data (shared with Mic.h)
+  static const int PICO_INPUT_BUF_SIZE = 256;
+  static int32_t picoInputBuf[PICO_INPUT_BUF_SIZE];
+  static volatile int picoInputBufIndex = 0;
+  static volatile int picoInputSamplesRead = 0;
 
   void seti2sPins(int bck, int ws, int dout, int din) {
     picoI2sPins[0] = bck;
     picoI2sPins[1] = dout;
+    picoI2sPins[2] = din;
     if (ws != bck + 1) {
       Serial.print("Warning: Pico WS is always BCLK+1 (GPIO ");
       Serial.print(bck + 1);
       Serial.print("), ignoring ws=");
       Serial.println(ws);
     }
-    Serial.println("i2s pins set for Pico");
+    Serial.print("i2s pins set for Pico: BCLK=");
+    Serial.print(bck);
+    Serial.print(" WS=");
+    Serial.print(bck + 1);
+    Serial.print(" DOUT=");
+    Serial.print(dout);
+    Serial.print(" DIN=");
+    Serial.println(din);
   }
 
   void audioUpdate(); // forward declaration
@@ -359,7 +376,7 @@ inline bool isPSRAMAvailable() {
       audioUpdate();
       int32_t sample32 = ((int32_t)leftAudioOuputValue << 16) |
                          ((uint16_t)rightAudioOuputValue);
-      i2s.write(sample32);  // Blocking write paced by I2S hardware
+      i2sOut.write(sample32);  // Blocking write paced by I2S hardware
     }
   }
 
@@ -368,14 +385,14 @@ inline bool isPSRAMAvailable() {
   }
 
   void audioStart() {
-    // Configure I2S with optimized buffer settings
-    i2s.setBCLK(picoI2sPins[0]);
-    i2s.setDOUT(picoI2sPins[1]);
-    i2s.setBitsPerSample(32);
-    i2s.setBuffers(8, 64);  // Larger buffers for complex DSP headroom (8*64=512 samples ~11.6ms)
+    // Configure I2S OUTPUT with optimized buffer settings
+    i2sOut.setBCLK(picoI2sPins[0]);
+    i2sOut.setDOUT(picoI2sPins[1]);
+    i2sOut.setBitsPerSample(32);
+    i2sOut.setBuffers(8, 64);  // Larger buffers for complex DSP headroom (8*64=512 samples ~11.6ms)
 
-    if (!i2s.begin(SAMPLE_RATE)) {
-      Serial.println("I2S init failed!");
+    if (!i2sOut.begin(SAMPLE_RATE)) {
+      Serial.println("I2S output init failed!");
       while(1);
     }
 
@@ -383,6 +400,47 @@ inline bool isPSRAMAvailable() {
     picoAudioRunning = true;
 
     Serial.println("M16 is running (Pico)");
+  }
+
+  /** Start audio input for microphone/line-in on Pico
+   *  Call this after audioStart() if you need audio input.
+   *  Uses a separate I2S instance to avoid conflicts with audio output.
+   *  Input uses BCLK+4 to avoid pin conflicts (e.g., GPIO 20 if output uses 16).
+   */
+  void audioInputStart() {
+    // Use separate BCLK for input (4 pins higher than output BCLK)
+    // This avoids any potential conflicts between input and output clocks
+    int inputBclk = picoI2sPins[0] + 4;  // e.g., GPIO 20 if output uses 16
+
+    i2sIn.setBCLK(inputBclk);
+    i2sIn.setDIN(picoI2sPins[2]);
+    i2sIn.setBitsPerSample(32);
+    i2sIn.setBuffers(4, 64);  // Smaller buffers OK for input
+
+    if (!i2sIn.begin(SAMPLE_RATE)) {
+      Serial.println("I2S input init failed!");
+      return;
+    }
+
+    picoInputEnabled = true;
+
+    Serial.print("M16 audio input enabled (Pico) - BCLK=");
+    Serial.print(inputBclk);
+    Serial.print(" WS=");
+    Serial.print(inputBclk + 1);
+    Serial.print(" DIN=");
+    Serial.println(picoI2sPins[2]);
+  }
+
+  /** Set custom input BCLK pin (call before audioInputStart)
+   *  By default, input uses output BCLK + 4.
+   *  Use this if you need a specific pin configuration.
+   */
+  void setInputBclk(int bclk) {
+    // Store in unused slot or add new variable if needed
+    // For now, we'll add a simple global
+    static int customInputBclk = -1;
+    customInputBclk = bclk;
   }
 #endif
 

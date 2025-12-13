@@ -58,11 +58,7 @@ class Mic {
   private:
     int samples_read = 0;
     int micGain = 32; // 0 - 64
-    #if IS_ESP32()
-      static const int16_t bufferLen = dmaBufferLength * 4;
-    #else
-      static const int16_t bufferLen = 256; // default for non-ESP32 platforms
-    #endif
+    static const int16_t bufferLen = 256; // buffer size in samples
     uint16_t inputBuf[bufferLen];
     int mBufIndex = 0;
 
@@ -73,15 +69,46 @@ class Mic {
     #elif IS_ESP32()
       inline
       void readMic() {
+        // Use new ESP32 I2S API (rx_handle defined in M16.h)
+        extern i2s_chan_handle_t rx_handle;
         size_t bytesIn = 0;
-        esp_err_t result = i2s_read(I2S_NUM_0, inputBuf, bufferLen, &bytesIn, portMAX_DELAY);
+        esp_err_t result = i2s_channel_read(rx_handle, inputBuf, bufferLen * sizeof(uint16_t), &bytesIn, portMAX_DELAY);
         if (result == ESP_OK && bytesIn > 0) {
           samples_read = bytesIn / 2; // stereo 16 bit samples
         }
       }
     #elif IS_RP2040()
+      inline
       void readMic() {
-        // Mic class not yet implemented for Pico - I2S input requires separate configuration
+        // Pico uses separate I2S input instance (i2sIn from M16.h)
+        // Requires audioInputStart() to be called in setup()
+        extern I2S i2sIn;
+        extern volatile bool picoInputEnabled;
+
+        if (!picoInputEnabled) {
+          samples_read = 0;
+          return;
+        }
+
+        // Read available samples from I2S input
+        int available = i2sIn.available();
+        if (available <= 0) {
+          samples_read = 0;
+          return;
+        }
+
+        // Read up to bufferLen/2 stereo samples (each sample is 32-bit containing L+R)
+        int samplesToRead = min(available, (int)(bufferLen / 2));
+        samples_read = 0;
+
+        for (int i = 0; i < samplesToRead; i++) {
+          int32_t sample32 = i2sIn.read();
+          // Split 32-bit sample into left (high 16 bits) and right (low 16 bits)
+          inputBuf[samples_read * 2] = (int16_t)(sample32 >> 16);       // Left channel
+          inputBuf[samples_read * 2 + 1] = (int16_t)(sample32 & 0xFFFF); // Right channel
+          samples_read++;
+        }
+        samples_read *= 2;  // Convert to total samples (L+R)
       }
     #endif
 };
