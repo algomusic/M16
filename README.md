@@ -1,6 +1,6 @@
 # M16
-Arduino Audio and Music Library for ESP8266, ESP32, and Raspberry Pi Pico 2
-Tested on ESP8266, original ESP32, ESP32-S2, ESP32-S3 and Pi Pico 2
+Arduino Audio and Music Library for ESP8266, ESP32, and Raspberry Pi Pico 2. 
+Tested on ESP8266, original ESP32, ESP32-S2, ESP32-S3 and Pi Pico 2.
 
 M16 is a 16-bit audio synthesis library for ESP microprocessors and I2S audio DACs/ADCs.
 
