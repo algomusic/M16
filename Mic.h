@@ -58,14 +58,17 @@ class Mic {
   private:
     int samples_read = 0;
     int micGain = 32; // 0 - 64
-    static const int16_t bufferLen = dmaBufferLength * 4;
+    #if IS_ESP32()
+      static const int16_t bufferLen = dmaBufferLength * 4;
+    #else
+      static const int16_t bufferLen = 256; // default for non-ESP32 platforms
+    #endif
     uint16_t inputBuf[bufferLen];
     int mBufIndex = 0;
 
     #if IS_ESP8266()
-      System.println("Mic class not yet implemented for ESP8266");
       void readMic() {
-        // TBC
+        // Mic class not yet implemented for ESP8266
       }
     #elif IS_ESP32()
       inline
@@ -75,6 +78,10 @@ class Mic {
         if (result == ESP_OK && bytesIn > 0) {
           samples_read = bytesIn / 2; // stereo 16 bit samples
         }
+      }
+    #elif IS_RP2040()
+      void readMic() {
+        // Mic class not yet implemented for Pico - I2S input requires separate configuration
       }
     #endif
 };

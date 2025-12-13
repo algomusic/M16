@@ -28,7 +28,7 @@ void loop() {
     float ratio = rand(8) * 0.25 + 0.25;  // set carrier to modulator freq ratio
     Serial.print("Ratio: ");Serial.print(ratio);
     aOsc2.setFreq(mtof(pitch) * ratio);
-    modIndex = rand(100) * 0.1;  // set the modulation index (depth)
+    modIndex = rand(50) * 0.1;  // set the modulation index (depth)
     Serial.print(" Mod Index: ");Serial.println(modIndex);
   }
 }

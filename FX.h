@@ -374,19 +374,22 @@ class FX {
     */
     inline
     void reverbStereo(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
-      // Thread-safe lazy initialization with mutex
+      // Thread-safe lazy initialization with mutex (ESP32 only)
       if (!reverbInitiated) {
-        extern SemaphoreHandle_t audioInitMutex;
-        if (audioInitMutex != NULL && xSemaphoreTake(audioInitMutex, portMAX_DELAY)) {
-          // Double-check after acquiring mutex
-          if (!reverbInitiated) {
+        #if IS_ESP32()
+          extern SemaphoreHandle_t audioInitMutex;
+          if (audioInitMutex != NULL && xSemaphoreTake(audioInitMutex, portMAX_DELAY)) {
+            // Double-check after acquiring mutex
+            if (!reverbInitiated) {
+              initReverb(reverbSize);
+            }
+            xSemaphoreGive(audioInitMutex);
+          } else {
             initReverb(reverbSize);
           }
-          xSemaphoreGive(audioInitMutex);
-        } else {
-          // Fallback if mutex not available (shouldn't happen)
+        #else
           initReverb(reverbSize);
-        }
+        #endif
       }
 
       if (reverb2Initiated) {
@@ -409,17 +412,21 @@ class FX {
     */
     inline
     void reverbStereoInterp(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
-      // Thread-safe lazy initialization with mutex
+      // Thread-safe lazy initialization with mutex (ESP32 only)
       if (!reverbInitiated) {
-        extern SemaphoreHandle_t audioInitMutex;
-        if (audioInitMutex != NULL && xSemaphoreTake(audioInitMutex, portMAX_DELAY)) {
-          if (!reverbInitiated) {
+        #if IS_ESP32()
+          extern SemaphoreHandle_t audioInitMutex;
+          if (audioInitMutex != NULL && xSemaphoreTake(audioInitMutex, portMAX_DELAY)) {
+            if (!reverbInitiated) {
+              initReverb(reverbSize);
+            }
+            xSemaphoreGive(audioInitMutex);
+          } else {
             initReverb(reverbSize);
           }
-          xSemaphoreGive(audioInitMutex);
-        } else {
+        #else
           initReverb(reverbSize);
-        }
+        #endif
       }
 
       int32_t outL, outR;
@@ -545,7 +552,7 @@ class FX {
     }
 
     /** A mono chorus using a modulated delay line.
-     * Based on Dattorro, Jon. 1997. Effect design, part 2: Delay line modulation and chorus. 
+     * Based on Dattorro, Jon. 1997. Effect design, part 2: Delay line modulation and chorus.
      * Journal of the Audio Engineering Society 45(10), 764–788.
     * @audioIn A mono audio signal
     */
@@ -560,7 +567,9 @@ class FX {
       int32_t delVal = chorusDelay.next(audioIn);
       int32_t inVal = (audioIn * (chorusMixInput))>>10;
       delVal = (delVal * chorusMixDelay)>>10;
-      return clip16(inVal + delVal);
+      // Normalize output to prevent clipping
+      int32_t sum = inVal + delVal;
+      return clip16((sum * chorusMixNorm)>>10);
     }
 
     /** A stereo chorus using two modulated delay lines.
@@ -584,8 +593,11 @@ class FX {
       int32_t inVal2 = (audioInRight * (chorusMixInput))>>10;
       delVal = (delVal * chorusMixDelay)>>10;
       delVal2 = (delVal2 * chorusMixDelay)>>10;
-      audioOutLeft = clip16(inVal + delVal);
-      audioOutRight = clip16(inVal2 + delVal2);
+      // Normalize output to prevent clipping
+      int32_t sumL = inVal + delVal;
+      int32_t sumR = inVal2 + delVal2;
+      audioOutLeft = clip16((sumL * chorusMixNorm)>>10);
+      audioOutRight = clip16((sumR * chorusMixNorm)>>10);
     }
 
     /** Set the chorus effect depth
@@ -596,6 +608,7 @@ class FX {
       depth = pow(depth, 0.8) * 0.5;
       chorusMixInput = panLeft(depth) * 1024;
       chorusMixDelay = panRight(depth) * 1024;
+      updateChorusMixNorm();
     }
 
     /** Set the chorus width
@@ -656,11 +669,28 @@ class FX {
     int prevPluckOutput = 0;
     bool pluckBufferEstablished = false;
     bool reverbInitiated = false;
-    float reverbFeedbackLevel = 0.93; // 0.0 to 1.0 
+    float reverbFeedbackLevel = 0.93; // 0.0 to 1.0
     int reverbMix = 40; // 0 to 1024
-    float reverbSize = 4.0; // >= 1, memory allocated to delay lengths 
-    // float reverbTime = 0.49999; // 0 to 0.5
+    float reverbSize = 4.0; // >= 1, memory allocated to delay lengths
+    int16_t reverbFeedbackInt = 950; // 0-1024, integer version of feedback level
+
+    // Optimized reverb delay buffers - power-of-2 sizes for fast modulo via bitwise AND
+    // Buffer sizes chosen to accommodate delay times up to reverbSize=16
+    static const int REV_BUF_BITS = 10;  // 1024 samples = ~23ms at 44.1kHz
+    static const int REV_BUF_SIZE = 1 << REV_BUF_BITS;  // 1024
+    static const int REV_BUF_MASK = REV_BUF_SIZE - 1;   // 0x3FF for fast wrap
+
+    int16_t* revBuf1 = nullptr;
+    int16_t* revBuf2 = nullptr;
+    int16_t* revBuf3 = nullptr;
+    int16_t* revBuf4 = nullptr;
+    uint16_t revWritePos = 0;  // Single write position for all buffers
+    uint16_t revDelay1 = 0, revDelay2 = 0, revDelay3 = 0, revDelay4 = 0;  // Delay offsets in samples
+
+    // Legacy Del objects kept for API compatibility (setReverbSize with unusual sizes)
     Del delay1, delay2, delay3, delay4;
+    bool useOptimizedReverb = false;  // Flag to use optimized path
+
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
     int16_t * shapeTable;
     int shapeTableSize = 0;
@@ -673,6 +703,7 @@ class FX {
     float chorusLfoWidth = 0.5; // ms
     int chorusMixInput = 600; // 0 - 1024
     int chorusMixDelay = 800; // 0 - 1024
+    int chorusMixNorm = 731; // normalization factor to prevent clipping (1024 * 1024 / (600 + 800))
     float chorusFeedback = 0.4; // 0.0 to 1.0
     int16_t * chorusLfoTable;
     Osc chorusLfo;
@@ -695,32 +726,135 @@ class FX {
       pluckBufferEstablished = true;
     }
 
+    /** Recalculate chorus normalization factor to prevent clipping */
+    void updateChorusMixNorm() {
+      int mixSum = chorusMixInput + chorusMixDelay;
+      if (mixSum > 1024) {
+        chorusMixNorm = (1024 * 1024) / mixSum; // scale down to unity gain
+      } else {
+        chorusMixNorm = 1024; // no scaling needed
+      }
+    }
+
     /** Set the reverb params */
     void initReverb() {
       initReverb(reverbSize);
     }
 
+    /** Allocate optimized reverb buffers */
+    void allocateReverbBuffers() {
+      if (revBuf1) return;  // Already allocated
+
+      #if IS_ESP32()
+        if (isPSRAMAvailable()) {
+          revBuf1 = (int16_t*)ps_calloc(REV_BUF_SIZE, sizeof(int16_t));
+          revBuf2 = (int16_t*)ps_calloc(REV_BUF_SIZE, sizeof(int16_t));
+          revBuf3 = (int16_t*)ps_calloc(REV_BUF_SIZE, sizeof(int16_t));
+          revBuf4 = (int16_t*)ps_calloc(REV_BUF_SIZE, sizeof(int16_t));
+        }
+      #endif
+
+      // Fallback to regular RAM if PSRAM not available or allocation failed
+      if (!revBuf1) revBuf1 = new int16_t[REV_BUF_SIZE]();
+      if (!revBuf2) revBuf2 = new int16_t[REV_BUF_SIZE]();
+      if (!revBuf3) revBuf3 = new int16_t[REV_BUF_SIZE]();
+      if (!revBuf4) revBuf4 = new int16_t[REV_BUF_SIZE]();
+
+      revWritePos = 0;
+    }
+
     /** Set the reverb params
     * @size Bigger sizes increase delay line times for better quality but use more memory (x2, x3, x4, etc.)
     */
-    void initReverb(float size) { // 1/8 of Pd values
-      delay1.setMaxDelayTime(8 * size); delay2.setMaxDelayTime(9 * size);
-      delay3.setMaxDelayTime(11 * size); delay4.setMaxDelayTime(13 * size);
-      delay1.setTime(7.5 * size); delay1.setLevel(reverbFeedbackLevel); delay1.setFeedback(true);
-      delay2.setTime(8.993 * size); delay2.setLevel(reverbFeedbackLevel); delay2.setFeedback(true);
-      delay3.setTime(10.844 * size); delay3.setLevel(reverbFeedbackLevel); delay3.setFeedback(true);
-      delay4.setTime(12.118 * size); delay4.setLevel(reverbFeedbackLevel); delay4.setFeedback(true);
+    void initReverb(float size) {
+      reverbSize = size;
+      // Convert feedback level to integer (0-1024)
+      reverbFeedbackInt = (int16_t)(reverbFeedbackLevel * 1024.0f);
+
+      // Calculate delay times in samples (1/8 of Pd values)
+      float d1_ms = 7.5f * size;
+      float d2_ms = 8.993f * size;
+      float d3_ms = 10.844f * size;
+      float d4_ms = 12.118f * size;
+
+      uint16_t d1_samp = (uint16_t)(d1_ms * SAMPLE_RATE * 0.001f);
+      uint16_t d2_samp = (uint16_t)(d2_ms * SAMPLE_RATE * 0.001f);
+      uint16_t d3_samp = (uint16_t)(d3_ms * SAMPLE_RATE * 0.001f);
+      uint16_t d4_samp = (uint16_t)(d4_ms * SAMPLE_RATE * 0.001f);
+
+      // Check if delays fit in optimized buffers
+      if (d1_samp < REV_BUF_SIZE && d2_samp < REV_BUF_SIZE &&
+          d3_samp < REV_BUF_SIZE && d4_samp < REV_BUF_SIZE) {
+        // Use optimized path
+        allocateReverbBuffers();
+        revDelay1 = d1_samp;
+        revDelay2 = d2_samp;
+        revDelay3 = d3_samp;
+        revDelay4 = d4_samp;
+        useOptimizedReverb = true;
+      } else {
+        // Fall back to Del-based reverb for large sizes
+        delay1.setMaxDelayTime(8 * size); delay2.setMaxDelayTime(9 * size);
+        delay3.setMaxDelayTime(11 * size); delay4.setMaxDelayTime(13 * size);
+        delay1.setTime(d1_ms); delay1.setLevel(reverbFeedbackLevel); delay1.setFeedback(true);
+        delay2.setTime(d2_ms); delay2.setLevel(reverbFeedbackLevel); delay2.setFeedback(true);
+        delay3.setTime(d3_ms); delay3.setLevel(reverbFeedbackLevel); delay3.setFeedback(true);
+        delay4.setTime(d4_ms); delay4.setLevel(reverbFeedbackLevel); delay4.setFeedback(true);
+        useOptimizedReverb = false;
+      }
       reverbInitiated = true;
     }
 
-    /** Compute reverb */
-    void processReverb(int16_t audioInLeft, int16_t audioInRight) {
-      revD1 = delay1.read(); revD2 = delay2.read();
-      revD3 = delay3.read(); revD4 = delay4.read();
-      revP1 = audioInLeft + revD1; revP2 = audioInRight + revD2;
-      revP3 = (revP1 + revP2); revM3 = (revP1 - revP2); revP4 = (revD3 + revD4); revM4 = (revD3 - revD4);
-      revP5 = (revP3 + revP4)>>1; revP6 = (revM3 + revM4)>>1; revM5 = (revP3 - revP4)>>1; revM6 = (revM3 - revM4)>>1;
-      delay1.write(revP5); delay2.write(revP6); delay3.write(revM5); delay4.write(revM6);
+    /** Compute reverb - optimized version with inlined buffer operations */
+    inline void processReverb(int16_t audioInLeft, int16_t audioInRight) {
+      if (useOptimizedReverb) {
+        // Fast path: inlined circular buffer operations with bitwise AND wrap
+        uint16_t wp = revWritePos;
+
+        // Read from delay lines (no function call overhead, no filtering, no level scaling)
+        int32_t d1 = revBuf1[(wp - revDelay1) & REV_BUF_MASK];
+        int32_t d2 = revBuf2[(wp - revDelay2) & REV_BUF_MASK];
+        int32_t d3 = revBuf3[(wp - revDelay3) & REV_BUF_MASK];
+        int32_t d4 = revBuf4[(wp - revDelay4) & REV_BUF_MASK];
+
+        // Apply feedback level
+        d1 = (d1 * reverbFeedbackInt) >> 10;
+        d2 = (d2 * reverbFeedbackInt) >> 10;
+        d3 = (d3 * reverbFeedbackInt) >> 10;
+        d4 = (d4 * reverbFeedbackInt) >> 10;
+
+        // Mixing matrix (Hadamard-style diffusion)
+        revP1 = audioInLeft + d1;
+        revP2 = audioInRight + d2;
+        int32_t p3 = revP1 + revP2;
+        int32_t m3 = revP1 - revP2;
+        int32_t p4 = d3 + d4;
+        int32_t m4 = d3 - d4;
+
+        // Write to delay lines (with saturation prevention)
+        int32_t w1 = (p3 + p4) >> 1;
+        int32_t w2 = (m3 + m4) >> 1;
+        int32_t w3 = (p3 - p4) >> 1;
+        int32_t w4 = (m3 - m4) >> 1;
+
+        // Soft clip to prevent overflow accumulation
+        revBuf1[wp] = (w1 > MAX_16) ? MAX_16 : ((w1 < MIN_16) ? MIN_16 : w1);
+        revBuf2[wp] = (w2 > MAX_16) ? MAX_16 : ((w2 < MIN_16) ? MIN_16 : w2);
+        revBuf3[wp] = (w3 > MAX_16) ? MAX_16 : ((w3 < MIN_16) ? MIN_16 : w3);
+        revBuf4[wp] = (w4 > MAX_16) ? MAX_16 : ((w4 < MIN_16) ? MIN_16 : w4);
+
+        // Increment write position with fast wrap
+        revWritePos = (wp + 1) & REV_BUF_MASK;
+      } else {
+        // Legacy path using Del objects
+        revD1 = delay1.read(); revD2 = delay2.read();
+        revD3 = delay3.read(); revD4 = delay4.read();
+        revP1 = audioInLeft + revD1; revP2 = audioInRight + revD2;
+        int32_t p3 = revP1 + revP2; int32_t m3 = revP1 - revP2;
+        int32_t p4 = revD3 + revD4; int32_t m4 = revD3 - revD4;
+        delay1.write((p3 + p4) >> 1); delay2.write((m3 + m4) >> 1);
+        delay3.write((p3 - p4) >> 1); delay4.write((m3 - m4) >> 1);
+      }
     }
 
     void initChorus() {

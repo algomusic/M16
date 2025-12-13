@@ -49,7 +49,7 @@ void loop() {
     generateTransferFunction();
   }
 
-  #if IS_ESP32() // 8266 can't manage waveshaping morphing
+  #if IS_ESP32() || IS_RP2040() // 8266 can't manage waveshaping morphing
     if ((unsigned long)(msNow - mixTime) >= mixDelta) {
       mixTime += mixDelta;
       shapeMixVal = lfo1.atTimeNormal(msNow);

@@ -29,8 +29,8 @@ public:
 
   /** Reset all filter state to zero */
   void reset() {
-    buf0 = 0.0f;
-    buf1 = 0.0f;
+    buf0 = 0;
+    buf1 = 0;
     low = 0;
     band = 0;
     high = 0;
@@ -38,21 +38,22 @@ public:
     allpassPrevIn = 0;
     allpassPrevOut = 0;
     simplePrev = 0;
-    dcPrev = 0.0f;
-    dcOut = 0.0f;
+    dcPrev = 0;
+    dcOut = 0;
   }
 
   /** Set filter resonance
    * @param resonance 0.01 to 1.0
    */
   inline void setRes(float resonance) {
-    q = min(0.96, pow(max(0.0f, min(1.0f, resonance)), 0.6));
-    fb = q + q * (1.0 - f);
+    float qFloat = min(0.96f, pow(max(0.0f, min(1.0f, resonance)), 0.6f));
+    qInt = (int32_t)(qFloat * 32768.0f);
+    updateFeedback();
   }
 
   /** @return Current resonance value */
   inline float getRes() {
-    return q;
+    return qInt * (1.0f / 32768.0f);
   }
 
   /** Set cutoff frequency in Hz
@@ -60,7 +61,9 @@ public:
    */
   inline void setFreq(int freq_val) {
     freq = max(0, min((int)maxFreq, freq_val));
-    f = min(0.96f, 2.0f * sin(3.1459f * freq * SAMPLE_RATE_INV));
+    float fFloat = min(0.96f, 2.0f * sin(3.1415927f * freq * SAMPLE_RATE_INV));
+    fInt = (int32_t)(fFloat * 32768.0f);
+    updateFeedback();
   }
 
   /** @return Current cutoff frequency in Hz */
@@ -70,16 +73,18 @@ public:
 
   /** @return Internal f coefficient */
   inline float getF() {
-    return f;
+    return fInt * (1.0f / 32768.0f);
   }
 
   /** Set cutoff as normalized value with non-linear mapping
    * @param cutoff_val 0.0-1.0 maps to 0-10kHz
    */
   inline void setCutoff(float cutoff_val) {
-    f = min(0.96, pow(max(0.0f, min(1.0f, cutoff_val)), 2.2));
-    freq = maxFreq * f;
-    fb = q + q * (1.0 + f);
+    float fFloat = min(0.96f, pow(max(0.0f, min(1.0f, cutoff_val)), 2.2f));
+    fInt = (int32_t)(fFloat * 32768.0f);
+    freq = (int32_t)(maxFreq * fFloat);
+    // fb = q + q * (1.0 + f)  ->  fbInt = qInt + (qInt * (32768 + fInt)) >> 15
+    fbInt = qInt + ((int64_t)qInt * (32768 + fInt) >> 15);
   }
 
   /** Calculate next lowpass sample
@@ -178,13 +183,16 @@ public:
     allpassPrevIn = input;
     allpassPrevOut = output;
 
-    // DC blocking filter
-    float outF = (float)output;
-    dcOut = outF - dcPrev + 0.995f * dcOut;
-    dcPrev = outF;
-    dcOut = flushDenormal(dcOut);
+    // DC blocking filter (integer version)
+    // dcOut = output - dcPrev + 0.995 * dcOut
+    // Using 15-bit fixed-point: 0.995 * 32768 = 32604
+    dcOut = output - dcPrev + ((dcOut * 32604) >> 15);
+    dcPrev = output;
 
-    return max(-MAX_16, (int)min((int32_t)MAX_16, (int32_t)dcOut));
+    // Clamp output
+    if (dcOut > MAX_16) return MAX_16;
+    if (dcOut < -MAX_16) return -MAX_16;
+    return (int16_t)dcOut;
   }
 
   /** Calculate next notch filter sample
@@ -198,8 +206,6 @@ public:
   }
 
 private:
-  static constexpr float DENORMAL_THRESHOLD = 1e-15f;
-
   int32_t low = 0;
   int32_t band = 0;
   int32_t high = 0;
@@ -207,34 +213,58 @@ private:
   int32_t allpassPrevIn = 0;
   int32_t allpassPrevOut = 0;
   int32_t simplePrev = 0;
-  int32_t maxFreq = SAMPLE_RATE * 0.195;
+  int32_t maxFreq = SAMPLE_RATE * 0.195f;
   int32_t freq = 0;
-  float f = 1.0f;
-  float q = 0.0f;
-  float fb = 0.0f;
-  float buf0 = 0.0f;
-  float buf1 = 0.0f;
-  float dcPrev = 0.0f;
-  float dcOut = 0.0f;
 
-  /** Flush denormal floats to zero to prevent CPU slowdown */
-  inline float flushDenormal(float value) {
-    return (value > DENORMAL_THRESHOLD || value < -DENORMAL_THRESHOLD) ? value : 0.0f;
+  // Fixed-point coefficients (15-bit, 32768 = 1.0)
+  int32_t fInt = 32768;
+  int32_t qInt = 0;
+  int32_t fbInt = 0;
+
+  // Filter state as 15-bit fixed-point (scaled by 32768)
+  int32_t buf0 = 0;
+  int32_t buf1 = 0;
+
+  // DC blocker state (15-bit fixed-point)
+  int32_t dcPrev = 0;
+  int32_t dcOut = 0;
+
+  /** Update feedback coefficient when f or q changes */
+  inline void updateFeedback() {
+    // fb = q + q * (1.0 - f)  ->  fbInt = qInt + (qInt * (32768 - fInt)) >> 15
+    fbInt = qInt + ((int64_t)qInt * (32768 - fInt) >> 15);
   }
 
-  /** Core filter calculation */
-  void calcFilter(int32_t input) {
-    float in = max(-1.0f, min(1.0f, (float)(input * MAX_16_INV)));
-    buf0 = buf0 + f * (in - buf0 + fb * (buf0 - buf1));
-    buf1 = buf1 + f * (buf0 - buf1);
+  /** Integer-only core filter calculation
+   *  All arithmetic in 15-bit fixed-point (32768 = 1.0)
+   *  Input expected in range -32767 to 32767, treated as -1.0 to 1.0
+   */
+  inline void calcFilter(int32_t input) {
+    // Input is already in 16-bit range, use directly as 15-bit fixed-point
+    int32_t in = input;
 
-    buf0 = flushDenormal(buf0);
-    buf1 = flushDenormal(buf1);
+    // buf0 = buf0 + f * (in - buf0 + fb * (buf0 - buf1))
+    int32_t diff01 = buf0 - buf1;
+    int32_t fbTerm = ((int64_t)fbInt * diff01) >> 15;
+    int32_t innerSum = in - buf0 + fbTerm;
+    buf0 += ((int64_t)fInt * innerSum) >> 15;
 
-    low = buf1 * MAX_16;
-    high = (in - buf0) * MAX_16;
-    band = (buf0 - buf1) * MAX_16;
-    notch = (in - buf0 + buf1) * MAX_16;
+    // buf1 = buf1 + f * (buf0 - buf1)
+    buf1 += ((int64_t)fInt * (buf0 - buf1)) >> 15;
+
+    // Prevent fixed-point overflow (equivalent to denormal flush)
+    // Clamp to reasonable range to prevent runaway
+    const int32_t LIMIT = 32767 * 4;  // Allow some headroom for resonance
+    if (buf0 > LIMIT) buf0 = LIMIT;
+    else if (buf0 < -LIMIT) buf0 = -LIMIT;
+    if (buf1 > LIMIT) buf1 = LIMIT;
+    else if (buf1 < -LIMIT) buf1 = -LIMIT;
+
+    // Calculate outputs (already in audio range)
+    low = buf1;
+    high = in - buf0;
+    band = buf0 - buf1;
+    notch = in - buf0 + buf1;
   }
 };
 

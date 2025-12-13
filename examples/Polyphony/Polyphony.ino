@@ -6,7 +6,7 @@
 #include "FX.h"
 
 int16_t * wavetable; // empty array pointer
-const int poly = 2; // change polyphony as desired, each MCU type will handle particular amounts
+const int poly = 17; // change polyphony as desired, each MCU type will handle particular amounts
 Osc osc[poly]; // an array of oscillators
 Env env[poly];
 SVF filter[poly];
@@ -37,7 +37,7 @@ void setup() {
     effect1.setReverbLength(0.6); // 0-1 feedback level
     effect1.setReverbMix(0.7); // 0-1 balance between dry and wet signals
   #endif
-  // setI2sPins(25, 27, 12, 21);
+  // seti2sPins(7,8,9,41);
   audioStart();
 }
 
@@ -48,7 +48,7 @@ void loop() {
       noteTime += noteDelta;
     for (int i=0; i<poly; i++){
       if (random(10) < 5) {
-        int p = pitchQuantize(random(36) + 48, scale, 0);
+        int p = pitchQuantize(random(42) + 36, scale, 0);
         osc[i].setPitch(p);
         filter[i].setFreq(min(3000.0f, mtof(p + 24)));
         env[i].start();

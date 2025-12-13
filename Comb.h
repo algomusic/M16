@@ -168,16 +168,20 @@ class Comb {
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
 
-      if (usePSRAM) {
-        inputBuffer = (int *) ps_malloc(bufferSize_samples * sizeof(int));
-        if (!inputBuffer) {  
-          Serial.println("PSRAM alloc failed for comb input, using regular RAM");
-          usePSRAM = false;
+      #if IS_ESP32()
+        if (usePSRAM) {
+          inputBuffer = (int *) ps_malloc(bufferSize_samples * sizeof(int));
+          if (!inputBuffer) {
+            Serial.println("PSRAM alloc failed for comb input, using regular RAM");
+            usePSRAM = false;
+            inputBuffer = new int[bufferSize_samples];
+          }
+        } else {
           inputBuffer = new int[bufferSize_samples];
         }
-      } else {
+      #else
         inputBuffer = new int[bufferSize_samples];
-      }
+      #endif
 
       if (!inputBuffer) {
         Serial.println("ERROR: Comb input buffer allocation failed!");
@@ -196,16 +200,20 @@ class Comb {
       bufferSize_samples = allpassSize * 0.001f * SAMPLE_RATE;
       setDelayTime(delayTime);
 
-      if (usePSRAM && ESP.getFreePsram() > bufferSize_samples * sizeof(int)) {
-        outputBuffer = (int *) ps_calloc(bufferSize_samples, sizeof(int));
-        if (!outputBuffer) {  
-          Serial.println("PSRAM alloc failed for comb output, using regular RAM");
-          usePSRAM = false;
+      #if IS_ESP32()
+        if (usePSRAM && ESP.getFreePsram() > bufferSize_samples * sizeof(int)) {
+          outputBuffer = (int *) ps_calloc(bufferSize_samples, sizeof(int));
+          if (!outputBuffer) {
+            Serial.println("PSRAM alloc failed for comb output, using regular RAM");
+            usePSRAM = false;
+            outputBuffer = new int[bufferSize_samples];
+          }
+        } else {
           outputBuffer = new int[bufferSize_samples];
         }
-      } else {
+      #else
         outputBuffer = new int[bufferSize_samples];
-      }
+      #endif
 
       if (!outputBuffer) {
         Serial.println("ERROR: Comb output buffer allocation failed!");

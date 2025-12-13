@@ -204,6 +204,18 @@ private:
     return tanhLUT_[idx] + (tanhLUT_[idx + 1] - tanhLUT_[idx]) * frac;
   }
 
+  /** Fast inverse square root approximation (Quake-style)
+   * Good enough for soft-knee compression where precision isn't critical
+   */
+  inline float fastSqrt(float x) {
+    // Fast inverse sqrt then invert - avoids division
+    union { float f; uint32_t i; } conv = {x};
+    conv.i = 0x5f3759df - (conv.i >> 1);
+    float y = conv.f;
+    y = y * (1.5f - (0.5f * x * y * y));  // One Newton iteration
+    return x * y;  // x * (1/sqrt(x)) = sqrt(x)
+  }
+
   /** Soft-knee tanh - reduces aliasing by gentler saturation
    * Applies soft compression before tanh to reduce harmonic generation.
    */
@@ -216,7 +228,7 @@ private:
       // Above knee: compress input to reduce harmonic generation
       float sign = (x >= 0.0f) ? 1.0f : -1.0f;
       float excess = ax - knee;
-      float compressed = knee + sqrtf(excess * 0.5f);
+      float compressed = knee + fastSqrt(excess * 0.5f);
       return tanhLookup(sign * compressed);
     }
   }

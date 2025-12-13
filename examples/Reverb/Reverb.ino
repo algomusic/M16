@@ -32,9 +32,9 @@ void setup() {
   filter1.setFreq(3000);
   // reverb
   #if IS_ESP8266()
-    effect1.setReverbSize(4); // quality and memory >= 1 
-  #elif IS_ESP32()
-    effect1.setReverbSize(16); // quality and memory >= 1 
+    effect1.setReverbSize(4); // quality and memory >= 1
+  #else // ESP32 and RP2040
+    effect1.setReverbSize(16); // quality and memory >= 1
   #endif
   effect1.setReverbLength(0.8); // 0.0 - 1.0
   effect1.setReverbMix(0.4); // 0.0 - 1.0
@@ -69,11 +69,11 @@ void audioUpdate() {
   #if IS_ESP8266()
     int16_t oscVal = (osc1.next() * ampEnv1.getValue())>>16;
     effect1.reverbStereo(oscVal, oscVal, leftVal, rightVal);
-  #elif IS_ESP32()
+  #else // ESP32 and RP2040
     int32_t oscVal = filter1.nextLPF((osc1.next() * ampEnv1.getValue())>>14);
     effect1.reverbStereo(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
     // try reverbStereo2 is a smoother reverb that requires more processing power
-    // effect1.reverbStereo2(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal); 
+    // effect1.reverbStereo2(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
   #endif
   i2s_write_samples(leftVal, rightVal);
 }

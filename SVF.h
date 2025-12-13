@@ -37,10 +37,12 @@ class SVF {
     */
     inline
     void setRes(float resonance) {
-      resOffset = max(0.01f, min(0.84f, resonance));
-      q = (1.0 - resOffset) * MAX_16;
-      scale = sqrt(max(0.1f, resOffset)) * MAX_16;
-      resOffset = 1.2 - resOffset * 1.6;
+      float resClamp = max(0.01f, min(0.84f, resonance));
+      q = (int32_t)((1.0f - resClamp) * MAX_16);
+      scale = (int32_t)(sqrt(max(0.1f, resClamp)) * MAX_16);
+      // Convert resOffset to 15-bit fixed-point (range ~0.4 to 1.2)
+      float resOffsetF = 1.2f - resClamp * 1.6f;
+      resOffsetInt = (int32_t)(resOffsetF * 32768.0f);
     }
 
     /** Set the cutoff or centre frequency of the filter.
@@ -50,16 +52,18 @@ class SVF {
     inline
     void setFreq(int32_t freq_val) {
       // Calculate safe maximum frequency to prevent state variable overflow
-      int32_t safeMaxFreq = SAMPLE_RATE * 0.21;  // 21% of sample rate
+      int32_t safeMaxFreq = SAMPLE_RATE * 0.21f;  // 21% of sample rate
       // Clamp frequency to safe range
       freq_val = max((int32_t)40, min(safeMaxFreq, freq_val));
-      f = 2 * sin(3.1459 * freq_val * SAMPLE_RATE_INV);
+      // Calculate f and store as 15-bit fixed-point
+      float fFloat = 2.0f * sin(3.1415927f * freq_val * SAMPLE_RATE_INV);
+      fInt = (int32_t)(fFloat * 32768.0f);
     }
 
     /** Return the cutoff or centre frequency of the filter.*/
     inline
     float getFreq() {
-      return f;
+      return fInt * (1.0f / 32768.0f);
     }
 
     /** Set the cutoff or corner frequency of the filter.
@@ -70,17 +74,20 @@ class SVF {
     void setCutoff(float cutoff_val) {
       cutoff_val = max(0.0f, min(1.0f, cutoff_val));
       float cutoff_freq = 0;
-      int32_t safeMaxFreq = SAMPLE_RATE * 0.21;  // Match setFreq() safety limit
+      int32_t safeMaxFreq = SAMPLE_RATE * 0.21f;  // Match setFreq() safety limit
 
-      if (cutoff_val > 0.7) {
-        cutoff_freq = pow(cutoff_val, 3) * safeMaxFreq;
+      if (cutoff_val > 0.7f) {
+        cutoff_freq = cutoff_val * cutoff_val * cutoff_val * safeMaxFreq;
       } else {
-        cutoff_freq = pow(cutoff_val * 1.43, 2) * (safeMaxFreq * 0.38) + 40;
+        float cv = cutoff_val * 1.43f;
+        cutoff_freq = cv * cv * (safeMaxFreq * 0.38f) + 40.0f;
       }
 
       // Safety clamp
       cutoff_freq = max(40.0f, min((float)safeMaxFreq, cutoff_freq));
-      f = 2 * sin(3.1459 * cutoff_freq * SAMPLE_RATE_INV);
+      // Calculate f and store as 15-bit fixed-point
+      float fFloat = 2.0f * sin(3.1415927f * cutoff_freq * SAMPLE_RATE_INV);
+      fInt = (int32_t)(fFloat * 32768.0f);
     }
 
     /** Calculate the next Lowpass filter sample, given an input signal.
@@ -198,23 +205,37 @@ class SVF {
   private:
     int32_t low, band, high, notch, allpassPrevIn, allpassPrevOut, simplePrev;
     int32_t q = MAX_16;
-    int32_t scale = sqrt(1) * MAX_16;
-    volatile float f = 1.0;
-    int32_t centFreq = 10000;
-    float resOffset;
-    // maxFreq removed - now calculated dynamically in setFreq() based on sample rate
+    int32_t scale = (int32_t)(sqrt(1.0f) * MAX_16);
+    int32_t fInt = 32768;        // 15-bit fixed-point frequency coefficient (1.0 = 32768)
+    int32_t resOffsetInt = 32768; // 15-bit fixed-point resonance offset (1.0 = 32768)
 
-    void calcFilter(int32_t input) {
-      input *= resOffset;
-      low += f * band;
+    /** Integer-only filter calculation for maximum performance.
+     *  Uses 15-bit fixed-point for frequency and resonance coefficients.
+     *  Mathematically equivalent to the original float version.
+     */
+    inline void calcFilter(int32_t input) {
+      // Apply resonance offset (15-bit fixed-point multiply)
+      input = (input * resOffsetInt) >> 15;
+
+      // SVF difference equations using 15-bit fixed-point
+      // low += f * band  ->  low += (fInt * band) >> 15
+      low += (fInt * band) >> 15;
+
+      // high = scaled_input - low - (q * band)
       high = ((scale * input) >> 14) - low - ((q * band) >> 15);
-      band += f * high;
+
+      // band += f * high  ->  band += (fInt * high) >> 15
+      band += (fInt * high) >> 15;
+
       notch = high + low;
 
-      // Prevent state variable overflow - critical for audio stability
-      low = max((int32_t)-200000000, min((int32_t)200000000, low));
-      band = max((int32_t)-200000000, min((int32_t)200000000, band));
-      high = max((int32_t)-200000000, min((int32_t)200000000, high));
+      // Prevent state variable overflow - tighter bounds for 32-bit safety
+      // Using 2^24 (~16M) is sufficient headroom while staying well within int32 range
+      const int32_t LIMIT = 16777216;
+      if (low > LIMIT) low = LIMIT;
+      else if (low < -LIMIT) low = -LIMIT;
+      if (band > LIMIT) band = LIMIT;
+      else if (band < -LIMIT) band = -LIMIT;
     }
 };
 

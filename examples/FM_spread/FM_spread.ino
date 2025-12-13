@@ -39,13 +39,13 @@ void loop() {
     if (random(4) == 0) {
       float spreadVal = rand(1000) * 0.00001;
       Serial.print("Detune spread ");Serial.print(spreadVal);
-      #if IS_ESP32() // 8266 can't manage spread as well as phMod
+      #if IS_ESP32() || IS_RP2040() // 8266 can't manage spread as well as phMod
         aOsc1.setSpread(spreadVal); // close phase mod
       #endif
     } else { // chordal, up to one octave above or below
       int i1 = rand(25) - 12;
       int i2 = rand(25) - 12;
-      #if IS_ESP32() // 8266 can't manage spread as well as phMod
+      #if IS_ESP32() || IS_RP2040() // 8266 can't manage spread as well as phMod
         Serial.print("Chord spread ");Serial.print(i1);Serial.print(" ");Serial.println(i2);
         aOsc1.setSpread(i1, i2);
       #endif

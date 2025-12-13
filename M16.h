@@ -19,6 +19,9 @@
 #define IS_ESP32() (defined(ESP32))
 #define IS_ESP32S2() (defined(CONFIG_IDF_TARGET_ESP32S2))
 #define IS_ESP32C3() (defined(CONFIG_IDF_TARGET_ESP32C3))
+#define IS_RP2040() (defined(ARDUINO_ARCH_RP2040))
+// IS_CAPABLE() groups platforms with sufficient CPU/memory for complex DSP (filters, reverb, etc.)
+#define IS_CAPABLE() (IS_ESP32() || IS_RP2040())
 
 // globals
 int SAMPLE_RATE = 44100;
@@ -312,30 +315,76 @@ inline bool isPSRAMAvailable() {
     Serial.println("M16 is running");
   }
   */
+#elif IS_RP2040()
+  // Raspberry Pi Pico / Pico 2 (RP2040/RP2350)
+  // Core 1 dedicated to audio for maximum performance
+  #include <I2S.h>
+
+  // Default I2S pins - BCLK on GPIO 16, WS is implicitly BCLK+1 (GPIO 17), DOUT on GPIO 18
+  static int picoI2sPins[] = {16, 18}; // {BCLK, DOUT}
+
+  // I2S instance
+  I2S i2s(OUTPUT);
+
+  // Flag to signal core 1 to start
+  static volatile bool picoAudioRunning = false;
+
+  void seti2sPins(int bck, int ws, int dout, int din) {
+    picoI2sPins[0] = bck;
+    picoI2sPins[1] = dout;
+    if (ws != bck + 1) {
+      Serial.print("Warning: Pico WS is always BCLK+1 (GPIO ");
+      Serial.print(bck + 1);
+      Serial.print("), ignoring ws=");
+      Serial.println(ws);
+    }
+    Serial.println("i2s pins set for Pico");
+  }
+
+  void audioUpdate(); // forward declaration
+
+  void i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+    leftAudioOuputValue = leftSample;
+    rightAudioOuputValue = rightSample;
+  }
+
+  // Core 1: Dedicated audio generation - optimized tight loop
+  void __attribute__((weak)) setup1() {
+    while (!picoAudioRunning) {
+      tight_loop_contents();
+    }
+
+    // Tight audio loop - no function call overhead for callback
+    while (true) {
+      audioUpdate();
+      int32_t sample32 = ((int32_t)leftAudioOuputValue << 16) |
+                         ((uint16_t)rightAudioOuputValue);
+      i2s.write(sample32);  // Blocking write paced by I2S hardware
+    }
+  }
+
+  void __attribute__((weak)) loop1() {
+    // Empty - audio loop runs in setup1()
+  }
+
+  void audioStart() {
+    // Configure I2S with optimized buffer settings
+    i2s.setBCLK(picoI2sPins[0]);
+    i2s.setDOUT(picoI2sPins[1]);
+    i2s.setBitsPerSample(32);
+    i2s.setBuffers(8, 64);  // Larger buffers for complex DSP headroom (8*64=512 samples ~11.6ms)
+
+    if (!i2s.begin(SAMPLE_RATE)) {
+      Serial.println("I2S init failed!");
+      while(1);
+    }
+
+    // Signal core 1 to start
+    picoAudioRunning = true;
+
+    Serial.println("M16 is running (Pico)");
+  }
 #endif
-
-// TBC
-// if (BOARD_NAME == "RASPBERRY_PI_PICO") {
-//   Serial.println("Is a Pi Pico");
-// #include <I2S.h>
-// // GPIO pin numbers
-// #define pBCLK 20
-// #define pWS (pBCLK+1)
-// #define pDOUT 22
-// // Create the I2S port using a PIO state machine
-// I2S i2s(OUTPUT, pBCLK, pDOUT);
-
-// void audioStart() {
-//   i2s.setBitsPerSample(16);
-// }
-
-// bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
-//   i2s.write(leftSample);
-//   i2s.write(rightSample);
-// }
-// } else {
-//   Serial.println("unknown");
-// }
 
 
  /** change the default samplerate 
@@ -362,6 +411,11 @@ inline bool isPSRAMAvailable() {
         }
         i2s_channel_enable(tx_handle);
       }
+    #elif IS_RP2040()
+      // Pico: sample rate must be set before audioStart()
+      Serial.print("Sample rate set to ");
+      Serial.print(newRate);
+      Serial.println(" Hz (call before audioStart)");
     #endif
   }
 
