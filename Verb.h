@@ -63,6 +63,12 @@ public:
   void init() {
     if (initialized) return;
 
+    #if IS_ESP8266()
+      Serial.println("ERROR: Verb reverb requires too much RAM for ESP8266.");
+      Serial.println("Use FX.reverb() with smaller reverbSize instead.");
+      return;
+    #endif
+
     // Freeverb-style delay times (in samples at 44100Hz)
     // Original Freeverb comb delays: 1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617
     combDelayBase[0] = 1116;  // ~25ms

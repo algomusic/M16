@@ -33,7 +33,11 @@ const float MAX_16_INV = 0.00003052;
 // TABLE_SIZE can be overridden by defining it in your sketch BEFORE including M16.h
 // Example: #define TABLE_SIZE 2048
 #ifndef TABLE_SIZE
-  #define TABLE_SIZE 4096 //4096; //8192; // 2048 // 4096 // 8192 // 16384 //32768 // 65536
+  #if IS_ESP8266()
+    #define TABLE_SIZE 1024  // Smaller default for ESP8266 due to limited RAM (~50KB heap)
+  #else
+    #define TABLE_SIZE 4096  // 2048 // 4096 // 8192 // 16384 // 32768 // 65536
+  #endif
 #endif
 #ifndef HALF_TABLE_SIZE
   #define HALF_TABLE_SIZE (TABLE_SIZE / 2)

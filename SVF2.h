@@ -18,6 +18,11 @@
 #ifndef SVF2_H_
 #define SVF2_H_
 
+// ESP8266 warning: SVF2 uses 64-bit math which is slow without hardware support
+#if IS_ESP8266()
+  #warning "SVF2.h uses 64-bit math and will be slow on ESP8266. Consider using SVF.h instead."
+#endif
+
 class SVF2 {
 
 public:

@@ -67,11 +67,7 @@ void loop() {
 void audioUpdate() {
   int32_t mix = 0;
   for (int i=0; i<poly; i++) {
-    #if IS_ESP8266()
-      mix += filter[i].simpleLPF(filter[i].simpleLPF((osc[i].next() * env[i].getValue())>>16));
-    #else // ESP32 and RP2040
-      mix += filter[i].nextLPF((osc[i].next() * env[i].getValue())>>16);
-    #endif
+    mix += filter[i].nextLPF((osc[i].next() * env[i].getValue())>>16);
     mix = (mix * 717) >> 10;  // 717/1024 ≈ 0.7, integer multiply
   }
   // stereo
