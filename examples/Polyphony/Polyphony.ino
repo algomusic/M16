@@ -6,7 +6,7 @@
 #include "FX.h"
 
 int16_t * wavetable; // empty array pointer
-const int poly = 2; // change polyphony as desired, each MCU type will handle particular amounts
+const int poly = 4; // change polyphony as desired, each MCU type will handle particular amounts
 Osc osc[poly]; // an array of oscillators
 Env env[poly];
 SVF filter[poly];
@@ -37,7 +37,7 @@ void setup() {
     effect1.setReverbLength(0.6); // 0-1 feedback level
     effect1.setReverbMix(0.7); // 0-1 balance between dry and wet signals
   #endif
-  // seti2sPins(7,8,9,41);
+  seti2sPins(7,8,9,41);
   audioStart();
 }
 
@@ -80,5 +80,5 @@ void audioUpdate() {
   #if IS_ESP32() //8266 can't manage reverb as well
     effect1.reverbStereo(mix, mix, leftVal, rightVal);
   #endif
-  i2s_write_samples(leftVal, rightVal);
+  i2s_write_samples(clip16(leftVal), clip16(rightVal));
 }
