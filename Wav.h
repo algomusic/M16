@@ -45,8 +45,17 @@ public:
    */
   bool initSD(SdFs& sdObject, uint8_t csPin, uint8_t sckPin, uint8_t misoPin, uint8_t mosiPin, uint8_t spiSpeed = 16) {
     sd = &sdObject;
-    // Initialize SPI with custom pins
-    SPI.begin(sckPin, misoPin, mosiPin, csPin);
+    // Initialize SPI with custom pins (platform-specific)
+    #if defined(ARDUINO_ARCH_RP2040)
+      SPI.setRX(misoPin);
+      SPI.setTX(mosiPin);
+      SPI.setSCK(sckPin);
+      SPI.begin();
+    #elif defined(ESP32)
+      SPI.begin(sckPin, misoPin, mosiPin, csPin);
+    #else
+      SPI.begin();  // Default for other platforms
+    #endif
     // Initialize SdFat with SPI configuration
     if (!sd->begin(SdSpiConfig(csPin, DEDICATED_SPI, SD_SCK_MHZ(spiSpeed)))) {
       Serial.println("Wav: SD Card mount failed!");
