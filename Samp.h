@@ -156,16 +156,15 @@ public:
     startpos_fractional = 0;
     endpos_fractional = (uint64_t)buffer_size << 32;
     phase_increment_fractional = ((uint64_t)buffer_sample_rate << 16) / SAMPLE_RATE;
-
-    Serial.println("frames: " + String(buffer_size) + " chans: " + String(num_channels) +
-      " samples: " + String(buffer_size * num_channels) +
-      " SR: " + String(buffer_sample_rate) + " Hz, phase_inc: " + String(phase_increment_fractional));
   }
 
   /** Set start position in frames
    * @param startpos Offset position in frames
    */
-  inline void setStart(unsigned int startpos) {
+  inline void setStart(unsigned long startpos) {
+    if (zeroCrossing && buffer) {
+      startpos = findNearestZeroCrossing(startpos);
+    }
     startpos_fractional = (uint64_t)startpos << 32;
   }
 
@@ -179,7 +178,6 @@ public:
     if (segmentFrames > 0 && sharedEnvInitialized && sharedEnvSize > 0) {
       uint64_t numerator = (uint64_t)sharedEnvSize * phase_increment_fractional;
       envPhaseIncrement = (uint32_t)((numerator + segmentFrames - 1) / segmentFrames);
-      envPhaseIncrement += (envPhaseIncrement + 15) >> 4;
       envelopeOn = true;
     } else {
       envPhaseIncrement = 65536;
@@ -211,8 +209,25 @@ public:
   /** Set end position in frames
    * @param end Position in frames
    */
-  inline void setEnd(unsigned int end) {
+  inline void setEnd(unsigned long end) {
+    if (zeroCrossing && buffer) {
+      end = findNearestZeroCrossing(end);
+    }
     endpos_fractional = (uint64_t)end << 32;
+  }
+
+  /** Get actual start position (after zero-crossing adjustment)
+   * @return Start position in frames
+   */
+  inline unsigned long getStart() {
+    return startpos_fractional >> 32;
+  }
+
+  /** Get actual end position (after zero-crossing adjustment)
+   * @return End position in frames
+   */
+  inline unsigned long getEnd() {
+    return endpos_fractional >> 32;
   }
 
   /** Enable looping */
@@ -363,7 +378,7 @@ public:
 
   /** @return true if sample is currently playing */
   inline boolean isPlaying() {
-    return phase_fractional < endpos_fractional;
+    return playing && (phase_fractional < endpos_fractional);
   }
 
   /** Set base pitch (pitch at normal playback speed)
@@ -519,6 +534,57 @@ public:
     return closestBPM;
   }
 
+  /** Enable or disable zero-crossing detection for start/end positions
+   * @param enable true to snap to zero crossings (default), false for exact positions
+   */
+  inline void setZeroCrossing(bool enable) {
+    zeroCrossing = enable;
+  }
+
+  /** @return Current zero-crossing setting */
+  inline bool getZeroCrossing() {
+    return zeroCrossing;
+  }
+
+  /** Find the next zero crossing forward from a given position
+   * A zero crossing is where adjacent samples change from negative to non-negative.
+   * Forward-only search ensures consistent grain boundaries for granular synthesis.
+   * @param pos Position in frames to search from
+   * @param maxSearch Maximum frames to search forward (default 256)
+   * @return Frame index of zero crossing, or original pos if none found within range
+   */
+  unsigned long findNearestZeroCrossing(unsigned long pos, unsigned long maxSearch = 256) {
+    if (!buffer || buffer_size == 0) return pos;
+    if (pos >= buffer_size - 1) return pos;  // Need at least 2 samples to check crossing
+
+    // Calculate safe search limit: need pos+i+1 < buffer_size, so i < buffer_size-pos-1
+    unsigned long maxIterations = buffer_size - pos - 1;
+    unsigned long searchLimit = min(maxSearch, maxIterations);
+
+    // Search forward only for consistent grain boundaries
+    for (unsigned long i = 0; i < searchLimit; i++) {
+      int16_t curr, next;
+      if (num_channels == 2) {
+        // Use left channel for stereo
+        curr = buffer[(pos + i) * 2];
+        next = buffer[(pos + i + 1) * 2];
+      } else {
+        curr = buffer[pos + i];
+        next = buffer[pos + i + 1];
+      }
+      // Found silence (2 consecutive zeros) - good boundary point
+      if (curr == 0 && next == 0) {
+        return pos + i;
+      }
+      // Zero crossing: negative to non-negative (ensures consistent wave direction)
+      if (curr < 0 && next >= 0) {
+        return pos + i + 1;  // Return the non-negative sample position
+      }
+    }
+
+    return pos;  // No crossing found, return original position
+  }
+
 private:
   /** Increment playback phase */
   inline void incrementPhase() {
@@ -541,6 +607,7 @@ private:
   volatile uint32_t envPhase = 0;
   volatile uint32_t envPhaseIncrement = 0;
   volatile bool envComplete = false;
+  bool zeroCrossing = true;  // Auto-adjust start/end to nearest zero crossing
 };
 
 // Static member definitions
