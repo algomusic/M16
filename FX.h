@@ -491,7 +491,15 @@ class FX {
     void setReverbLength(float rLen) {
       rLen = max(0.0f, min(1.0f, rLen));
       reverbFeedbackLevel = pow(rLen, 0.2f);
-      initReverb(reverbSize);
+      // Pre-calculate integer coefficient for optimized path
+      reverbFeedbackInt = (int16_t)(reverbFeedbackLevel * 1024.0f);
+      // Update Del objects if using legacy path
+      if (reverbInitiated && !useOptimizedReverb) {
+        delay1.setLevel(reverbFeedbackLevel);
+        delay2.setLevel(reverbFeedbackLevel);
+        delay3.setLevel(reverbFeedbackLevel);
+        delay4.setLevel(reverbFeedbackLevel);
+      }
       allpass1.setFeedbackLevel(reverbFeedbackLevel * 0.95);
       allpass2.setFeedbackLevel(reverbFeedbackLevel * 0.9);
     }
@@ -513,7 +521,18 @@ class FX {
     /** Return the reverb amount, 0.0 - 1.0 */
     float getReverbMix() {
       return reverbMix * 0.0009765625f;
-    } 
+    }
+
+    /** Set dampening (high frequency absorption)
+     *  @param damp 0.0-1.0, higher = more HF dampening (darker sound)
+     */
+    void setDampening(float damp) {
+      damp = max(0.0f, min(1.0f, damp));
+      // Pre-calculate damping coefficient (0.7-1.0 range)
+      // Higher damp value = lower coefficient = more HF cut
+      int16_t dampInt = (int16_t)(damp * 1024.0f);
+      reverbDampCoeff = 717 + (((1024 - dampInt) * 307) >> 10);
+    }
 
     /** Set the reverb memory size
     * @newSize A multiple of the default, >= 1.0
@@ -673,6 +692,9 @@ class FX {
     int reverbMix = 40; // 0 to 1024
     float reverbSize = 4.0; // >= 1, memory allocated to delay lengths
     int16_t reverbFeedbackInt = 950; // 0-1024, integer version of feedback level
+    int16_t reverbDampCoeff = 904; // Pre-calculated dampening coefficient (0.3 default)
+    int32_t revFilterStore1 = 0, revFilterStore2 = 0, revFilterStore3 = 0, revFilterStore4 = 0;
+    int32_t revInputHPF_L = 0, revInputHPF_R = 0;  // Input highpass filter state
 
     // Optimized reverb delay buffers - power-of-2 sizes for fast modulo via bitwise AND
     // Buffer sizes chosen to accommodate delay times up to reverbSize=16
@@ -768,7 +790,7 @@ class FX {
     */
     void initReverb(float size) {
       reverbSize = size;
-      // Convert feedback level to integer (0-1024)
+      // Always sync integer coefficient with float level
       reverbFeedbackInt = (int16_t)(reverbFeedbackLevel * 1024.0f);
 
       // Calculate delay times in samples (1/8 of Pd values)
@@ -811,33 +833,63 @@ class FX {
         // Fast path: inlined circular buffer operations with bitwise AND wrap
         uint16_t wp = revWritePos;
 
+        // Input highpass filter to prevent low frequencies entering feedback loop
+        // Simple one-pole HPF: y[n] = x[n] - lpf[n], where lpf[n] = lpf[n-1] + (x[n] - lpf[n-1]) * coeff
+        // coeff = 64/1024 ≈ 0.0625 gives ~40Hz cutoff at 44.1kHz
+        revInputHPF_L += (audioInLeft - revInputHPF_L + 8) >> 4;
+        revInputHPF_R += (audioInRight - revInputHPF_R + 8) >> 4;
+        int32_t inL = audioInLeft - revInputHPF_L;
+        int32_t inR = audioInRight - revInputHPF_R;
+
         // Read from delay lines (no function call overhead, no filtering, no level scaling)
         int32_t d1 = revBuf1[(wp - revDelay1) & REV_BUF_MASK];
         int32_t d2 = revBuf2[(wp - revDelay2) & REV_BUF_MASK];
         int32_t d3 = revBuf3[(wp - revDelay3) & REV_BUF_MASK];
         int32_t d4 = revBuf4[(wp - revDelay4) & REV_BUF_MASK];
 
-        // Apply feedback level
-        d1 = (d1 * reverbFeedbackInt) >> 10;
-        d2 = (d2 * reverbFeedbackInt) >> 10;
-        d3 = (d3 * reverbFeedbackInt) >> 10;
-        d4 = (d4 * reverbFeedbackInt) >> 10;
+        // Apply feedback level (with rounding to reduce quantization noise)
+        d1 = (d1 * reverbFeedbackInt + 512) >> 10;
+        d2 = (d2 * reverbFeedbackInt + 512) >> 10;
+        d3 = (d3 * reverbFeedbackInt + 512) >> 10;
+        d4 = (d4 * reverbFeedbackInt + 512) >> 10;
+
+        // Apply dampening lowpass filter (with rounding)
+        revFilterStore1 += ((d1 - revFilterStore1) * reverbDampCoeff + 512) >> 10;
+        revFilterStore2 += ((d2 - revFilterStore2) * reverbDampCoeff + 512) >> 10;
+        revFilterStore3 += ((d3 - revFilterStore3) * reverbDampCoeff + 512) >> 10;
+        revFilterStore4 += ((d4 - revFilterStore4) * reverbDampCoeff + 512) >> 10;
+
+        // Use filtered values directly (dampening already reduces HF, input HPF handles LF)
+        d1 = revFilterStore1;
+        d2 = revFilterStore2;
+        d3 = revFilterStore3;
+        d4 = revFilterStore4;
 
         // Mixing matrix (Hadamard-style diffusion)
-        revP1 = audioInLeft + d1;
-        revP2 = audioInRight + d2;
+        revP1 = inL + d1;
+        revP2 = inR + d2;
         int32_t p3 = revP1 + revP2;
         int32_t m3 = revP1 - revP2;
         int32_t p4 = d3 + d4;
         int32_t m4 = d3 - d4;
 
-        // Write to delay lines (with saturation prevention)
-        int32_t w1 = (p3 + p4) >> 1;
-        int32_t w2 = (m3 + m4) >> 1;
-        int32_t w3 = (p3 - p4) >> 1;
-        int32_t w4 = (m3 - m4) >> 1;
+        // Write to delay lines (with rounding for cleaner output)
+        int32_t w1 = (p3 + p4 + 1) >> 1;
+        int32_t w2 = (m3 + m4 + 1) >> 1;
+        int32_t w3 = (p3 - p4 + 1) >> 1;
+        int32_t w4 = (m3 - m4 + 1) >> 1;
 
-        // Soft clip to prevent overflow accumulation
+        // Soft limiting before hard clip for smoother saturation
+        if (w1 > 24576) w1 = 24576 + ((w1 - 24576) >> 2);
+        else if (w1 < -24576) w1 = -24576 + ((w1 + 24576) >> 2);
+        if (w2 > 24576) w2 = 24576 + ((w2 - 24576) >> 2);
+        else if (w2 < -24576) w2 = -24576 + ((w2 + 24576) >> 2);
+        if (w3 > 24576) w3 = 24576 + ((w3 - 24576) >> 2);
+        else if (w3 < -24576) w3 = -24576 + ((w3 + 24576) >> 2);
+        if (w4 > 24576) w4 = 24576 + ((w4 - 24576) >> 2);
+        else if (w4 < -24576) w4 = -24576 + ((w4 + 24576) >> 2);
+
+        // Final clamp to 16-bit range
         revBuf1[wp] = (w1 > MAX_16) ? MAX_16 : ((w1 < MIN_16) ? MIN_16 : w1);
         revBuf2[wp] = (w2 > MAX_16) ? MAX_16 : ((w2 < MIN_16) ? MIN_16 : w2);
         revBuf3[wp] = (w3 > MAX_16) ? MAX_16 : ((w3 < MIN_16) ? MIN_16 : w3);
