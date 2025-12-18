@@ -23,6 +23,70 @@
 // IS_CAPABLE() groups platforms with sufficient CPU/memory for complex DSP (filters, reverb, etc.)
 #define IS_CAPABLE() (IS_ESP32() || IS_RP2040())
 
+
+/* Thread-safety helpers for dual-core ESP32
+* On ESP32, audioUpdate() runs on BOTH cores simultaneously. Any shared state
+* modified in audioUpdate() needs protection to prevent race conditions.
+* Only necessary when sample accurate triggering of a new audio event (note) 
+* is required from within audioUpdate.
+*
+* Use M16_ATOMIC_GUARD for non-blocking protection of critical sections:
+*
+*   #include <atomic>
+*   std::atomic<bool> myLock{false};
+*
+* Pseudo-structure:
+*  void audioUpdate() {
+*     // Unguarded: Both cores do DSP
+*     int32_t mix = computeAllVoices();
+*
+*    // Guarded: Only one core advances sequencer
+*     M16_ATOMIC_GUARD(seqLock, {
+*        sharedCounter++;
+*        triggerNextGrain();
+*     });
+*
+*     // Unguarded: Both cores write samples
+*     i2s_write_samples(mix, mix);
+* }
+*
+* Note: The losing core SKIPS the guarded code (doesn't wait). Use this for
+* operations that should only happen once per audio frame, like triggering
+* grains or advancing sequencer positions.
+*/
+
+#if IS_ESP32() || IS_RP2040()
+  #include <atomic>
+
+  // Non-blocking atomic guard - executes code only if lock is acquired
+  // If another core holds the lock, this core skips the code block
+  #define M16_ATOMIC_GUARD(lock, code) \
+    do { \
+      bool _m16_expected = false; \
+      if ((lock).compare_exchange_strong(_m16_expected, true, std::memory_order_acquire)) { \
+        code; \
+        (lock).store(false, std::memory_order_release); \
+      } \
+    } while(0)
+
+  // Blocking atomic guard - spins until lock is acquired (use sparingly!)
+  // WARNING: Can cause audio glitches if held too long
+  #define M16_ATOMIC_GUARD_BLOCKING(lock, code) \
+    do { \
+      bool _m16_expected = false; \
+      while (!(lock).compare_exchange_weak(_m16_expected, true, std::memory_order_acquire)) { \
+        _m16_expected = false; \
+      } \
+      code; \
+      (lock).store(false, std::memory_order_release); \
+    } while(0)
+
+#else
+  // Single-core platforms (ESP8266) - no locking needed
+  #define M16_ATOMIC_GUARD(lock, code) do { code; } while(0)
+  #define M16_ATOMIC_GUARD_BLOCKING(lock, code) do { code; } while(0)
+#endif
+
 // globals
 int SAMPLE_RATE = 44100;
 float SAMPLE_RATE_INV = 1.0f / SAMPLE_RATE;
@@ -213,11 +277,11 @@ inline bool isPSRAMAvailable() {
       i2s_channel_enable(rx_handle);
 
       // Dual-core audio tasks with INCREASED stack size for complex DSP
-      // Stack increased from 2048 to 8192 bytes to prevent overflow
+      // Thread-safety is handled via spinlocks in Samp class for 64-bit phase operations
       xTaskCreatePinnedToCore(
           audioCallback,
           "FillAudioBuffer0",
-          8192,  // Increased from 2048
+          8192,
           NULL,
           configMAX_PRIORITIES - 1,
           &audioCallback1Handle,
@@ -226,7 +290,7 @@ inline bool isPSRAMAvailable() {
       xTaskCreatePinnedToCore(
           audioCallback,
           "FillAudioBuffer1",
-          8192,  // Increased from 2048
+          8192,
           NULL,
           2,
           &audioCallback2Handle,
