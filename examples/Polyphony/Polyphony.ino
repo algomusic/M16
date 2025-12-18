@@ -37,7 +37,7 @@ void setup() {
     effect1.setReverbLength(0.6); // 0-1 feedback level
     effect1.setReverbMix(0.7); // 0-1 balance between dry and wet signals
   #endif
-  seti2sPins(7,8,9,41);
+  // seti2sPins(7,8,9,41);
   audioStart();
 }
 
