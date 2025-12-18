@@ -15,6 +15,15 @@
 #ifndef SAMP_H_
 #define SAMP_H_
 
+// Thread-safety note: On ESP32 dual-core, ensure audioUpdate() is called
+// by only one core at a time (use atomic flag). The per-instance locks below
+// are disabled because portENTER_CRITICAL disables interrupts and can cause
+// I2S DMA underruns and watchdog timeouts.
+#define SAMP_LOCK_INIT()
+#define SAMP_LOCK()
+#define SAMP_UNLOCK()
+#define SAMP_LOCK_DECLARE()
+
 class Samp {
 
 public:
@@ -168,8 +177,9 @@ public:
     startpos_fractional = (uint64_t)startpos << 32;
   }
 
-  /** Begin playback from start position */
+  /** Begin playback from start position (or end if reverse) */
   inline void start() {
+    SAMP_LOCK();
     envPhase = 0;
     envComplete = false;
 
@@ -184,13 +194,16 @@ public:
       envelopeOn = false;
     }
 
-    phase_fractional = startpos_fractional;
-
-    #if defined(ESP32)
-      __sync_synchronize();
-    #endif
+    // Start at end position for reverse playback, start position for forward
+    if (reverse) {
+      // Position just before end (end - 1 frame) so first sample is valid
+      phase_fractional = endpos_fractional - ((uint64_t)1 << 32);
+    } else {
+      phase_fractional = startpos_fractional;
+    }
 
     playing = true;
+    SAMP_UNLOCK();
   }
 
   /** Halt playback */
@@ -240,6 +253,18 @@ public:
     looping = false;
   }
 
+  /** Enable reverse playback (plays from end to start)
+   * @param rev true for reverse, false for forward (default)
+   */
+  inline void setReverse(bool rev) {
+    reverse = rev;
+  }
+
+  /** @return true if reverse playback is enabled */
+  inline bool getReverse() {
+    return reverse;
+  }
+
   /** Get next mono sample
    * @return Audio sample
    */
@@ -248,19 +273,40 @@ public:
     if (!buffer || buffer_size == 0) return 0;
     if (num_channels != 1) return 0;
 
-    if (phase_fractional >= endpos_fractional) {
-      if (looping) {
-        phase_fractional = startpos_fractional + (phase_fractional - endpos_fractional);
-        envPhase = 0;
-        envComplete = false;
-      } else {
-        playing = false;
-        return 0;
+    SAMP_LOCK();
+
+    // Boundary check depends on playback direction
+    if (reverse) {
+      if (phase_fractional <= startpos_fractional) {
+        if (looping) {
+          phase_fractional = endpos_fractional - ((uint64_t)1 << 32);
+          envPhase = 0;
+          envComplete = false;
+        } else {
+          playing = false;
+          SAMP_UNLOCK();
+          return 0;
+        }
+      }
+    } else {
+      if (phase_fractional >= endpos_fractional) {
+        if (looping) {
+          phase_fractional = startpos_fractional + (phase_fractional - endpos_fractional);
+          envPhase = 0;
+          envComplete = false;
+        } else {
+          playing = false;
+          SAMP_UNLOCK();
+          return 0;
+        }
       }
     }
 
     uint32_t sampleIndex = phase_fractional >> 32;
-    if (sampleIndex >= buffer_size || sampleIndex > 0x7FFFFFFF) return 0;
+    if (sampleIndex >= buffer_size) {
+      SAMP_UNLOCK();
+      return 0;
+    }
     int16_t out = buffer[sampleIndex];
 
     // Apply envelope
@@ -284,11 +330,107 @@ public:
       }
     }
 
-    incrementPhase();
+    if (reverse) {
+      decrementPhase();
+    } else {
+      incrementPhase();
+    }
+
+    SAMP_UNLOCK();
     return out;
   }
 
+  /** Get next stereo sample pair (thread-safe, recommended for dual-core ESP32)
+   * @param outLeft Reference to receive left channel sample
+   * @param outRight Reference to receive right channel sample
+   */
+  inline void nextStereo(int16_t& outLeft, int16_t& outRight) {
+    if (!playing || !buffer || buffer_size == 0 || num_channels != 2) {
+      outLeft = 0;
+      outRight = 0;
+      return;
+    }
+
+    SAMP_LOCK();
+
+    // Boundary check depends on playback direction
+    if (reverse) {
+      if (phase_fractional <= startpos_fractional) {
+        if (looping) {
+          phase_fractional = endpos_fractional - ((uint64_t)1 << 32);
+          envPhase = 0;
+          envComplete = false;
+        } else {
+          playing = false;
+          SAMP_UNLOCK();
+          outLeft = 0;
+          outRight = 0;
+          return;
+        }
+      }
+    } else {
+      if (phase_fractional >= endpos_fractional) {
+        if (looping) {
+          phase_fractional = startpos_fractional + (phase_fractional - endpos_fractional);
+          envPhase = 0;
+          envComplete = false;
+        } else {
+          playing = false;
+          SAMP_UNLOCK();
+          outLeft = 0;
+          outRight = 0;
+          return;
+        }
+      }
+    }
+
+    uint32_t sampleIndex = phase_fractional >> 32;
+    if (sampleIndex >= buffer_size) {
+      SAMP_UNLOCK();
+      outLeft = 0;
+      outRight = 0;
+      return;
+    }
+
+    outLeft = buffer[sampleIndex * 2];
+    outRight = buffer[sampleIndex * 2 + 1];
+
+    // Apply envelope
+    if (envelopeOn && sharedEnvTable && sharedEnvInitialized) {
+      if (envComplete) {
+        outLeft = 0;
+        outRight = 0;
+      } else {
+        uint32_t envIndex = envPhase >> 16;
+        if (envIndex < (uint32_t)sharedEnvSize) {
+          uint8_t envVal = sharedEnvTable[envIndex];
+          outLeft = (int16_t)(((int32_t)outLeft * envVal) >> 8);
+          outRight = (int16_t)(((int32_t)outRight * envVal) >> 8);
+          uint32_t newEnvPhase = envPhase + envPhaseIncrement;
+          if (newEnvPhase >= envPhase) {
+            envPhase = newEnvPhase;
+          } else {
+            envComplete = true;
+          }
+        } else {
+          envComplete = true;
+          outLeft = 0;
+          outRight = 0;
+        }
+      }
+    }
+
+    if (reverse) {
+      decrementPhase();
+    } else {
+      incrementPhase();
+    }
+
+    SAMP_UNLOCK();
+  }
+
   /** Get next left channel sample (call before nextRight)
+   * WARNING: Not thread-safe as a pair on dual-core ESP32. Use nextStereo() instead.
    * @return Left channel sample
    */
   inline int16_t nextLeft() {
@@ -296,19 +438,40 @@ public:
     if (!buffer || buffer_size == 0) return 0;
     if (num_channels != 2) return 0;
 
-    if (phase_fractional >= endpos_fractional) {
-      if (looping) {
-        phase_fractional = startpos_fractional + (phase_fractional - endpos_fractional);
-        envPhase = 0;
-        envComplete = false;
-      } else {
-        playing = false;
-        return 0;
+    SAMP_LOCK();
+
+    // Boundary check depends on playback direction
+    if (reverse) {
+      if (phase_fractional <= startpos_fractional) {
+        if (looping) {
+          phase_fractional = endpos_fractional - ((uint64_t)1 << 32);
+          envPhase = 0;
+          envComplete = false;
+        } else {
+          playing = false;
+          SAMP_UNLOCK();
+          return 0;
+        }
+      }
+    } else {
+      if (phase_fractional >= endpos_fractional) {
+        if (looping) {
+          phase_fractional = startpos_fractional + (phase_fractional - endpos_fractional);
+          envPhase = 0;
+          envComplete = false;
+        } else {
+          playing = false;
+          SAMP_UNLOCK();
+          return 0;
+        }
       }
     }
 
     uint32_t sampleIndex = phase_fractional >> 32;
-    if (sampleIndex >= buffer_size || sampleIndex > 0x3FFFFFFF) return 0;
+    if (sampleIndex >= buffer_size) {
+      SAMP_UNLOCK();
+      return 0;
+    }
     int16_t out = buffer[sampleIndex * 2];
 
     // Apply envelope (phase advanced in nextRight)
@@ -325,10 +488,13 @@ public:
         }
       }
     }
+
+    SAMP_UNLOCK();
     return out;
   }
 
   /** Get next right channel sample (call after nextLeft)
+   * WARNING: Not thread-safe as a pair on dual-core ESP32. Use nextStereo() instead.
    * @return Right channel sample
    */
   inline int16_t nextRight() {
@@ -336,19 +502,40 @@ public:
     if (!buffer || buffer_size == 0) return 0;
     if (num_channels != 2) return 0;
 
-    if (phase_fractional >= endpos_fractional) {
-      if (looping) {
-        phase_fractional = startpos_fractional + (phase_fractional - endpos_fractional);
-        envPhase = 0;
-        envComplete = false;
-      } else {
-        playing = false;
-        return 0;
+    SAMP_LOCK();
+
+    // Boundary check depends on playback direction
+    if (reverse) {
+      if (phase_fractional <= startpos_fractional) {
+        if (looping) {
+          phase_fractional = endpos_fractional - ((uint64_t)1 << 32);
+          envPhase = 0;
+          envComplete = false;
+        } else {
+          playing = false;
+          SAMP_UNLOCK();
+          return 0;
+        }
+      }
+    } else {
+      if (phase_fractional >= endpos_fractional) {
+        if (looping) {
+          phase_fractional = startpos_fractional + (phase_fractional - endpos_fractional);
+          envPhase = 0;
+          envComplete = false;
+        } else {
+          playing = false;
+          SAMP_UNLOCK();
+          return 0;
+        }
       }
     }
 
     uint32_t sampleIndex = phase_fractional >> 32;
-    if (sampleIndex >= buffer_size || sampleIndex > 0x3FFFFFFF) return 0;
+    if (sampleIndex >= buffer_size) {
+      SAMP_UNLOCK();
+      return 0;
+    }
     int16_t out = buffer[sampleIndex * 2 + 1];
 
     // Apply envelope
@@ -372,13 +559,28 @@ public:
       }
     }
 
-    incrementPhase();
+    if (reverse) {
+      decrementPhase();
+    } else {
+      incrementPhase();
+    }
+
+    SAMP_UNLOCK();
     return out;
   }
 
   /** @return true if sample is currently playing */
   inline boolean isPlaying() {
-    return playing && (phase_fractional < endpos_fractional);
+    if (!playing) return false;
+    SAMP_LOCK();
+    bool result;
+    if (reverse) {
+      result = (phase_fractional > startpos_fractional);
+    } else {
+      result = (phase_fractional < endpos_fractional);
+    }
+    SAMP_UNLOCK();
+    return result;
   }
 
   /** Set base pitch (pitch at normal playback speed)
@@ -586,9 +788,22 @@ public:
   }
 
 private:
-  /** Increment playback phase */
+  // Per-instance spinlock for thread-safe 64-bit phase access on ESP32
+  SAMP_LOCK_DECLARE();
+
+  /** Increment playback phase (forward) */
   inline void incrementPhase() {
     phase_fractional += (uint64_t)phase_increment_fractional << 16;
+  }
+
+  /** Decrement playback phase (reverse) */
+  inline void decrementPhase() {
+    uint64_t decrement = (uint64_t)phase_increment_fractional << 16;
+    if (phase_fractional >= decrement) {
+      phase_fractional -= decrement;
+    } else {
+      phase_fractional = 0;  // Prevent underflow
+    }
   }
 
   volatile uint64_t phase_fractional = 0;
@@ -596,6 +811,7 @@ private:
   const int16_t * buffer = nullptr;
   bool playing = false;
   bool looping = false;
+  bool reverse = false;  // Reverse playback direction
   uint64_t startpos_fractional = 0;
   uint64_t endpos_fractional = 0;
   uint32_t buffer_size = 0;
