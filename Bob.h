@@ -44,64 +44,56 @@ public:
     float z0_0 = z0_[0], z0_1 = z0_[1], z0_2 = z0_[2], z0_3 = z0_[3];
     float z1_0 = z1_[0], z1_1 = z1_[1], z1_2 = z1_[2], z1_3 = z1_[3];
 
-    const float interpStep = 0.5f;
-    float interp = 0.0f;
-    float total = 0.0f;
-
     const float pbg_in = pbg_ * input;
-    const float KQ = K_ * Qadjust_;
-    const float a = 1.0f / 1.3f;
-    const float b = 0.3f / 1.3f;
+    float ft3_sum;
 
-    // First sub-sample
+    // First sub-sample (interp = 0, so inMix = input)
     {
-      float inMix = interp * oldinput_ + (1.0f - interp) * input;
-      float u = inMix - (z1_3 - pbg_in) * KQ;
+      float u = input - (z1_3 - pbg_in) * KQ_;
       u = softTanh(u);
 
-      float ft0 = u * a + z0_0 * b - z1_0;
+      float ft0 = u * a_ + z0_0 * b_ - z1_0;
       ft0 = ft0 * alpha_ + z1_0;
       z1_0 = ft0; z0_0 = u;
 
-      float ft1 = ft0 * a + z0_1 * b - z1_1;
+      float ft1 = ft0 * a_ + z0_1 * b_ - z1_1;
       ft1 = ft1 * alpha_ + z1_1;
       z1_1 = ft1; z0_1 = ft0;
 
-      float ft2 = ft1 * a + z0_2 * b - z1_2;
+      float ft2 = ft1 * a_ + z0_2 * b_ - z1_2;
       ft2 = ft2 * alpha_ + z1_2;
       z1_2 = ft2; z0_2 = ft1;
 
-      float ft3 = ft2 * a + z0_3 * b - z1_3;
+      float ft3 = ft2 * a_ + z0_3 * b_ - z1_3;
       ft3 = ft3 * alpha_ + z1_3;
       z1_3 = ft3; z0_3 = ft2;
 
-      total += ft3 * interpStep;
-      interp += interpStep;
+      ft3_sum = ft3;
     }
 
-    // Second sub-sample
+    // Second sub-sample (interp = 0.5, so inMix = average of old and new input)
     {
-      float inMix = interp * oldinput_ + (1.0f - interp) * input;
-      float u = inMix - (z1_3 - pbg_in) * KQ;
+      float inMix = (oldinput_ + input) * 0.5f;
+      float u = inMix - (z1_3 - pbg_in) * KQ_;
       u = softTanh(u);
 
-      float ft0 = u * a + z0_0 * b - z1_0;
+      float ft0 = u * a_ + z0_0 * b_ - z1_0;
       ft0 = ft0 * alpha_ + z1_0;
       z1_0 = ft0; z0_0 = u;
 
-      float ft1 = ft0 * a + z0_1 * b - z1_1;
+      float ft1 = ft0 * a_ + z0_1 * b_ - z1_1;
       ft1 = ft1 * alpha_ + z1_1;
       z1_1 = ft1; z0_1 = ft0;
 
-      float ft2 = ft1 * a + z0_2 * b - z1_2;
+      float ft2 = ft1 * a_ + z0_2 * b_ - z1_2;
       ft2 = ft2 * alpha_ + z1_2;
       z1_2 = ft2; z0_2 = ft1;
 
-      float ft3 = ft2 * a + z0_3 * b - z1_3;
+      float ft3 = ft2 * a_ + z0_3 * b_ - z1_3;
       ft3 = ft3 * alpha_ + z1_3;
       z1_3 = ft3; z0_3 = ft2;
 
-      total += ft3 * interpStep;
+      ft3_sum += ft3;
     }
 
     // Write state back
@@ -109,9 +101,8 @@ public:
     z1_[0] = z1_0; z1_[1] = z1_1; z1_[2] = z1_2; z1_[3] = z1_3;
     oldinput_ = input;
 
-    // Output scaling and clipping
-    float outf = total * ampComp;
-    int32_t outi = (int32_t)outf;
+    // Output scaling and clipping (ft3_sum * 0.5 * ampComp)
+    int32_t outi = (int32_t)(ft3_sum * ampCompHalf_);
     if (outi > MAX_16) outi = MAX_16;
     else if (outi < MIN_16) outi = MIN_16;
     return (int16_t)outi;
@@ -171,6 +162,7 @@ private:
   static const uint8_t kInterpolation = 2;
   static const int LUT_SIZE = 1024;
   static constexpr float LUT_RANGE = 4.0f;
+  static constexpr float LUT_SCALE = (LUT_SIZE - 1) / (2.0f * LUT_RANGE);  // Precomputed: 127.875
 
   float tanhLUT_[LUT_SIZE];
   float alpha_;
@@ -183,6 +175,10 @@ private:
   float oldinput_;
   float Fbase_;
   int32_t ampComp = (int32_t)(MAX_16 * 1.4f);
+  float ampCompHalf_ = ampComp * 0.5f;  // Precomputed for output scaling
+  static constexpr float a_ = 1.0f / 1.3f;   // 0.769230769f - filter coefficient
+  static constexpr float b_ = 0.3f / 1.3f;   // 0.230769231f - filter coefficient
+  static constexpr float softKnee_ = 1.5f;   // Soft-knee threshold for tanh saturation
 
   /** Initialize tanh lookup table */
   void initTanhLUT() {
@@ -196,7 +192,7 @@ private:
   inline float tanhLookup(float x) {
     if (x >= LUT_RANGE) return 1.0f;
     if (x <= -LUT_RANGE) return -1.0f;
-    float indexF = (x + LUT_RANGE) * (LUT_SIZE - 1) / (2.0f * LUT_RANGE);
+    float indexF = (x + LUT_RANGE) * LUT_SCALE;  // Multiplication instead of division
     int idx = (int)indexF;
     float frac = indexF - idx;
     if (idx < 0) idx = 0;
@@ -220,17 +216,14 @@ private:
    * Applies soft compression before tanh to reduce harmonic generation.
    */
   inline float softTanh(float x) {
-    const float knee = 1.5f;
     float ax = fabsf(x);
-    if (ax <= knee) {
+    if (ax <= softKnee_) {
       return tanhLookup(x);
-    } else {
-      // Above knee: compress input to reduce harmonic generation
-      float sign = (x >= 0.0f) ? 1.0f : -1.0f;
-      float excess = ax - knee;
-      float compressed = knee + fastSqrt(excess * 0.5f);
-      return tanhLookup(sign * compressed);
     }
+    // Above knee: compress input to reduce harmonic generation
+    float excess = ax - softKnee_;
+    float compressed = softKnee_ + fastSqrt(excess * 0.5f);
+    return (x >= 0.0f) ? tanhLookup(compressed) : tanhLookup(-compressed);
   }
 
   /** Initialize filter parameters */
