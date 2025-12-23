@@ -16,19 +16,41 @@
 #include "SdFat.h"
 #include "SPI.h"
 
-#define WAV_READ_BUFFER_SIZE 512  // 512 bytes = 1 SD sector (optimal for SdFat)
+#define WAV_READ_BUFFER_SIZE 2048  // 2KB buffer - balance of speed vs stack safety on ESP32
 
 class Wav {
 
 public:
   /** Constructor */
-  Wav() : audioBuffer(nullptr), totalSamples(0), wavSampleRate(44100), numChannels(0), bitsPerSample(16), wavAudioFormat(1), sd(nullptr), currentFileIndex(-1), wavFileCount(0) {
+  Wav() : audioBuffer(nullptr), totalSamples(0), wavSampleRate(44100), numChannels(0), bitsPerSample(16), wavAudioFormat(1), sd(nullptr), currentFileIndex(-1), wavFileCount(0), maxAllocationBytes(0), externalBuffer(nullptr), externalBufferSize(0), usingExternalBuffer(false) {
     currentFilename[0] = '\0';
   }
 
-  /** Destructor - free allocated memory */
+  /** Set maximum bytes to allocate for audio buffer
+   * Call before load() to limit allocation (e.g., to reserve space for effects)
+   * @param maxBytes Maximum bytes to allocate (0 = no limit, use all available)
+   */
+  void setMaxAllocation(size_t maxBytes) {
+    maxAllocationBytes = maxBytes;
+  }
+
+  /** Set external pre-allocated buffer to use instead of allocating
+   * Call once at startup to avoid fragmentation from repeated alloc/free
+   * @param buffer Pointer to pre-allocated int16_t buffer
+   * @param maxBytes Maximum size of buffer in bytes
+   */
+  void setExternalBuffer(int16_t* buffer, size_t maxBytes) {
+    externalBuffer = buffer;
+    externalBufferSize = maxBytes;
+    usingExternalBuffer = (buffer != nullptr && maxBytes > 0);
+    if (usingExternalBuffer) {
+      Serial.printf("Wav: Using external buffer (%d bytes)\n", maxBytes);
+    }
+  }
+
+  /** Destructor - free allocated memory (only if not using external buffer) */
   ~Wav() {
-    if (audioBuffer != nullptr) {
+    if (audioBuffer != nullptr && !usingExternalBuffer) {
       free(audioBuffer);
       audioBuffer = nullptr;
     }
@@ -79,8 +101,8 @@ public:
       Serial.println("Wav: SD card not initialized. Call initSD() first.");
       return false;
     }
-    // Free previous buffer if exists
-    if (audioBuffer != nullptr) {
+    // Free previous buffer if exists (only if not using external buffer)
+    if (audioBuffer != nullptr && !usingExternalBuffer) {
       free(audioBuffer);
       audioBuffer = nullptr;
     }
@@ -154,54 +176,135 @@ public:
     // totalSamples is number of frames (mono sample or L/R pair)
     size_t bytesPerSample = bitsPerSample / 8;
     totalSamples = dataSize / (numChannels * bytesPerSample);
-    // Always allocate as 16-bit (conversion happens during load)
+    // Always store as 16-bit (conversion happens during load)
     size_t bufferSize = totalSamples * numChannels * sizeof(int16_t);
-    // Try to allocate in PSRAM first (ESP32 only)
-    #if IS_ESP32()
-      if (isPSRAMAvailable()) {
-        size_t availablePsram = ESP.getFreePsram();
-        if (bufferSize > availablePsram) {
-          Serial.printf("Wav: File (%d bytes) exceeds PSRAM (%d bytes), truncating.\n",
-                        bufferSize, availablePsram);
-          bufferSize = availablePsram;
-          totalSamples = bufferSize / (numChannels * sizeof(int16_t));
+
+    // Use external buffer if set (avoids fragmentation from repeated alloc/free)
+    if (usingExternalBuffer) {
+      audioBuffer = externalBuffer;
+      if (bufferSize > externalBufferSize) {
+        Serial.printf("Wav: File (%d bytes) exceeds buffer (%d bytes), truncating.\n",
+                      bufferSize, externalBufferSize);
+        bufferSize = externalBufferSize;
+        totalSamples = bufferSize / (numChannels * sizeof(int16_t));
+      }
+      Serial.printf("Wav: Using pre-allocated buffer (%d bytes used)\n", bufferSize);
+    } else {
+      // Dynamic allocation - try PSRAM first (ESP32 only)
+      #if IS_ESP32()
+        if (isPSRAMAvailable()) {
+          size_t availablePsram = ESP.getFreePsram();
+          // Apply max allocation limit if set (reserves space for effects, etc.)
+          // Use 90% of available to leave margin for fragmentation/alignment
+          size_t safeAvailable = (availablePsram * 9) / 10;
+          size_t maxAlloc = (maxAllocationBytes > 0) ? min(safeAvailable, (maxAllocationBytes * 9) / 10) : safeAvailable;
+          if (bufferSize > maxAlloc) {
+            Serial.printf("Wav: File (%d bytes) exceeds limit (%d bytes), truncating.\n",
+                          bufferSize, maxAlloc);
+            bufferSize = maxAlloc;
+            totalSamples = bufferSize / (numChannels * sizeof(int16_t));
+          }
+          audioBuffer = (int16_t*)ps_malloc(bufferSize);
+          if (audioBuffer) {
+            Serial.printf("Wav: Allocated %d bytes in PSRAM\n", bufferSize);
+          } else {
+            // PSRAM alloc failed, try smaller size
+            Serial.printf("Wav: PSRAM alloc failed for %d bytes, trying 75%%\n", bufferSize);
+            bufferSize = (bufferSize * 3) / 4;
+            totalSamples = bufferSize / (numChannels * sizeof(int16_t));
+            audioBuffer = (int16_t*)ps_malloc(bufferSize);
+            if (audioBuffer) {
+              Serial.printf("Wav: Allocated %d bytes in PSRAM (reduced)\n", bufferSize);
+            }
+          }
         }
-        audioBuffer = (int16_t*)ps_malloc(bufferSize);
+      #endif
+      // Fallback to regular RAM if PSRAM failed or unavailable
+      if (audioBuffer == nullptr) {
+        audioBuffer = (int16_t*)malloc(bufferSize);
         if (audioBuffer) {
-          Serial.printf("Wav: Allocated %d bytes in PSRAM\n", bufferSize);
+          Serial.printf("Wav: Allocated %d bytes in RAM\n", bufferSize);
+        } else {
+          Serial.println("Wav: Memory allocation failed!");
+          wavFile.close();
+          return false;
         }
       }
-    #endif
-    // Fallback to regular RAM if PSRAM failed or unavailable
-    if (audioBuffer == nullptr) {
-      audioBuffer = (int16_t*)malloc(bufferSize);
-      if (audioBuffer) {
-        Serial.printf("Wav: Allocated %d bytes in RAM\n", bufferSize);
-      } else {
-        Serial.println("Wav: Memory allocation failed!");
-        wavFile.close();
-        return false;
-      }
-    }
+    }  // end dynamic allocation branch
+
     // Seek to audio data
     if (!wavFile.seekSet(dataChunkPos + 8)) {
       Serial.println("Wav: Failed to seek to audio data.");
-      free(audioBuffer);
+      if (!usingExternalBuffer) {
+        free(audioBuffer);
+      }
       audioBuffer = nullptr;
       wavFile.close();
       return false;
     }
     // Read audio data in chunks
     if (!readAudioData(wavFile)) {
-      free(audioBuffer);
+      if (!usingExternalBuffer) {
+        free(audioBuffer);
+      }
       audioBuffer = nullptr;
       wavFile.close();
       return false;
     }
     wavFile.close();
     Serial.printf("Wav: Loaded %lu samples\n", totalSamples);
+
+    // Apply fade in/out to eliminate clicks at loop boundaries
+    applyEdgeFades();
+
     Serial.println("------------------");
     return true;
+  }
+
+  /** Apply fade in/out to audio buffer edges
+   * Eliminates clicks when audio loops or at file boundaries
+   * @param fadeMs Fade duration in milliseconds (default 10ms)
+   */
+  void applyEdgeFades(float fadeMs = 10.0f) {
+    if (!isLoaded()) return;
+
+    // Calculate fade length in samples
+    unsigned long fadeSamples = (unsigned long)(fadeMs * wavSampleRate / 1000.0f);
+    if (fadeSamples < 2) fadeSamples = 2;
+    if (fadeSamples > totalSamples / 4) fadeSamples = totalSamples / 4;  // Max 25% of file
+
+    Serial.printf("Wav: Applying %lums fade (%lu samples)\n", (unsigned long)fadeMs, fadeSamples);
+
+    // Apply cosine fade in at start
+    for (unsigned long i = 0; i < fadeSamples; i++) {
+      // Cosine curve: 0 to 1 over fadeSamples
+      float gain = 0.5f * (1.0f - cosf(M_PI * i / fadeSamples));
+
+      if (numChannels == 1) {
+        audioBuffer[i] = (int16_t)(audioBuffer[i] * gain);
+      } else {
+        audioBuffer[i * 2] = (int16_t)(audioBuffer[i * 2] * gain);
+        audioBuffer[i * 2 + 1] = (int16_t)(audioBuffer[i * 2 + 1] * gain);
+      }
+      // Yield periodically to prevent watchdog timeout
+      if ((i & 0xFF) == 0) yield();
+    }
+
+    // Apply cosine fade out at end
+    for (unsigned long i = 0; i < fadeSamples; i++) {
+      unsigned long idx = totalSamples - 1 - i;
+      // Cosine curve: 0 to 1 over fadeSamples (reversed)
+      float gain = 0.5f * (1.0f - cosf(M_PI * i / fadeSamples));
+
+      if (numChannels == 1) {
+        audioBuffer[idx] = (int16_t)(audioBuffer[idx] * gain);
+      } else {
+        audioBuffer[idx * 2] = (int16_t)(audioBuffer[idx * 2] * gain);
+        audioBuffer[idx * 2 + 1] = (int16_t)(audioBuffer[idx * 2 + 1] * gain);
+      }
+      // Yield periodically to prevent watchdog timeout
+      if ((i & 0xFF) == 0) yield();
+    }
   }
 
   /** Count WAV files on SD card and optionally print them
@@ -444,6 +547,10 @@ private:
   int currentFileIndex;       // Current file index (0-based), -1 if none loaded
   int wavFileCount;           // Total number of WAV files on SD card
   char currentFilename[128];  // Current loaded filename
+  size_t maxAllocationBytes;  // Max bytes to allocate (0 = no limit)
+  int16_t* externalBuffer;    // Pre-allocated external buffer (nullptr if not used)
+  size_t externalBufferSize;  // Size of external buffer in bytes
+  bool usingExternalBuffer;   // True if using external buffer instead of allocating
 
   /** Load WAV file by index (0-based)
    * @param index Index of file to load
@@ -539,6 +646,8 @@ private:
     size_t bufferIndex = 0;
     uint8_t tempBuffer[WAV_READ_BUFFER_SIZE];
     size_t bytesPerSample = bitsPerSample / 8;
+    int yieldCounter = 0;
+    const int YIELD_INTERVAL = 8;  // Yield every 8 chunks (16KB)
 
     while (samplesLoaded < totalSamples) {
       int readBytes = wavFile.read(tempBuffer, WAV_READ_BUFFER_SIZE);
@@ -601,6 +710,12 @@ private:
       }
 
       samplesLoaded += chunkSamples;
+
+      // Yield periodically to prevent watchdog timeout during large file loads
+      if (++yieldCounter >= YIELD_INTERVAL) {
+        yield();
+        yieldCounter = 0;
+      }
     }
 
     return samplesLoaded > 0;
