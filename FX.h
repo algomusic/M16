@@ -177,6 +177,60 @@ class FX {
       return (int16_t)(x * MAX_16);
     }
 
+    /** Bit Crusher
+    * Reduces bit depth for lo-fi digital distortion effect.
+    * Quantizes the sample to fewer bits, creating stepped/grainy artifacts.
+    * @param sample_in The next sample value
+    * @param bits Bit depth from 1 (extreme) to 16 (clean). Typical range 4-12.
+    */
+    inline
+    int16_t bitCrush(int32_t sample_in, int bits) {
+      if (bits >= 16) return clip16(sample_in);
+      if (bits < 1) bits = 1;
+      int shift = 16 - bits;
+      // Add half-step offset before truncation for rounding (reduces DC offset)
+      int32_t halfStep = 1 << (shift - 1);
+      // Quantize by shifting right then left (truncates lower bits)
+      int32_t out = ((sample_in + halfStep) >> shift) << shift;
+      return clip16(out);
+    }
+
+    /** Bit Crusher with Sample Rate Reduction
+    * Combines bit depth reduction with sample-and-hold for classic lo-fi sound.
+    * @param sample_in The next sample value
+    * @param bits Bit depth from 1 (extreme) to 16 (clean). Typical range 4-12.
+    * @param holdSamples Number of samples to hold (1 = no reduction, higher = more aliasing)
+    *                    Values 1-16 typical. Creates staircase/aliasing artifacts.
+    */
+    inline
+    int16_t bitCrush(int32_t sample_in, int bits, int holdSamples) {
+      // Sample rate reduction via sample-and-hold
+      if (holdSamples > 1) {
+        crushHoldCounter++;
+        if (crushHoldCounter >= holdSamples) {
+          crushHoldCounter = 0;
+          crushHoldValue = bitCrush(sample_in, bits);
+        }
+        return crushHoldValue;
+      }
+      return bitCrush(sample_in, bits);
+    }
+
+    /** Bit Crusher (float interface)
+    * Reduces bit depth for lo-fi digital distortion effect.
+    * @param sample_in The next sample value
+    * @param amount Crush amount from 0.0 (clean) to 1.0 (extreme, ~2 bits)
+    *               Maps logarithmically for more usable range in the middle.
+    */
+    inline
+    int16_t bitCrushF(int32_t sample_in, float amount) {
+      amount = max(0.0f, min(1.0f, amount));
+      // Map 0-1 to 16-2 bits with curve for better control in sweet spot
+      // amount=0 -> 16 bits, amount=0.5 -> ~6 bits, amount=1.0 -> 2 bits
+      int bits = 16 - (int)(amount * amount * 14.0f);
+      return bitCrush(sample_in, bits);
+    }
+
     /** Overdrive
     * Distort sound based on input level and depth amount
     * Pass in a signal and depth amount.
@@ -687,6 +741,9 @@ class FX {
     float pluck_buffer_write_index = 0;
     int prevPluckOutput = 0;
     bool pluckBufferEstablished = false;
+    // Bit crusher sample-and-hold state
+    int16_t crushHoldValue = 0;
+    int16_t crushHoldCounter = 0;
     bool reverbInitiated = false;
     float reverbFeedbackLevel = 0.93; // 0.0 to 1.0
     int reverbMix = 40; // 0 to 1024
