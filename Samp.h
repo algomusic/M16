@@ -15,14 +15,19 @@
 #ifndef SAMP_H_
 #define SAMP_H_
 
-// Thread-safety note: On ESP32 dual-core, ensure audioUpdate() is called
-// by only one core at a time (use atomic flag). The per-instance locks below
-// are disabled because portENTER_CRITICAL disables interrupts and can cause
-// I2S DMA underruns and watchdog timeouts.
-#define SAMP_LOCK_INIT()
-#define SAMP_LOCK()
-#define SAMP_UNLOCK()
-#define SAMP_LOCK_DECLARE()
+// Thread-safety for 64-bit phase on 32-bit ESP32
+// Uses lightweight spinlock (atomic_flag) that doesn't disable interrupts
+// to avoid I2S DMA underruns while protecting against torn reads/writes
+#if IS_ESP32() || IS_RP2040()
+  #include <atomic>
+  #define SAMP_LOCK_DECLARE() std::atomic_flag _phaseLock = ATOMIC_FLAG_INIT;
+  #define SAMP_LOCK() while (_phaseLock.test_and_set(std::memory_order_acquire)) {}
+  #define SAMP_UNLOCK() _phaseLock.clear(std::memory_order_release)
+#else
+  #define SAMP_LOCK_DECLARE()
+  #define SAMP_LOCK()
+  #define SAMP_UNLOCK()
+#endif
 
 class Samp {
 
@@ -32,42 +37,50 @@ public:
   static int sharedEnvSize;
   static bool sharedEnvInitialized;
 
-  /** Initialize the shared envelope table (call once in setup() before audioStart())
+  /** Initialize or update the shared envelope table
+   * Allocates once on first call, then refills in-place on subsequent calls.
+   * Byte writes are atomic so audio callback sees consistent values.
    * @param size Number of samples in envelope table (default 2048)
    * @param curveAmount Attack/release curve proportion 0.0-1.0 (default 0.8)
    * @param type Envelope type: 0=Gaussian, 1=Cosine, 2=Linear (default 0)
    */
   static void initSharedEnvelope(int size = 2048, float curveAmount = 0.8f, int type = 0) {
-    if (sharedEnvTable) {
-      free(sharedEnvTable);
-      sharedEnvTable = nullptr;
-    }
-
-    sharedEnvSize = size;
-
-    #if IS_ESP32()
-      if (isPSRAMAvailable() && ESP.getFreePsram() > (size_t)size + 1024) {
-        sharedEnvTable = (uint8_t*)ps_calloc(size, sizeof(uint8_t));
+    // Allocate only if needed (first call or size change)
+    if (sharedEnvTable == nullptr || sharedEnvSize != size) {
+      if (sharedEnvTable) {
+        free(sharedEnvTable);
       }
-      if (!sharedEnvTable) {
-        sharedEnvTable = (uint8_t*)calloc(size, sizeof(uint8_t));
-      }
-    #else
+      // Always use regular RAM for envelope table (not PSRAM)
+      // PSRAM access latency causes timing issues in audio callbacks
       sharedEnvTable = (uint8_t*)calloc(size, sizeof(uint8_t));
-    #endif
 
-    if (!sharedEnvTable) {
-      Serial.println("ERROR: Failed to allocate shared envelope");
-      sharedEnvInitialized = false;
-      sharedEnvSize = 0;
-      return;
+      if (!sharedEnvTable) {
+        Serial.println("ERROR: Failed to allocate shared envelope");
+        sharedEnvInitialized = false;
+        sharedEnvSize = 0;
+        return;
+      }
+      sharedEnvSize = size;
     }
 
+    // Refill envelope in-place (byte writes are atomic)
     curveAmount = max(0.0f, min(1.0f, curveAmount));
     int attackSamples = (int)(size * curveAmount * 0.5f);
     int releaseSamples = attackSamples;
     int sustainSamples = size - attackSamples - releaseSamples;
     int index = 0;
+
+    // Yield periodically during envelope generation to prevent watchdog timeout
+    // expf() is slow, and we may have ~1000+ iterations
+    int yieldCounter = 0;
+    const int YIELD_INTERVAL = 16;  // Yield every 16 samples (very aggressive for ESP32 watchdog)
+
+    // Feed watchdog before starting
+    #if IS_ESP32()
+    vTaskDelay(1);  // Ensure IDLE task gets a chance to run
+    #else
+    delay(1);
+    #endif
 
     if (type == 0) {
       // Gaussian envelope
@@ -80,6 +93,11 @@ public:
         float t = (attackSamples > 1) ? (float)i / (float)(attackSamples - 1) : 0.0f;
         float x = (1.0f - t) * invSigma;
         sharedEnvTable[index++] = (uint8_t)((expf(-(x * x)) - g0) * scale * 255.0f);
+        #if IS_ESP32()
+        if (++yieldCounter >= YIELD_INTERVAL) { vTaskDelay(1); yieldCounter = 0; }
+        #else
+        if (++yieldCounter >= YIELD_INTERVAL) { delay(1); yieldCounter = 0; }
+        #endif
       }
       for (int i = 0; i < sustainSamples && index < size; i++) {
         sharedEnvTable[index++] = 255;
@@ -88,12 +106,22 @@ public:
         float t = (releaseSamples > 1) ? (float)i / (float)(releaseSamples - 1) : 1.0f;
         float x = t * invSigma;
         sharedEnvTable[index++] = (uint8_t)((expf(-(x * x)) - g0) * scale * 255.0f);
+        #if IS_ESP32()
+        if (++yieldCounter >= YIELD_INTERVAL) { vTaskDelay(1); yieldCounter = 0; }
+        #else
+        if (++yieldCounter >= YIELD_INTERVAL) { delay(1); yieldCounter = 0; }
+        #endif
       }
     } else if (type == 1) {
       // Cosine envelope
       for (int i = 0; i < attackSamples && index < size; i++) {
         float t = (attackSamples > 1) ? (float)i / (float)(attackSamples - 1) : 0.0f;
         sharedEnvTable[index++] = (uint8_t)((1.0f - cosf(M_PI * t)) * 0.5f * 255.0f);
+        #if IS_ESP32()
+        if (++yieldCounter >= YIELD_INTERVAL) { vTaskDelay(1); yieldCounter = 0; }
+        #else
+        if (++yieldCounter >= YIELD_INTERVAL) { delay(1); yieldCounter = 0; }
+        #endif
       }
       for (int i = 0; i < sustainSamples && index < size; i++) {
         sharedEnvTable[index++] = 255;
@@ -101,9 +129,14 @@ public:
       for (int i = 0; i < releaseSamples && index < size; i++) {
         float t = (releaseSamples > 1) ? (float)i / (float)(releaseSamples - 1) : 1.0f;
         sharedEnvTable[index++] = (uint8_t)((1.0f + cosf(M_PI * t)) * 0.5f * 255.0f);
+        #if IS_ESP32()
+        if (++yieldCounter >= YIELD_INTERVAL) { vTaskDelay(1); yieldCounter = 0; }
+        #else
+        if (++yieldCounter >= YIELD_INTERVAL) { delay(1); yieldCounter = 0; }
+        #endif
       }
     } else {
-      // Linear envelope
+      // Linear envelope (no yield needed - no expensive math)
       for (int i = 0; i < attackSamples && index < size; i++) {
         float t = (attackSamples > 1) ? (float)i / (float)(attackSamples - 1) : 0.0f;
         sharedEnvTable[index++] = (uint8_t)(t * 255.0f);
@@ -116,6 +149,13 @@ public:
         sharedEnvTable[index++] = (uint8_t)((1.0f - t) * 255.0f);
       }
     }
+
+    // Final yield to ensure IDLE task runs after envelope generation
+    #if IS_ESP32()
+    vTaskDelay(1);
+    #else
+    delay(1);
+    #endif
 
     sharedEnvInitialized = true;
     Serial.println("Shared envelope initialized: " + String(size) + " bytes, type " + String(type));
@@ -165,6 +205,7 @@ public:
     startpos_fractional = 0;
     endpos_fractional = (uint64_t)buffer_size << 32;
     phase_increment_fractional = ((uint64_t)buffer_sample_rate << 16) / SAMPLE_RATE;
+    phaseInc64 = (uint64_t)phase_increment_fractional << 16;  // Pre-compute for hot path
   }
 
   /** Set start position in frames
@@ -174,14 +215,31 @@ public:
     if (zeroCrossing && buffer) {
       startpos = findNearestZeroCrossing(startpos);
     }
+    SAMP_LOCK();
     startpos_fractional = (uint64_t)startpos << 32;
+    SAMP_UNLOCK();
+  }
+
+  /** Set envelope phase offset for out-of-phase multi-voice playback
+   * @param offset Normalized offset 0.0-1.0 (0.5 = start at envelope midpoint)
+   */
+  inline void setEnvPhaseOffset(float offset) {
+    offset = max(0.0f, min(1.0f, offset));
+    envPhaseOffset = (uint32_t)(offset * 0xFFFFFFFF);
+  }
+
+  /** @return Current envelope phase offset (0.0-1.0) */
+  inline float getEnvPhaseOffset() {
+    return (float)envPhaseOffset / (float)0xFFFFFFFF;
   }
 
   /** Begin playback from start position (or end if reverse) */
   inline void start() {
     SAMP_LOCK();
-    envPhase = 0;
-    envComplete = false;
+    envPhase = envPhaseOffset;  // Apply phase offset for multi-voice envelope staggering
+    envComplete = false;  // Never start as complete - let the envelope play through
+    envHasWrapped = false;  // Reset wrap tracking
+    envStartPhase = envPhaseOffset;  // Remember start position to detect full cycle completion
 
     // Calculate envelope increment for segment duration
     uint32_t segmentFrames = (uint32_t)((endpos_fractional - startpos_fractional) >> 32);
@@ -226,7 +284,9 @@ public:
     if (zeroCrossing && buffer) {
       end = findNearestZeroCrossing(end);
     }
+    SAMP_LOCK();
     endpos_fractional = (uint64_t)end << 32;
+    SAMP_UNLOCK();
   }
 
   /** Get actual start position (after zero-crossing adjustment)
@@ -307,26 +367,49 @@ public:
       SAMP_UNLOCK();
       return 0;
     }
-    int16_t out = buffer[sampleIndex];
+
+    int16_t out;
+    if (interpolate && sampleIndex < buffer_size - 1) {
+      // Linear interpolation using 15-bit fractional phase
+      // Using 15-bit keeps diff*frac within int32_t range (max 65534*32767 < INT32_MAX)
+      int32_t frac = (int32_t)((phase_fractional >> 17) & 0x7FFF);  // 15-bit (0-32767)
+      int32_t s0 = buffer[sampleIndex];
+      int32_t s1 = buffer[sampleIndex + 1];
+      // Interpolate and clamp to prevent overflow at extreme sample transitions
+      int32_t interp = s0 + (((s1 - s0) * frac) >> 15);
+      out = (int16_t)max((int32_t)MIN_16, min((int32_t)MAX_16, interp));
+    } else {
+      out = buffer[sampleIndex];
+    }
 
     // Apply envelope
     if (envelopeOn && sharedEnvTable && sharedEnvInitialized) {
       if (envComplete) {
         out = 0;
       } else {
-        uint32_t envIndex = envPhase >> 16;
-        if (envIndex < (uint32_t)sharedEnvSize) {
-          out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
-          uint32_t newEnvPhase = envPhase + envPhaseIncrement;
-          if (newEnvPhase >= envPhase) {
-            envPhase = newEnvPhase;
-          } else {
+        // Wrap envelope index to table size (supports phase offset)
+        uint32_t envIndex = (envPhase >> 16) % sharedEnvSize;
+        out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
+        uint32_t newEnvPhase = envPhase + envPhaseIncrement;
+        if (newEnvPhase >= envPhase) {
+          envPhase = newEnvPhase;
+          // Check for full cycle completion after wrap
+          if (envHasWrapped && envPhase >= envStartPhase) {
             envComplete = true;
           }
         } else {
-          envComplete = true;
-          out = 0;
+          // Phase wrapped around - mark wrapped but don't complete yet
+          envPhase = newEnvPhase;
+          envHasWrapped = true;
         }
+      }
+    }
+
+    // Apply edge fade (fade in at start, fade out at end)
+    if (edgeFadeEnabled) {
+      float fadeGain = getEdgeFadeGain(sampleIndex);
+      if (fadeGain < 1.0f) {
+        out = (int16_t)(out * fadeGain);
       }
     }
 
@@ -343,90 +426,127 @@ public:
   /** Get next stereo sample pair (thread-safe, recommended for dual-core ESP32)
    * @param outLeft Reference to receive left channel sample
    * @param outRight Reference to receive right channel sample
+   * @return true if still playing, false if grain ended (avoids separate isPlaying() call)
    */
-  inline void nextStereo(int16_t& outLeft, int16_t& outRight) {
+  inline bool nextStereo(int16_t& outLeft, int16_t& outRight) {
+    // Quick check without lock - playing is volatile so this is safe
     if (!playing || !buffer || buffer_size == 0 || num_channels != 2) {
       outLeft = 0;
       outRight = 0;
-      return;
+      return false;
     }
 
+    // === LOCKED SECTION: Read phase, check bounds, advance phase ===
+    // Keep lock time minimal - only for 64-bit phase operations
     SAMP_LOCK();
 
-    // Boundary check depends on playback direction
-    if (reverse) {
-      if (phase_fractional <= startpos_fractional) {
-        if (looping) {
-          phase_fractional = endpos_fractional - ((uint64_t)1 << 32);
-          envPhase = 0;
-          envComplete = false;
-        } else {
-          playing = false;
-          SAMP_UNLOCK();
-          outLeft = 0;
-          outRight = 0;
-          return;
-        }
-      }
-    } else {
-      if (phase_fractional >= endpos_fractional) {
-        if (looping) {
-          phase_fractional = startpos_fractional + (phase_fractional - endpos_fractional);
-          envPhase = 0;
-          envComplete = false;
-        } else {
-          playing = false;
-          SAMP_UNLOCK();
-          outLeft = 0;
-          outRight = 0;
-          return;
-        }
+    // Cache 64-bit values to local 32-bit where possible
+    uint32_t sampleIndex = (uint32_t)(phase_fractional >> 32);
+    uint32_t phaseLow = (uint32_t)phase_fractional;  // Lower 32 bits for fraction
+    uint32_t startIdx = (uint32_t)(startpos_fractional >> 32);
+    uint32_t endIdx = (uint32_t)(endpos_fractional >> 32);
+
+    // Boundary check using 32-bit integer comparison (faster than 64-bit)
+    bool atBoundary = reverse ? (sampleIndex <= startIdx) : (sampleIndex >= endIdx);
+
+    if (atBoundary) {
+      if (looping) {
+        phase_fractional = reverse ?
+          (endpos_fractional - ((uint64_t)1 << 32)) :
+          (startpos_fractional + (phase_fractional - endpos_fractional));
+        sampleIndex = (uint32_t)(phase_fractional >> 32);
+        phaseLow = (uint32_t)phase_fractional;
+        envPhase = 0;
+        envComplete = false;
+      } else {
+        playing = false;
+        SAMP_UNLOCK();
+        outLeft = 0;
+        outRight = 0;
+        return false;  // Grain ended
       }
     }
 
-    uint32_t sampleIndex = phase_fractional >> 32;
+    // Bounds check
     if (sampleIndex >= buffer_size) {
       SAMP_UNLOCK();
       outLeft = 0;
       outRight = 0;
-      return;
+      return false;
     }
 
-    outLeft = buffer[sampleIndex * 2];
-    outRight = buffer[sampleIndex * 2 + 1];
+    // Advance phase now (while we have the lock)
+    // Pre-computed 64-bit increment avoids shift in hot path
+    phase_fractional += phaseInc64;
 
-    // Apply envelope
-    if (envelopeOn && sharedEnvTable && sharedEnvInitialized) {
-      if (envComplete) {
-        outLeft = 0;
-        outRight = 0;
-      } else {
-        uint32_t envIndex = envPhase >> 16;
-        if (envIndex < (uint32_t)sharedEnvSize) {
-          uint8_t envVal = sharedEnvTable[envIndex];
-          outLeft = (int16_t)(((int32_t)outLeft * envVal) >> 8);
-          outRight = (int16_t)(((int32_t)outRight * envVal) >> 8);
-          uint32_t newEnvPhase = envPhase + envPhaseIncrement;
-          if (newEnvPhase >= envPhase) {
-            envPhase = newEnvPhase;
-          } else {
-            envComplete = true;
-          }
-        } else {
-          envComplete = true;
-          outLeft = 0;
-          outRight = 0;
-        }
+    // Cache envelope state
+    uint32_t localEnvPhase = envPhase;
+    uint32_t localEnvInc = envPhaseIncrement;
+    bool localEnvOn = envelopeOn && sharedEnvInitialized && !envComplete;
+
+    // Update envelope phase
+    if (localEnvOn) {
+      uint32_t newEnvPhase = envPhase + envPhaseIncrement;
+      envPhase = newEnvPhase;
+      if (newEnvPhase < localEnvPhase) {
+        // Phase wrapped around - mark wrapped but don't complete yet
+        envHasWrapped = true;
+      } else if ((newEnvPhase >> 16) >= (uint32_t)sharedEnvSize) {
+        envComplete = true;
+      } else if (envHasWrapped && newEnvPhase >= envStartPhase) {
+        // Full cycle completed (wrapped and returned to start)
+        envComplete = true;
       }
     }
 
-    if (reverse) {
-      decrementPhase();
+    SAMP_UNLOCK();
+    // === END LOCKED SECTION ===
+
+    // All calculations below use local variables - no lock needed
+    uint32_t bufIdx = sampleIndex << 1;  // sampleIndex * 2, bit shift is faster
+
+    if (interpolate && sampleIndex < buffer_size - 1) {
+      // Extract 15-bit fraction from lower 32 bits only (avoids 64-bit shift)
+      int32_t frac = (int32_t)((phaseLow >> 17) & 0x7FFF);
+
+      // Cache buffer pointer for faster access
+      const int16_t* buf = buffer + bufIdx;
+      int32_t s0L = buf[0];
+      int32_t s0R = buf[1];
+      int32_t s1L = buf[2];
+      int32_t s1R = buf[3];
+
+      // Interpolate - result is in valid int16_t range for typical audio
+      int32_t interpL = s0L + (((s1L - s0L) * frac) >> 15);
+      int32_t interpR = s0R + (((s1R - s0R) * frac) >> 15);
+
+      // Fast clamp using ternary (often compiles to conditional move)
+      outLeft = (interpL > 32767) ? 32767 : ((interpL < -32767) ? -32767 : (int16_t)interpL);
+      outRight = (interpR > 32767) ? 32767 : ((interpR < -32767) ? -32767 : (int16_t)interpR);
     } else {
-      incrementPhase();
+      outLeft = buffer[bufIdx];
+      outRight = buffer[bufIdx + 1];
     }
 
-    SAMP_UNLOCK();
+    // Apply envelope (using cached local values)
+    if (localEnvOn && sharedEnvTable) {
+      // Wrap envelope index to table size (supports phase offset)
+      uint32_t envIndex = (localEnvPhase >> 16) % sharedEnvSize;
+      uint32_t envVal = sharedEnvTable[envIndex];  // 0-255
+      outLeft = (int16_t)(((int32_t)outLeft * envVal) >> 8);
+      outRight = (int16_t)(((int32_t)outRight * envVal) >> 8);
+    }
+
+    // Apply edge fade (fade in at start, fade out at end) - only if enabled
+    if (edgeFadeEnabled) {
+      float fadeGain = getEdgeFadeGain(sampleIndex);
+      if (fadeGain < 1.0f) {
+        outLeft = (int16_t)(outLeft * fadeGain);
+        outRight = (int16_t)(outRight * fadeGain);
+      }
+    }
+
+    return true;  // Still playing
   }
 
   /** Get next left channel sample (call before nextRight)
@@ -479,13 +599,9 @@ public:
       if (envComplete) {
         out = 0;
       } else {
-        uint32_t envIndex = envPhase >> 16;
-        if (envIndex < (uint32_t)sharedEnvSize) {
-          out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
-        } else {
-          envComplete = true;
-          out = 0;
-        }
+        // Wrap envelope index to table size (supports phase offset)
+        uint32_t envIndex = (envPhase >> 16) % sharedEnvSize;
+        out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
       }
     }
 
@@ -543,18 +659,20 @@ public:
       if (envComplete) {
         out = 0;
       } else {
-        uint32_t envIndex = envPhase >> 16;
-        if (envIndex < (uint32_t)sharedEnvSize) {
-          out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
-          uint32_t newEnvPhase = envPhase + envPhaseIncrement;
-          if (newEnvPhase >= envPhase) {
-            envPhase = newEnvPhase;
-          } else {
+        // Wrap envelope index to table size (supports phase offset)
+        uint32_t envIndex = (envPhase >> 16) % sharedEnvSize;
+        out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
+        uint32_t newEnvPhase = envPhase + envPhaseIncrement;
+        if (newEnvPhase >= envPhase) {
+          envPhase = newEnvPhase;
+          // Check for full cycle completion after wrap
+          if (envHasWrapped && envPhase >= envStartPhase) {
             envComplete = true;
           }
         } else {
-          envComplete = true;
-          out = 0;
+          // Phase wrapped around - mark wrapped but don't complete yet
+          envPhase = newEnvPhase;
+          envHasWrapped = true;
         }
       }
     }
@@ -600,6 +718,7 @@ public:
    */
   inline void setFreq(float frequency) {
     phase_increment_fractional = (unsigned long)(((uint64_t)buffer_sample_rate << 16) * frequency / (SAMPLE_RATE * base_pitch));
+    phaseInc64 = (uint64_t)phase_increment_fractional << 16;  // Pre-compute for hot path
   }
 
   /** Get sample at specific buffer index
@@ -617,6 +736,7 @@ public:
   inline void setSpeed(float speed) {
     if (speed <= 0) speed = 1.0f;
     phase_increment_fractional = (unsigned long)(((uint64_t)buffer_sample_rate << 16) * speed / SAMPLE_RATE);
+    phaseInc64 = (uint64_t)phase_increment_fractional << 16;  // Pre-compute for hot path
   }
 
   /** @return Current playback speed multiplier */
@@ -748,6 +868,48 @@ public:
     return zeroCrossing;
   }
 
+  /** Enable or disable linear interpolation for smoother playback
+   * Interpolation reduces aliasing/quantization noise at non-unity playback speeds.
+   * Slightly increases CPU usage. Recommended for granular synthesis.
+   * @param enable true for linear interpolation, false for nearest-neighbor (default)
+   */
+  inline void setInterpolation(bool enable) {
+    interpolate = enable;
+  }
+
+  /** @return Current interpolation setting */
+  inline bool getInterpolation() {
+    return interpolate;
+  }
+
+  /** Enable or disable edge fades (fade in at start, fade out at end)
+   * Edge fades smooth transitions at segment boundaries to eliminate clicks.
+   * Applied dynamically during playback based on position relative to start/end.
+   * @param enable true to enable edge fades, false to disable (default)
+   */
+  inline void setEdgeFade(bool enable) {
+    edgeFadeEnabled = enable;
+  }
+
+  /** @return Current edge fade setting */
+  inline bool getEdgeFade() {
+    return edgeFadeEnabled;
+  }
+
+  /** Set edge fade duration in milliseconds
+   * @param fadeMs Fade duration (default 10ms). Automatically enables edge fades.
+   */
+  inline void setEdgeFadeMs(float fadeMs) {
+    edgeFadeSamples = (uint32_t)(fadeMs * SAMPLE_RATE / 1000.0f);
+    if (edgeFadeSamples < 2) edgeFadeSamples = 2;
+    edgeFadeEnabled = true;
+  }
+
+  /** @return Current edge fade duration in milliseconds */
+  inline float getEdgeFadeMs() {
+    return (float)edgeFadeSamples * 1000.0f / SAMPLE_RATE;
+  }
+
   /** Find the next zero crossing forward from a given position
    * A zero crossing is where adjacent samples change from negative to non-negative.
    * Forward-only search ensures consistent grain boundaries for granular synthesis.
@@ -808,12 +970,13 @@ private:
 
   volatile uint64_t phase_fractional = 0;
   volatile uint32_t phase_increment_fractional = 65536;
+  uint64_t phaseInc64 = (uint64_t)65536 << 16;  // Pre-computed 64-bit increment for hot path
   const int16_t * buffer = nullptr;
-  bool playing = false;
+  volatile bool playing = false;
   bool looping = false;
-  bool reverse = false;  // Reverse playback direction
-  uint64_t startpos_fractional = 0;
-  uint64_t endpos_fractional = 0;
+  volatile bool reverse = false;  // Reverse playback direction
+  volatile uint64_t startpos_fractional = 0;
+  volatile uint64_t endpos_fractional = 0;
   uint32_t buffer_size = 0;
   uint8_t num_channels = 0;
   uint32_t buffer_sample_rate = SAMPLE_RATE;
@@ -823,7 +986,48 @@ private:
   volatile uint32_t envPhase = 0;
   volatile uint32_t envPhaseIncrement = 0;
   volatile bool envComplete = false;
+  volatile bool envHasWrapped = false;  // Track if envelope has wrapped around
+  uint32_t envPhaseOffset = 0;  // Starting envelope phase offset (0 = normal, 0x80000000 = 50%)
+  uint32_t envStartPhase = 0;  // Remember start phase for cycle completion detection
   bool zeroCrossing = true;  // Auto-adjust start/end to nearest zero crossing
+  bool interpolate = false;  // Linear interpolation for smoother playback at non-unity speeds
+
+  // Edge fade settings (fade in at start, fade out at end)
+  bool edgeFadeEnabled = false;
+  uint32_t edgeFadeSamples = 441;  // Default 10ms at 44100Hz
+
+  /** Apply edge fade gain based on position relative to start/end
+   * @param pos Current position in samples (integer part of phase)
+   * @return Gain multiplier 0.0-1.0
+   */
+  inline float getEdgeFadeGain(uint32_t pos) {
+    if (!edgeFadeEnabled || edgeFadeSamples == 0) return 1.0f;
+
+    uint32_t startPos = (uint32_t)(startpos_fractional >> 32);
+    uint32_t endPos = (uint32_t)(endpos_fractional >> 32);
+    uint32_t segmentLength = endPos - startPos;
+
+    // Ensure fade doesn't exceed half the segment
+    uint32_t maxFade = segmentLength / 2;
+    uint32_t fadeSamples = (edgeFadeSamples < maxFade) ? edgeFadeSamples : maxFade;
+    if (fadeSamples < 2) return 1.0f;
+
+    // Distance from start
+    uint32_t fromStart = pos - startPos;
+    if (fromStart < fadeSamples) {
+      // Fade in: cosine curve 0 to 1
+      return 0.5f * (1.0f - cosf(M_PI * fromStart / fadeSamples));
+    }
+
+    // Distance from end
+    uint32_t fromEnd = endPos - pos;
+    if (fromEnd < fadeSamples) {
+      // Fade out: cosine curve 1 to 0
+      return 0.5f * (1.0f - cosf(M_PI * fromEnd / fadeSamples));
+    }
+
+    return 1.0f;  // In the middle, no fade
+  }
 };
 
 // Static member definitions
