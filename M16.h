@@ -53,6 +53,30 @@
 * Note: The losing core SKIPS the guarded code (doesn't wait). Use this for
 * operations that should only happen once per audio frame, like triggering
 * grains or advancing sequencer positions.
+*
+* Pattern for event-driven actions (e.g., triggering a new grain when playback ends):
+* The "handled" flag lets you take action OUTSIDE the lock only on the core that won.
+*
+*   bool handled = false;
+*   M16_ATOMIC_GUARD(myLock, {
+*       if (someCondition) {
+*           doOncePerEvent();
+*           handled = true;
+*       }
+*   });
+*   if (handled) {
+*       // Only runs on the winning core
+*       doFollowUpWork();
+*   }
+*   // Code here runs on BOTH cores
+*
+* Common pitfalls:
+* - 64-bit variables (like phase accumulators) require their own spinlock for
+*   atomic read/write on 32-bit processors. See Samp.h for an example.
+* - Variables accessed by both cores should be declared 'volatile' to ensure
+*   visibility of changes across cores.
+* - Non-ISR-safe functions (rand(), Serial.print()) should not be called in
+*   audioUpdate(). Use audioRand() and buffer debug output for later.
 */
 
 #if IS_ESP32() || IS_RP2040()
@@ -235,7 +259,7 @@ inline bool isPSRAMAvailable() {
   void audioCallback(void* param) {
       for (;;) {
           audioUpdate();
-          yield();
+          // yield(); // i2s_write_samples() already has a yield()
       }
   }
 
@@ -256,8 +280,8 @@ inline bool isPSRAMAvailable() {
   TaskHandle_t audioCallback1Handle = NULL;
   TaskHandle_t audioCallback2Handle = NULL;
 
-  // Mutex for thread-safe initialization
-  static SemaphoreHandle_t audioInitMutex = NULL;
+  // Mutex for thread-safe initialization (not static - needs external linkage for FX.h)
+  SemaphoreHandle_t audioInitMutex = NULL;
 
   void audioStart() {
       // Create mutex for initialization protection
@@ -545,15 +569,43 @@ inline bool isPSRAMAvailable() {
     #endif
   }
 
-/** Return freq from a MIDI pitch 
-* @pitch The MIDI pitch to be converted
+// Pre-computed MIDI note to frequency table (notes 0-127)
+// mtof(n) = 8.1757989156 * 2^(n/12)
+static const float _mtofTable[128] = {
+  8.176f, 8.662f, 9.177f, 9.723f, 10.301f, 10.913f, 11.562f, 12.250f,
+  12.978f, 13.750f, 14.568f, 15.434f, 16.352f, 17.324f, 18.354f, 19.445f,
+  20.602f, 21.827f, 23.125f, 24.500f, 25.957f, 27.500f, 29.135f, 30.868f,
+  32.703f, 34.648f, 36.708f, 38.891f, 41.203f, 43.654f, 46.249f, 48.999f,
+  51.913f, 55.000f, 58.270f, 61.735f, 65.406f, 69.296f, 73.416f, 77.782f,
+  82.407f, 87.307f, 92.499f, 97.999f, 103.826f, 110.000f, 116.541f, 123.471f,
+  130.813f, 138.591f, 146.832f, 155.563f, 164.814f, 174.614f, 184.997f, 195.998f,
+  207.652f, 220.000f, 233.082f, 246.942f, 261.626f, 277.183f, 293.665f, 311.127f,
+  329.628f, 349.228f, 369.994f, 391.995f, 415.305f, 440.000f, 466.164f, 493.883f,
+  523.251f, 554.365f, 587.330f, 622.254f, 659.255f, 698.456f, 739.989f, 783.991f,
+  830.609f, 880.000f, 932.328f, 987.767f, 1046.502f, 1108.731f, 1174.659f, 1244.508f,
+  1318.510f, 1396.913f, 1479.978f, 1567.982f, 1661.219f, 1760.000f, 1864.655f, 1975.533f,
+  2093.005f, 2217.461f, 2349.318f, 2489.016f, 2637.020f, 2793.826f, 2959.955f, 3135.963f,
+  3322.438f, 3520.000f, 3729.310f, 3951.066f, 4186.009f, 4434.922f, 4698.636f, 4978.032f,
+  5274.041f, 5587.652f, 5919.911f, 6271.927f, 6644.875f, 7040.000f, 7458.620f, 7902.133f,
+  8372.018f, 8869.844f, 9397.273f, 9956.063f, 10548.08f, 11175.30f, 11839.82f, 12543.85f
+};
+
+/** Return freq from a MIDI pitch (fast lookup version)
+* @pitch The MIDI pitch to be converted (integer for fastest, float supported)
 */
 inline
 float mtof(float midival) {
-  midival = max(0.0f, midival);
-  float f = 0.0;
-  if (midival) f = 8.1757989156 * pow(2.0, midival * 0.083333); // / 12.0);
-  return f;
+  if (midival <= 0.0f) return 0.0f;
+  if (midival >= 127.0f) return _mtofTable[127];
+
+  int idx = (int)midival;
+  float frac = midival - idx;
+
+  // Fast path for integer MIDI notes (no interpolation needed)
+  if (frac < 0.001f) return _mtofTable[idx];
+
+  // Linear interpolation for fractional notes
+  return _mtofTable[idx] + (_mtofTable[idx + 1] - _mtofTable[idx]) * frac;
 }
 
 /** Return a MIDI pitch from a frequency 
@@ -623,18 +675,38 @@ float intervalFreq(float freqVal, int interval) {
   return f;
 }
 
-/** Return left amount for a pan position 0.0-1.0 */
-float panLeft(float panVal) {
-  if (panVal == 0) return 1;
-  if (panVal == 1) return 0;
-  return max(0.0, min(1.0, cos(6.291 * panVal * 0.25)));
+// Pre-computed pan lookup table (17 entries for 0.0-1.0 in 1/16 steps)
+// Values are cos/sin constant-power panning: L=cos(pan*π/2), R=sin(pan*π/2)
+// At center (0.5), both L and R = 0.707 for equal power
+static const float _panTableL[17] = {
+  1.000f, 0.995f, 0.981f, 0.957f, 0.924f, 0.882f, 0.831f, 0.773f, 0.707f,
+  0.634f, 0.556f, 0.471f, 0.383f, 0.290f, 0.195f, 0.098f, 0.000f
+};
+static const float _panTableR[17] = {
+  0.000f, 0.098f, 0.195f, 0.290f, 0.383f, 0.471f, 0.556f, 0.634f, 0.707f,
+  0.773f, 0.831f, 0.882f, 0.924f, 0.957f, 0.981f, 0.995f, 1.000f
+};
+
+/** Return left amount for a pan position 0.0-1.0 (fast lookup version) */
+inline float panLeft(float panVal) {
+  if (panVal <= 0.0f) return 1.0f;
+  if (panVal >= 1.0f) return 0.0f;
+  // Linear interpolation in lookup table
+  float idx = panVal * 16.0f;
+  int i = (int)idx;
+  float frac = idx - i;
+  return _panTableL[i] + (_panTableL[i + 1] - _panTableL[i]) * frac;
 }
 
-/** Return right amount for a pan position 0.0-1.0 */
-float panRight(float panVal) {
-  if (panVal == 0) return 0;
-  if (panVal == 1) return 1;
-  return max(0.0, min(1.0, cos(6.291 * (panVal * 0.25 + 0.75))));
+/** Return right amount for a pan position 0.0-1.0 (fast lookup version) */
+inline float panRight(float panVal) {
+  if (panVal <= 0.0f) return 0.0f;
+  if (panVal >= 1.0f) return 1.0f;
+  // Linear interpolation in lookup table
+  float idx = panVal * 16.0f;
+  int i = (int)idx;
+  float frac = idx - i;
+  return _panTableR[i] + (_panTableR[i + 1] - _panTableR[i]) * frac;
 }
 
 /** Return scaled floating point value 
