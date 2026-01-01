@@ -23,27 +23,32 @@ public:
 	*/
   Osc() {}
 
-	/** Constructor.
-	* @param TABLE_NAME the name of the array the Osc will be using.
-  * Table is a int16_t array of TABLE_SIZE - values rabge from -16383 to 16383 (which seems like 15, not 16 bits???)
-  * Use sinGen() or similar function in M16.h to fill the table in the setup() function before using
-	*/
-	// Osc(int16_t * TABLE_NAME):waveTable(TABLE_NAME) {
-  //   setTable(TABLE_NAME);
-  // } 
-
   /** Updates the phase according to the current frequency and returns the sample at the new phase position.
 	* @return outSamp The next sample.
 	*/
 	inline
 	int16_t next() {
-    int idx = phase_fractional >> 16; // 16.16 fixed-point: extract integer index
-    int32_t sampVal = bandPtr[idx];
-    // Low-frequency smoothing (bandPtr == waveTable means low band)
-    if (bandPtr == waveTable) {
-      sampVal = (sampVal + prevSampVal) >> 1;
-      prevSampVal = sampVal;
+    int32_t sampVal;
+
+    // Fast path: atomic phase increment for thread-safe dual-core operation
+    // Pulse width, noise, and crackle modes use the slower non-atomic path
+    #if IS_ESP32() || IS_RP2040()
+    if (!pulseWidthOn && !isNoise && !isCrackle) {
+      // Atomic fetch-and-add: each core gets a unique phase value
+      uint32_t myPhase = __atomic_fetch_add(&phase_fractional, phase_increment_fractional, __ATOMIC_RELAXED);
+      int idx = (myPhase >> 16) & (TABLE_SIZE - 1);
+      sampVal = bandPtr[idx];
+
+      if (spreadActive) {
+        sampVal = doSpreadAtomic(sampVal);
+      }
+      return sampVal;
     }
+    #endif
+
+    // Non-atomic path for pulse width, noise, crackle modes (or single-core platforms)
+    int idx = phase_fractional >> 16;
+    sampVal = bandPtr[idx];
     incrementPhase();
     if (spreadActive) {
       sampVal = doSpread(sampVal);
@@ -52,40 +57,82 @@ public:
 	}
 
   /** Updates the phase and returns the next sample with interpolation.
-   * Uses cubic interpolation above 1kHz, linear interpolation above 500Hz, average filter below.
+   * Uses cubic interpolation for high band (>831Hz), linear for mid band (>208Hz),
+   * smoothing for low band. Thresholds match band selection in setFreq().
    * Higher quality than next() at ~5-15% more CPU cost.
    * @return sampVal The next sample.
    */
   inline
   int16_t next2() {
-    // Extract table index and fractional part for interpolation
-    int idx = (phase_fractional >> 16) & (TABLE_SIZE - 1);
     int32_t sampVal;
-    if (frequency > 1000.0f) {
-      // Cubic interpolation for high frequencies (4-point Hermite)
-      float t = (float)((phase_fractional >> 6) & 0x3FF) * 0.0009765625f;  // 0-1
+    uint32_t myPhase;
+    int idx;
+
+    // Fast path: atomic phase increment for thread-safe dual-core operation
+    #if IS_ESP32() || IS_RP2040()
+    if (!pulseWidthOn && !isNoise && !isCrackle) {
+      // Atomic fetch-and-add: each core gets a unique phase value
+      myPhase = __atomic_fetch_add(&phase_fractional, phase_increment_fractional, __ATOMIC_RELAXED);
+      idx = (myPhase >> 16) & (TABLE_SIZE - 1);
+
+      if (frequency > 831.0f) {
+        // Cubic interpolation for high frequencies (4-point Hermite)
+        float t = (float)(myPhase & 0xFFFF) * (1.0f / 65536.0f);
+        float t2 = t * t;
+        float t3 = t2 * t;
+        int16_t sm1 = bandPtr[(idx - 1) & (TABLE_SIZE - 1)];
+        int16_t s0 = bandPtr[idx];
+        int16_t s1 = bandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+        int16_t s2 = bandPtr[(idx + 2) & (TABLE_SIZE - 1)];
+        float a0 = -0.5f * sm1 + 1.5f * s0 - 1.5f * s1 + 0.5f * s2;
+        float a1 = sm1 - 2.5f * s0 + 2.0f * s1 - 0.5f * s2;
+        float a2 = -0.5f * sm1 + 0.5f * s1;
+        float a3 = s0;
+        sampVal = (int32_t)(a0 * t3 + a1 * t2 + a2 * t + a3);
+        if (sampVal > MAX_16) sampVal = MAX_16;
+        else if (sampVal < MIN_16) sampVal = MIN_16;
+      } else if (frequency > 208.0f) {
+        // Linear interpolation for mid frequencies
+        int frac = (myPhase >> 6) & 0x3FF;
+        int16_t s0 = bandPtr[idx];
+        int16_t s1 = bandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+        sampVal = s0 + (((s1 - s0) * frac) >> 10);
+      } else {
+        // Low-frequency: direct lookup (smoothing handled at output stage)
+        sampVal = bandPtr[idx];
+      }
+
+      if (spreadActive) {
+        sampVal = doSpreadAtomic(sampVal);
+      }
+      return sampVal;
+    }
+    #endif
+
+    // Non-atomic path for pulse width, noise, crackle modes (or single-core platforms)
+    idx = (phase_fractional >> 16) & (TABLE_SIZE - 1);
+    if (frequency > 831.0f) {
+      float t = (float)(phase_fractional & 0xFFFF) * (1.0f / 65536.0f);
       float t2 = t * t;
       float t3 = t2 * t;
-      // Get 4 samples: s[-1], s[0], s[1], s[2]
       int16_t sm1 = bandPtr[(idx - 1) & (TABLE_SIZE - 1)];
       int16_t s0 = bandPtr[idx];
       int16_t s1 = bandPtr[(idx + 1) & (TABLE_SIZE - 1)];
       int16_t s2 = bandPtr[(idx + 2) & (TABLE_SIZE - 1)];
-      // Hermite interpolation coefficients
       float a0 = -0.5f * sm1 + 1.5f * s0 - 1.5f * s1 + 0.5f * s2;
       float a1 = sm1 - 2.5f * s0 + 2.0f * s1 - 0.5f * s2;
       float a2 = -0.5f * sm1 + 0.5f * s1;
       float a3 = s0;
       sampVal = (int32_t)(a0 * t3 + a1 * t2 + a2 * t + a3);
-    } else if (frequency > 500.0f) {
-      // Linear interpolation for lower frequencies
-      int frac = (phase_fractional >> 6) & 0x3FF;  // 10-bit fractional (0-1023)
+      if (sampVal > MAX_16) sampVal = MAX_16;
+      else if (sampVal < MIN_16) sampVal = MIN_16;
+    } else if (frequency > 208.0f) {
+      int frac = (phase_fractional >> 6) & 0x3FF;
       int16_t s0 = bandPtr[idx];
       int16_t s1 = bandPtr[(idx + 1) & (TABLE_SIZE - 1)];
       sampVal = s0 + (((s1 - s0) * frac) >> 10);
     } else {
-      int32_t sampVal = bandPtr[idx];
-      // Low-frequency smoothing (bandPtr == waveTable means low band)
+      sampVal = bandPtr[idx];
       if (bandPtr == waveTable) {
         sampVal = (sampVal + prevSampVal) >> 1;
         prevSampVal = sampVal;
@@ -1084,6 +1131,20 @@ private:
     incrementSpreadPhase();
     return sampVal;
 	}
+
+  #if IS_ESP32() || IS_RP2040()
+  /** Returns a spread sample using atomic phase updates for thread-safety. */
+  inline
+  int16_t doSpreadAtomic(int32_t sampVal) {
+    // Atomic fetch-and-add for spread phases
+    uint32_t myPhaseS1 = __atomic_fetch_add(&phase_fractional_s1, phase_increment_fractional_s1, __ATOMIC_RELAXED);
+    uint32_t myPhaseS2 = __atomic_fetch_add(&phase_fractional_s2, phase_increment_fractional_s2, __ATOMIC_RELAXED);
+    int32_t spreadSamp1 = waveTable[(myPhaseS1 >> 16) & (TABLE_SIZE - 1)];
+    int32_t spreadSamp2 = waveTable[(myPhaseS2 >> 16) & (TABLE_SIZE - 1)];
+    sampVal = clip16((sampVal + ((spreadSamp1 * 500)>>10) + ((spreadSamp2 * 500)>>10))>>1);
+    return sampVal;
+  }
+  #endif
 };
 
 #endif /* OSC_H_ */
