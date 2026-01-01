@@ -33,6 +33,7 @@ void setup() {
   int newSet [] = {48, 52, 55, 58, 60, 64};
   aOsc.setPitch(pitch);
   filter.setFreq(3500);
+  // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
   audioStart();
 }
 

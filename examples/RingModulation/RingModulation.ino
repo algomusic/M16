@@ -12,6 +12,7 @@ void setup() {
   Serial.begin(115200);
   osc1.sqrGen(); // fill osc wavtetable
   osc2.triGen(); // fill
+  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
   audioStart();
 }
 

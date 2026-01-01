@@ -32,7 +32,7 @@ void setup() {
   ampEnv1.setDecay(150);
   ampEnv1.setSustain(0);
 
-  seti2sPins(38, 39, 40, 41); // change ESP32 defaults if needed
+  // seti2sPins(38, 39, 40, 41); // change ESP32 defaults if needed
   audioStart();
 }
 

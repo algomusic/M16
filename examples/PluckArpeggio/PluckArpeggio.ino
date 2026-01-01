@@ -37,6 +37,7 @@ void setup() {
   filter.setFreq(10000);
   stepTime = millis();
   envTime = millis();
+  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
   audioStart();
 }
 

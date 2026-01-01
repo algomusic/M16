@@ -35,6 +35,7 @@ void setup() {
   lfo1.setFreq(0.5);
   generateTransferFunction();
   effect1.setShapeTable(waveShapeTable, TABLE_SIZE); // install the shaping wavetable
+  // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
   audioStart();
 }
 

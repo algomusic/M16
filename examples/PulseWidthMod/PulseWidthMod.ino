@@ -26,6 +26,7 @@ void setup() {
   filter.setFreq(1500);
   LFO1.setFreq(0.1); 
   aOsc1.setPulseWidth(0.25);
+  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
   audioStart();
 }
 

@@ -28,6 +28,7 @@ void setup() {
   modOsc.setPitch(69);
   modEnv.setAttack(400);
   modEnv.setRelease(1600);
+  // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
   audioStart();
 }
 

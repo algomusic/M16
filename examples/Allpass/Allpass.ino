@@ -12,7 +12,7 @@ int16_t impulse = 0;
 void setup() {
   Serial.begin(115200);
   delay(200);
-  // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change ESP32 defaults
+  // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change defaults
   audioStart();
 }
 

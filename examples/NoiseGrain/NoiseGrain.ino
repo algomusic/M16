@@ -15,6 +15,7 @@ void setup() {
   aOsc1.noiseGen(1); // fill the wavetable with a specified grain size
   aOsc1.setNoise(true);
   ampEnv.setRelease(1000);
+  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
   audioStart();
 }
 

@@ -18,7 +18,7 @@ void setup() {
   delay(200);
   osc1.triGen(); // fill the wavetable
   osc1.setPitch(69);
-  // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change ESP32 defaults
+  // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change defaults
   audioStart();
 }
 

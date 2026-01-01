@@ -19,6 +19,7 @@ void setup() {
   aOsc1.sawGen(); // fill the internal osc wavetable
   aOsc1.setPitch(69);
   filter.setFreq(5000);
+  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
   audioStart();
 }
 

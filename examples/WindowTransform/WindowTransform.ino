@@ -26,7 +26,7 @@ void setup() {
   lfo.sinGen(); // fill
   lfo.setFreq(0.1); // Hertz
   // osc1.setSpread(0.005); // make more complex
-  // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change ESP32 defaults
+  // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change defaults
   audioStart();
 }
 

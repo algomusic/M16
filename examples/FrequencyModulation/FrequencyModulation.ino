@@ -15,6 +15,7 @@ void setup() {
   Osc::sinGen(sineTable); // fill wavetable
   aOsc1.setTable(sineTable); // assign wave to osc1
   aOsc2.setTable(sineTable); // assign wave to osc2
+  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
   audioStart();
 }
 

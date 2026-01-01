@@ -39,6 +39,7 @@ void loop() {
     osc1.setPitch(pitch);
     ampEnv.setAttack(rand(100));
     ampEnv.setRelease(rand(1000));
+    // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
     ampEnv.start();
   }
 }
