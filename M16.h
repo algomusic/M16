@@ -217,8 +217,8 @@ inline bool isPSRAMAvailable() {
 
   // Configuration macros/constants
   // #define SAMPLE_RATE         44100       // defined above
-  #define DMA_BUFFERS         8
-  #define DMA_BUFFER_LENGTH   64
+  #define DMA_BUFFERS         4   // 8
+  #define DMA_BUFFER_LENGTH   256 // 64
 
   // Channel (I2S port) config
   i2s_chan_config_t chan_cfg = {
@@ -259,16 +259,28 @@ inline bool isPSRAMAvailable() {
   void audioCallback(void* param) {
       for (;;) {
           audioUpdate();
-          // yield(); // i2s_write_samples() already has a yield()
+          yield(); // i2s_write_samples() already has a yield()
       }
   }
 
+  // Output smoothing state - helps catch any remaining discontinuities from dual-core races
+  static int32_t _prevOutL = 0;
+  static int32_t _prevOutR = 0;
+
   bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+      // Lightweight one-pole low-pass filter for output smoothing
+      // Catches any remaining discontinuities from filter state races, etc.
+      // Formula: out = (in + prevOut) >> 1  (very lightweight: one add, one shift)
+      int32_t smoothL = (leftSample + _prevOutL) >> 1;
+      int32_t smoothR = (rightSample + _prevOutR) >> 1;
+      _prevOutL = smoothL;
+      _prevOutR = smoothR;
+
       uint8_t sampleBuffer[4];
-      sampleBuffer[0] = rightSample & 0xFF;
-      sampleBuffer[1] = (rightSample >> 8) & 0xFF;
-      sampleBuffer[2] = leftSample & 0xFF;
-      sampleBuffer[3] = (leftSample >> 8) & 0xFF;
+      sampleBuffer[0] = smoothR & 0xFF;
+      sampleBuffer[1] = (smoothR >> 8) & 0xFF;
+      sampleBuffer[2] = smoothL & 0xFF;
+      sampleBuffer[3] = (smoothL >> 8) & 0xFF;
 
       size_t bytesWritten = 0;
       esp_err_t err = i2s_channel_write(tx_handle, sampleBuffer, 4, &bytesWritten, portMAX_DELAY);
@@ -300,8 +312,7 @@ inline bool isPSRAMAvailable() {
       i2s_channel_enable(tx_handle);
       i2s_channel_enable(rx_handle);
 
-      // Dual-core audio tasks with INCREASED stack size for complex DSP
-      // Thread-safety is handled via spinlocks in Samp class for 64-bit phase operations
+      // Dual-core audio tasks with increased stack size for complex DSP
       xTaskCreatePinnedToCore(
           audioCallback,
           "FillAudioBuffer0",
@@ -452,9 +463,18 @@ inline bool isPSRAMAvailable() {
 
   void audioUpdate(); // forward declaration
 
+  // Output smoothing state for RP2040 (consistency with ESP32)
+  static int32_t _prevOutL = 0;
+  static int32_t _prevOutR = 0;
+
   void i2s_write_samples(int16_t leftSample, int16_t rightSample) {
-    leftAudioOuputValue = leftSample;
-    rightAudioOuputValue = rightSample;
+    // Lightweight one-pole low-pass filter for output smoothing
+    int32_t smoothL = (leftSample + _prevOutL) >> 1;
+    int32_t smoothR = (rightSample + _prevOutR) >> 1;
+    _prevOutL = smoothL;
+    _prevOutR = smoothR;
+    leftAudioOuputValue = smoothL;
+    rightAudioOuputValue = smoothR;
   }
 
   // Core 1: Dedicated audio generation - optimized tight loop
