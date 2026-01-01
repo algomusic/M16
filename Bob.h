@@ -34,7 +34,7 @@ public:
   }
 
   /** Process one sample through the filter
-   * @param samp Input audio sample
+   * @param samp Input audio sample, clipped to allow overdriven input
    * @return Filtered sample
    */
   inline int16_t next(int32_t samp) {
@@ -95,6 +95,17 @@ public:
 
       ft3_sum += ft3;
     }
+
+    // Clamp state values to prevent runaway at high resonance
+    // and check for NaN/infinity which would permanently break the filter
+    auto clampState = [](float v) -> float {
+      if (v != v || v > 1e6f || v < -1e6f) return 0.0f;  // NaN or overflow: reset
+      return (v > 4.0f) ? 4.0f : ((v < -4.0f) ? -4.0f : v);
+    };
+    z0_0 = clampState(z0_0); z0_1 = clampState(z0_1);
+    z0_2 = clampState(z0_2); z0_3 = clampState(z0_3);
+    z1_0 = clampState(z1_0); z1_1 = clampState(z1_1);
+    z1_2 = clampState(z1_2); z1_3 = clampState(z1_3);
 
     // Write state back
     z0_[0] = z0_0; z0_[1] = z0_1; z0_[2] = z0_2; z0_[3] = z0_3;
