@@ -20,6 +20,7 @@
 #define ARP_UP_DOWN 2
 #define ARP_DOWN 3
 #define ARP_RANDOM 4
+#define ARP_RANDOM2 5  // UP_DOWN with 20% chance of octave shift
 
 class Arp {
 
@@ -42,7 +43,7 @@ class Arp {
       if (arpDirection == ARP_DOWN) {
         arpIndex = arpSize-1;
         currOctave = octaveRange - 1;
-        upDownDirection == ARP_UP;
+        upDownDirection = ARP_UP;
       }
     }
 
@@ -52,11 +53,11 @@ class Arp {
       if (arpDirection == ARP_DOWN) {
         arpIndex = arpSize-1;
         currOctave = octaveRange - 1;
-        upDownDirection == ARP_UP;
       } else {
         arpIndex = 0;
         currOctave = 0;
       }
+      upDownDirection = ARP_UP;  // Always reset direction for UP_DOWN mode
     }
 
     /* Return the next arpeggitor value */
@@ -75,13 +76,20 @@ class Arp {
         return nextValue;
       }
       if (arpDirection == ARP_UP_DOWN) {
+        // Handle single note case - just play the note repeatedly
+        if (arpSize == 1) {
+          nextValue = sortedValues[0] + (currOctave * 12);
+          currOctave++;
+          if (currOctave >= octaveRange) currOctave = 0;
+          prevValue = nextValue;
+          return nextValue;
+        }
         if (upDownDirection == ARP_UP) {
           nextValue = sortedValues[arpIndex++] + (currOctave * 12);
           if (arpIndex >= arpSize) {
             if (currOctave >= octaveRange - 1) {
               upDownDirection = ARP_DOWN;
-              // Serial.println("down");
-              arpIndex = max(0, arpSize-2);
+              arpIndex = arpSize - 2;  // Safe: arpSize >= 2 here
               currOctave = octaveRange - 1;
             } else {
               currOctave++;
@@ -93,11 +101,10 @@ class Arp {
           if (arpIndex < 0) {
             if (currOctave > 0) {
               currOctave--;
-              arpIndex = arpSize-1;
+              arpIndex = arpSize - 1;
             } else {
               upDownDirection = ARP_UP;
-              // Serial.println("up");
-              arpIndex = 1;
+              arpIndex = 1;  // Safe: arpSize >= 2 here
             }
           }
         }
@@ -107,6 +114,61 @@ class Arp {
       if (arpDirection == ARP_DOWN) {
         nextValue = sortedValues[arpIndex--] + (currOctave * 12);
         updateDownIndex();
+        return nextValue;
+      }
+      if (arpDirection == ARP_RANDOM) {
+        // Random pitch from available pitches
+        if (arpSize < 1) arpSize = 1;  // Safety check
+        if (octaveRange < 1) octaveRange = 1;  // Safety check
+        int randIndex = random(arpSize);
+        if (randIndex >= arpSize) randIndex = arpSize - 1;  // Bounds check
+        // Random octave within range
+        int randOctave = random(octaveRange);
+        nextValue = sortedValues[randIndex] + (randOctave * 12);
+        prevValue = nextValue;
+        return nextValue;
+      }
+      if (arpDirection == ARP_RANDOM2) {
+        // UP_DOWN pattern with 30% chance of octave shift
+        if (arpSize < 1) arpSize = 1;  // Safety check
+        if (octaveRange < 1) octaveRange = 1;  // Safety check
+        // Handle single note case
+        if (arpSize == 1) {
+          nextValue = sortedValues[0] + (currOctave * 12);
+          currOctave++;
+          if (currOctave >= octaveRange) currOctave = 0;
+        } else if (upDownDirection == ARP_UP) {
+          nextValue = sortedValues[arpIndex++] + (currOctave * 12);
+          if (arpIndex >= arpSize) {
+            if (currOctave >= octaveRange - 1) {
+              upDownDirection = ARP_DOWN;
+              arpIndex = arpSize - 2;
+              currOctave = octaveRange - 1;
+            } else {
+              currOctave++;
+              arpIndex = 0;
+            }
+          }
+        } else {
+          nextValue = sortedValues[arpIndex--] + (currOctave * 12);
+          if (arpIndex < 0) {
+            if (currOctave > 0) {
+              currOctave--;
+              arpIndex = arpSize - 1;
+            } else {
+              upDownDirection = ARP_UP;
+              arpIndex = 1;
+            }
+          }
+        }
+        // 30% chance of octave shift (1-2 octaves max, based on range setting)
+        if (random(100) < 30) {
+          int shiftRange = min(2, octaveRange);  // Cap at 2 octaves max
+          int octaveShift = (random(shiftRange) + 1) * 12;  // 1 or 2 octaves
+          int direction = (random(2) == 0) ? -1 : 1;
+          nextValue += octaveShift * direction;
+        }
+        prevValue = nextValue;
         return nextValue;
       }
       return 0; // in case it ever gets here
@@ -121,27 +183,59 @@ class Arp {
     /* Update the arp values and size (max 12 values)*/
     inline
     void setValues(int * values, int size) {
-      if (size > 12) return;
+      if (size > 12 || size < 1) return;
       arpSize = size;
       for (int i=0; i<arpSize; i++) {
           initValues[i] = values[i];
           sortedValues[i] = values[i];
       }
       sort(sortedValues, size);
+      // Validate arpIndex against new size to prevent out-of-bounds
+      if (arpIndex >= arpSize) arpIndex = arpSize - 1;
+      if (arpIndex < 0) arpIndex = 0;
     }
 
     /* Specify the arpeggiation direction
-    *  Choices are: ARP_ORDER, ARP_UP, ARP_UP_DOWN, ARP_DOWN, ARP_RANDOM
+    *  Choices are: ARP_ORDER, ARP_UP, ARP_UP_DOWN, ARP_DOWN, ARP_RANDOM, ARP_RANDOM2
     */
     inline
     void setDirection(int newDir) {
-      arpDirection = newDir; // add checks
+      if (newDir == arpDirection) return;  // No change
+      arpDirection = newDir;
+      // Reset state to safe values for new direction
+      if (arpDirection == ARP_DOWN) {
+        arpIndex = max(0, arpSize - 1);
+        currOctave = max(0, octaveRange - 1);
+      } else {
+        arpIndex = 0;
+        currOctave = 0;
+      }
+      upDownDirection = ARP_UP;  // Reset for UP_DOWN modes
+      // Ensure valid bounds
+      if (arpIndex >= arpSize) arpIndex = max(0, arpSize - 1);
+      if (currOctave >= octaveRange) currOctave = max(0, octaveRange - 1);
     }
 
     /* Specify the number of octaves to span */
     inline
     void setRange(int range) {
-      octaveRange = min(8, max(1, range));
+      int newRange = min(8, max(1, range));
+      if (newRange == octaveRange) return;  // No change
+      octaveRange = newRange;
+      // Reset to safe state for new range
+      if (currOctave >= octaveRange) {
+        currOctave = octaveRange - 1;
+      }
+      // For DOWN direction, ensure we start at top of new range
+      if (arpDirection == ARP_DOWN) {
+        currOctave = octaveRange - 1;
+      }
+      // Reset upDownDirection to prevent stuck states in UP_DOWN modes
+      if (arpDirection == ARP_UP_DOWN || arpDirection == ARP_RANDOM2) {
+        upDownDirection = ARP_UP;
+        arpIndex = 0;
+        currOctave = 0;
+      }
     }
 
      /** Return the number of milliseconds between steps
