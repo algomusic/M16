@@ -89,7 +89,7 @@ class Arp {
           if (arpIndex >= arpSize) {
             if (currOctave >= octaveRange - 1) {
               upDownDirection = ARP_DOWN;
-              arpIndex = arpSize - 2;  // Safe: arpSize >= 2 here
+              arpIndex = max(0, arpSize - 2);
               currOctave = octaveRange - 1;
             } else {
               currOctave++;
@@ -104,7 +104,7 @@ class Arp {
               arpIndex = arpSize - 1;
             } else {
               upDownDirection = ARP_UP;
-              arpIndex = 1;  // Safe: arpSize >= 2 here
+              arpIndex = min(1, arpSize - 1);
             }
           }
         }
@@ -118,11 +118,7 @@ class Arp {
       }
       if (arpDirection == ARP_RANDOM) {
         // Random pitch from available pitches
-        if (arpSize < 1) arpSize = 1;  // Safety check
-        if (octaveRange < 1) octaveRange = 1;  // Safety check
         int randIndex = random(arpSize);
-        if (randIndex >= arpSize) randIndex = arpSize - 1;  // Bounds check
-        // Random octave within range
         int randOctave = random(octaveRange);
         nextValue = sortedValues[randIndex] + (randOctave * 12);
         prevValue = nextValue;
@@ -130,8 +126,6 @@ class Arp {
       }
       if (arpDirection == ARP_RANDOM2) {
         // UP_DOWN pattern with 30% chance of octave shift
-        if (arpSize < 1) arpSize = 1;  // Safety check
-        if (octaveRange < 1) octaveRange = 1;  // Safety check
         // Handle single note case
         if (arpSize == 1) {
           nextValue = sortedValues[0] + (currOctave * 12);
@@ -142,7 +136,7 @@ class Arp {
           if (arpIndex >= arpSize) {
             if (currOctave >= octaveRange - 1) {
               upDownDirection = ARP_DOWN;
-              arpIndex = arpSize - 2;
+              arpIndex = max(0, arpSize - 2);
               currOctave = octaveRange - 1;
             } else {
               currOctave++;
@@ -157,7 +151,7 @@ class Arp {
               arpIndex = arpSize - 1;
             } else {
               upDownDirection = ARP_UP;
-              arpIndex = 1;
+              arpIndex = min(1, arpSize - 1);  // Safe for arpSize >= 1
             }
           }
         }
@@ -211,9 +205,6 @@ class Arp {
         currOctave = 0;
       }
       upDownDirection = ARP_UP;  // Reset for UP_DOWN modes
-      // Ensure valid bounds
-      if (arpIndex >= arpSize) arpIndex = max(0, arpSize - 1);
-      if (currOctave >= octaveRange) currOctave = max(0, octaveRange - 1);
     }
 
     /* Specify the number of octaves to span */
