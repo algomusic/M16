@@ -34,10 +34,19 @@ public:
     // Pulse width, noise, and crackle modes use the slower non-atomic path
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
+      // Cache volatile values atomically to prevent torn reads during setFreq()
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+
+      // Safety check: if bandPtr is null or increment is zero, return silence
+      if (cachedBandPtr == nullptr || cachedIncrement == 0) {
+        return 0;
+      }
+
       // Atomic fetch-and-add: each core gets a unique phase value
-      uint32_t myPhase = __atomic_fetch_add(&phase_fractional, phase_increment_fractional, __ATOMIC_RELAXED);
+      uint32_t myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
       int idx = (myPhase >> 16) & (TABLE_SIZE - 1);
-      sampVal = bandPtr[idx];
+      sampVal = cachedBandPtr[idx];
 
       if (spreadActive) {
         sampVal = doSpreadAtomic(sampVal);
@@ -71,19 +80,29 @@ public:
     // Fast path: atomic phase increment for thread-safe dual-core operation
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
+      // Cache volatile values atomically to prevent torn reads during setFreq()
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+      float cachedFreq = frequency;  // Used for band selection decision
+
+      // Safety check: if bandPtr is null or increment is zero, return silence
+      if (cachedBandPtr == nullptr || cachedIncrement == 0) {
+        return 0;
+      }
+
       // Atomic fetch-and-add: each core gets a unique phase value
-      myPhase = __atomic_fetch_add(&phase_fractional, phase_increment_fractional, __ATOMIC_RELAXED);
+      myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
       idx = (myPhase >> 16) & (TABLE_SIZE - 1);
 
-      if (frequency > 831.0f) {
+      if (cachedFreq > 831.0f) {
         // Cubic interpolation for high frequencies (4-point Hermite)
         float t = (float)(myPhase & 0xFFFF) * (1.0f / 65536.0f);
         float t2 = t * t;
         float t3 = t2 * t;
-        int16_t sm1 = bandPtr[(idx - 1) & (TABLE_SIZE - 1)];
-        int16_t s0 = bandPtr[idx];
-        int16_t s1 = bandPtr[(idx + 1) & (TABLE_SIZE - 1)];
-        int16_t s2 = bandPtr[(idx + 2) & (TABLE_SIZE - 1)];
+        int16_t sm1 = cachedBandPtr[(idx - 1) & (TABLE_SIZE - 1)];
+        int16_t s0 = cachedBandPtr[idx];
+        int16_t s1 = cachedBandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+        int16_t s2 = cachedBandPtr[(idx + 2) & (TABLE_SIZE - 1)];
         float a0 = -0.5f * sm1 + 1.5f * s0 - 1.5f * s1 + 0.5f * s2;
         float a1 = sm1 - 2.5f * s0 + 2.0f * s1 - 0.5f * s2;
         float a2 = -0.5f * sm1 + 0.5f * s1;
@@ -91,15 +110,15 @@ public:
         sampVal = (int32_t)(a0 * t3 + a1 * t2 + a2 * t + a3);
         if (sampVal > MAX_16) sampVal = MAX_16;
         else if (sampVal < MIN_16) sampVal = MIN_16;
-      } else if (frequency > 208.0f) {
+      } else if (cachedFreq > 208.0f) {
         // Linear interpolation for mid frequencies
         int frac = (myPhase >> 6) & 0x3FF;
-        int16_t s0 = bandPtr[idx];
-        int16_t s1 = bandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+        int16_t s0 = cachedBandPtr[idx];
+        int16_t s1 = cachedBandPtr[(idx + 1) & (TABLE_SIZE - 1)];
         sampVal = s0 + (((s1 - s0) * frac) >> 10);
       } else {
         // Low-frequency: direct lookup (smoothing handled at output stage)
-        sampVal = bandPtr[idx];
+        sampVal = cachedBandPtr[idx];
       }
 
       if (spreadActive) {
