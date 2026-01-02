@@ -40,32 +40,49 @@ public:
   inline int16_t next(int32_t samp) {
     const float input = (float)clip16(samp) * MAX_16_INV;
 
+    // Cache coefficients atomically to prevent race conditions with setFreq()/setRes()
+    // This ensures we use a consistent set of coefficients for the entire sample
+    float cached_alpha, cached_KQ, cached_pbg;
+    #if defined(ESP32) || defined(ESP_PLATFORM)
+    uint32_t tmp;
+    tmp = __atomic_load_n((uint32_t*)&alpha_, __ATOMIC_RELAXED);
+    cached_alpha = *(float*)&tmp;
+    tmp = __atomic_load_n((uint32_t*)&KQ_, __ATOMIC_RELAXED);
+    cached_KQ = *(float*)&tmp;
+    tmp = __atomic_load_n((uint32_t*)&pbg_, __ATOMIC_RELAXED);
+    cached_pbg = *(float*)&tmp;
+    #else
+    cached_alpha = alpha_;
+    cached_KQ = KQ_;
+    cached_pbg = pbg_;
+    #endif
+
     // Local copies of state for faster access
     float z0_0 = z0_[0], z0_1 = z0_[1], z0_2 = z0_[2], z0_3 = z0_[3];
     float z1_0 = z1_[0], z1_1 = z1_[1], z1_2 = z1_[2], z1_3 = z1_[3];
 
-    const float pbg_in = pbg_ * input;
+    const float pbg_in = cached_pbg * input;
     float ft3_sum;
 
     // First sub-sample (interp = 0, so inMix = input)
     {
-      float u = input - (z1_3 - pbg_in) * KQ_;
+      float u = input - (z1_3 - pbg_in) * cached_KQ;
       u = softTanh(u);
 
       float ft0 = u * a_ + z0_0 * b_ - z1_0;
-      ft0 = ft0 * alpha_ + z1_0;
+      ft0 = ft0 * cached_alpha + z1_0;
       z1_0 = ft0; z0_0 = u;
 
       float ft1 = ft0 * a_ + z0_1 * b_ - z1_1;
-      ft1 = ft1 * alpha_ + z1_1;
+      ft1 = ft1 * cached_alpha + z1_1;
       z1_1 = ft1; z0_1 = ft0;
 
       float ft2 = ft1 * a_ + z0_2 * b_ - z1_2;
-      ft2 = ft2 * alpha_ + z1_2;
+      ft2 = ft2 * cached_alpha + z1_2;
       z1_2 = ft2; z0_2 = ft1;
 
       float ft3 = ft2 * a_ + z0_3 * b_ - z1_3;
-      ft3 = ft3 * alpha_ + z1_3;
+      ft3 = ft3 * cached_alpha + z1_3;
       z1_3 = ft3; z0_3 = ft2;
 
       ft3_sum = ft3;
@@ -74,23 +91,23 @@ public:
     // Second sub-sample (interp = 0.5, so inMix = average of old and new input)
     {
       float inMix = (oldinput_ + input) * 0.5f;
-      float u = inMix - (z1_3 - pbg_in) * KQ_;
+      float u = inMix - (z1_3 - pbg_in) * cached_KQ;
       u = softTanh(u);
 
       float ft0 = u * a_ + z0_0 * b_ - z1_0;
-      ft0 = ft0 * alpha_ + z1_0;
+      ft0 = ft0 * cached_alpha + z1_0;
       z1_0 = ft0; z0_0 = u;
 
       float ft1 = ft0 * a_ + z0_1 * b_ - z1_1;
-      ft1 = ft1 * alpha_ + z1_1;
+      ft1 = ft1 * cached_alpha + z1_1;
       z1_1 = ft1; z0_1 = ft0;
 
       float ft2 = ft1 * a_ + z0_2 * b_ - z1_2;
-      ft2 = ft2 * alpha_ + z1_2;
+      ft2 = ft2 * cached_alpha + z1_2;
       z1_2 = ft2; z0_2 = ft1;
 
       float ft3 = ft2 * a_ + z0_3 * b_ - z1_3;
-      ft3 = ft3 * alpha_ + z1_3;
+      ft3 = ft3 * cached_alpha + z1_3;
       z1_3 = ft3; z0_3 = ft2;
 
       ft3_sum += ft3;
