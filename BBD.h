@@ -39,6 +39,8 @@ private:
 
   int16_t prevOutValue = 0;
   int16_t holdValue = 0;
+  int32_t smoothedOut = 0;  // Per-sample smoothed output
+  uint16_t smoothCoeff = 8192;  // Smoothing coefficient (higher = more smoothing)
   int32_t inputAccum = 0;
   uint8_t inputCount = 0;
   byte filtered = 1; 
@@ -122,6 +124,8 @@ public:
     rate = max(0.01f, min(1.0f, rate));
     scanRate = (uint16_t)(rate * 65536.0f);
     if (scanRate < 655) scanRate = 655;
+    // Adjust output smoothing: more smoothing at lower scan rates (longer delays)
+    smoothCoeff = (uint16_t)(2048.0f + rate * 6144.0f);
   }
 
   /** @return Current delay time in milliseconds */
@@ -139,6 +143,9 @@ public:
     rate = max(0.01f, min(1.0f, rate));
     scanRate = (uint16_t)(rate * 65536.0f);
     if (scanRate < 655) scanRate = 655;
+    // Adjust output smoothing: more smoothing at lower scan rates (longer delays)
+    // Lower coeff = heavier smoothing. At rate 1.0: ~8192, at rate 0.1: ~2048
+    smoothCoeff = (uint16_t)(2048.0f + rate * 6144.0f);
   }
 
   /** @return Current scan rate (0.01 to 1.0) */
@@ -192,6 +199,7 @@ public:
     phase = 0;
     bufferIndex = 0;
     holdValue = 0;
+    smoothedOut = 0;
     prevOutValue = 0;
     inputAccum = 0;
     inputCount = 0;
@@ -248,8 +256,10 @@ public:
       delayBuffer[bufferIndex] = writeValue;
       bufferIndex = (bufferIndex + 1) & BUFFER_MASK;
     }
-    // Sample-and-hold output between clock ticks
-    return holdValue;
+    // Smooth output every sample to reduce staircase buzz
+    // One-pole lowpass with rate-proportional smoothing (more at longer delays)
+    smoothedOut += ((holdValue - smoothedOut) * smoothCoeff) >> 15;
+    return (int16_t)smoothedOut;
   }
 
   /** @return Current hold value */
