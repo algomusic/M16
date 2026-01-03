@@ -722,6 +722,49 @@ class FX {
       chorusDelayTime2 = min(40.0f, max(0.0f, time * 0.74f));
     }
 
+    /** Smooth input signal using simple 1-pole lowpass filter
+     * @param input The next input sample value
+     * @param smoothingFactor Smoothing factor from 0.0 (no smoothing) to 1.0 (max smoothing - no output)
+    */
+    int32_t smooth(int32_t input, float smoothingFactor) {
+      // Simple 1-pole lowpass filter for smoothing
+      prevSmoothValue += (int32_t)((input - prevSmoothValue) * (1.0f - smoothingFactor));
+      return prevSmoothValue;
+    }
+
+    /** Smooth left channel with separate state
+     * @param input The next input sample value
+     * @param smoothingFactor Smoothing factor from 0.0 (no smoothing) to 1.0 (max smoothing)
+     */
+    int32_t smoothL(int32_t input, float smoothingFactor) {
+      prevSmoothValueL += (int32_t)((input - prevSmoothValueL) * (1.0f - smoothingFactor));
+      return prevSmoothValueL;
+    }
+
+    /** Smooth right channel with separate state
+     * @param input The next input sample value
+     * @param smoothingFactor Smoothing factor from 0.0 (no smoothing) to 1.0 (max smoothing)
+     */
+    int32_t smoothR(int32_t input, float smoothingFactor) {
+      prevSmoothValueR += (int32_t)((input - prevSmoothValueR) * (1.0f - smoothingFactor));
+      return prevSmoothValueR;
+    }
+
+    /** Smooth stereo signal with separate state per channel
+     * @param inputL Left channel input
+     * @param inputR Right channel input
+     * @param outputL Reference to left channel output
+     * @param outputR Reference to right channel output
+     * @param smoothingFactor Smoothing factor from 0.0 (no smoothing) to 1.0 (max smoothing)
+     */
+    void smoothStereo(int32_t inputL, int32_t inputR, int32_t &outputL, int32_t &outputR, float smoothingFactor) {
+      float coeff = 1.0f - smoothingFactor;
+      prevSmoothValueL += (int32_t)((inputL - prevSmoothValueL) * coeff);
+      prevSmoothValueR += (int32_t)((inputR - prevSmoothValueR) * coeff);
+      outputL = prevSmoothValueL;
+      outputR = prevSmoothValueR;
+    }
+
 
   private:
     /** Fast approximation of e^(-x) for x >= 0
@@ -796,6 +839,9 @@ class FX {
     int32_t reverbInterpSmoothL = 0, reverbInterpSmoothR = 0;
     int32_t prevSaturationOutput = 0;
     EMA aveFilter;
+    int32_t prevSmoothValue = 0;
+    int32_t prevSmoothValueL = 0;
+    int32_t prevSmoothValueR = 0;
 
     void initPluckBuffer() {
       pluckBuffer = new int[PLUCK_BUFFER_SIZE]; // create a new array
