@@ -217,8 +217,8 @@ inline bool isPSRAMAvailable() {
 
   // Configuration macros/constants
   // #define SAMPLE_RATE         44100       // defined above
-  #define DMA_BUFFERS         4   // 8
-  #define DMA_BUFFER_LENGTH   256 // 64
+  #define DMA_BUFFERS         4  // 8
+  #define DMA_BUFFER_LENGTH   512 // 64
 
   // Channel (I2S port) config
   i2s_chan_config_t chan_cfg = {
@@ -271,16 +271,20 @@ inline bool isPSRAMAvailable() {
       // Lightweight one-pole low-pass filter for output smoothing
       // Catches any remaining discontinuities from filter state races, etc.
       // Formula: out = (in + prevOut) >> 1  (very lightweight: one add, one shift)
-      int32_t smoothL = (leftSample + _prevOutL) >> 1;
-      int32_t smoothR = (rightSample + _prevOutR) >> 1;
-      _prevOutL = smoothL;
-      _prevOutR = smoothR;
+      // int32_t smoothL = (leftSample + _prevOutL) >> 1;
+      // int32_t smoothR = (rightSample + _prevOutR) >> 1;
+      // _prevOutL = smoothL;
+      // _prevOutR = smoothR;
 
       uint8_t sampleBuffer[4];
-      sampleBuffer[0] = smoothR & 0xFF;
-      sampleBuffer[1] = (smoothR >> 8) & 0xFF;
-      sampleBuffer[2] = smoothL & 0xFF;
-      sampleBuffer[3] = (smoothL >> 8) & 0xFF;
+      // sampleBuffer[0] = smoothR & 0xFF;
+      // sampleBuffer[1] = (smoothR >> 8) & 0xFF;
+      // sampleBuffer[2] = smoothL & 0xFF;
+      // sampleBuffer[3] = (smoothL >> 8) & 0xFF;
+      sampleBuffer[0] = rightSample & 0xFF;
+      sampleBuffer[1] = (rightSample >> 8) & 0xFF;
+      sampleBuffer[2] = leftSample & 0xFF;
+      sampleBuffer[3] = (leftSample >> 8) & 0xFF;
 
       size_t bytesWritten = 0;
       esp_err_t err = i2s_channel_write(tx_handle, sampleBuffer, 4, &bytesWritten, portMAX_DELAY);
