@@ -170,9 +170,19 @@ public:
   /** Set cutoff as normalized value with cubic mapping
    * @param cutoff_val 0.0-1.0
    */
-  void setCutoff(float cutoff_val) {
-    setFreq(20000.0f * cutoff_val * cutoff_val * cutoff_val);
+  void setNormalisedCutoff(float cutoff_val) {
+    _normalisedCutoff = max(0.0f, min(1.0f, cutoff_val));
+    setFreq(20000.0f * _normalisedCutoff * _normalisedCutoff * _normalisedCutoff);
   }
+
+  /** Alias for setNormalisedCutoff for backwards compatibility */
+  inline void setCutoff(float cutoff_val) { setNormalisedCutoff(cutoff_val); }
+
+  /** @return Current normalised cutoff frequency (0.0-1.0) */
+  float getNormalisedCutoff() const { return _normalisedCutoff; }
+
+  /** Alias for getNormalisedCutoff for backwards compatibility */
+  inline float getCutoff() const { return getNormalisedCutoff(); }
 
   /** @return Current cutoff frequency in Hz */
   float getFreq() const { return Fbase_; }
@@ -202,6 +212,7 @@ private:
   float pbg_;
   float oldinput_;
   float Fbase_;
+  float _normalisedCutoff = 0.0f;  // Stored normalized cutoff (0.0-1.0)
   int32_t ampComp = (int32_t)(MAX_16 * 1.4f);
   float ampCompHalf_ = ampComp * 0.5f;  // Precomputed for output scaling
   static constexpr float a_ = 1.0f / 1.3f;   // 0.769230769f - filter coefficient

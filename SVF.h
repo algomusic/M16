@@ -66,20 +66,21 @@ class SVF {
       return fInt * (1.0f / 32768.0f);
     }
 
-    /** Set the cutoff or corner frequency of the filter.
+    /** Set the cutoff or corner frequency of the filter using normalised value.
     * @param cutoff_val 0.0 - 1.0 which maps to safe frequency range (40 Hz to 21% of sample rate).
-    * Sweeping the cutoff value linearly is mapped to a non-linear frequency sweep
+    * Sweeping the cutoff value linearly is mapped to a non-linear frequency sweep.
+    * Use setFreq() for absolute Hz values.
     */
     inline
-    void setCutoff(float cutoff_val) {
-      cutoff_val = max(0.0f, min(1.0f, cutoff_val));
+    void setNormalisedCutoff(float cutoff_val) {
+      _normalisedCutoff = max(0.0f, min(1.0f, cutoff_val));
       float cutoff_freq = 0;
       int32_t safeMaxFreq = SAMPLE_RATE * 0.21f;  // Match setFreq() safety limit
 
-      if (cutoff_val > 0.7f) {
-        cutoff_freq = cutoff_val * cutoff_val * cutoff_val * safeMaxFreq;
+      if (_normalisedCutoff > 0.7f) {
+        cutoff_freq = _normalisedCutoff * _normalisedCutoff * _normalisedCutoff * safeMaxFreq;
       } else {
-        float cv = cutoff_val * 1.43f;
+        float cv = _normalisedCutoff * 1.43f;
         cutoff_freq = cv * cv * (safeMaxFreq * 0.38f) + 40.0f;
       }
 
@@ -90,6 +91,18 @@ class SVF {
       fInt = (int32_t)(fFloat * 32768.0f);
     }
 
+    /** Alias for setNormalisedCutoff for backwards compatibility */
+    inline void setCutoff(float cutoff_val) { setNormalisedCutoff(cutoff_val); }
+
+    /** @return Current normalised cutoff frequency (0.0-1.0) */
+    inline
+    float getNormalisedCutoff() {
+      return _normalisedCutoff;
+    }
+
+    /** Alias for getNormalisedCutoff for backwards compatibility */
+    inline float getCutoff() { return getNormalisedCutoff(); }
+
     /** Calculate the next Lowpass filter sample, given an input signal.
      *  Input is an output from an oscillator or other audio element.
      */
@@ -97,8 +110,7 @@ class SVF {
     int16_t nextLPF(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      low = clip16(low);
-      return low; 
+      return clip16((low * gainComp) >> 15);
     }
 
     /** Calculate the next Lowpass filter sample, given an input signal.
@@ -126,7 +138,7 @@ class SVF {
     int16_t nextHPF(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      return max(-MAX_16, min(MAX_16, (int)high));
+      return clip16((high * gainComp) >> 15);
     }
 
     /** Retrieve the current Highpass filter sample.
@@ -145,7 +157,7 @@ class SVF {
     int16_t nextBPF(int input) {
       input = clip16(input);
       calcFilter(input);
-      return max(-MAX_16, min(MAX_16, (int)band));
+      return clip16((band * gainComp) >> 15);
     }
 
     /** Retrieve the current Bandpass filter sample.
@@ -186,7 +198,7 @@ class SVF {
           hpfAmnt = (int32_t)(high * hpfMix);
       }
 
-      int32_t sum = lpfAmnt + bpfAmnt + hpfAmnt;
+      int32_t sum = ((lpfAmnt + bpfAmnt + hpfAmnt) * gainComp) >> 15;
       if (sum > MAX_16) return MAX_16;
       if (sum < -MAX_16) return -MAX_16;
       return (int16_t)sum;
@@ -199,7 +211,7 @@ class SVF {
     int16_t nextNotch(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      return max(-MAX_16, min(MAX_16, (int)notch));
+      return clip16((notch * gainComp) >> 15);
     }
 
   private:
@@ -208,6 +220,8 @@ class SVF {
     int32_t scale = (int32_t)(sqrt(1.0f) * MAX_16);
     int32_t fInt = 32768;        // 15-bit fixed-point frequency coefficient (1.0 = 32768)
     int32_t resOffsetInt = 32768; // 15-bit fixed-point resonance offset (1.0 = 32768)
+    static const int32_t gainComp = 40370;  // ~1.23x gain compensation for filter level loss
+    float _normalisedCutoff = 1.0f;  // Stored normalized cutoff (0.0-1.0), default fully open
 
     /** Integer-only filter calculation for maximum performance.
      *  Uses 15-bit fixed-point for frequency and resonance coefficients.

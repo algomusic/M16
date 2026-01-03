@@ -83,17 +83,30 @@ public:
 
   /** Set cutoff as normalized value with non-linear mapping
    * @param cutoff_val 0.0-1.0 maps to 0-10kHz
+   * Use setFreq() for absolute Hz values.
    */
-  inline void setCutoff(float cutoff_val) {
-    float fFloat = min(0.96f, pow(max(0.0f, min(1.0f, cutoff_val)), 2.2f));
+  inline void setNormalisedCutoff(float cutoff_val) {
+    _normalisedCutoff = max(0.0f, min(1.0f, cutoff_val));
+    float fFloat = min(0.96f, pow(_normalisedCutoff, 2.2f));
     fInt = (int32_t)(fFloat * 32768.0f);
     freq = (int32_t)(maxFreq * fFloat);
     // fb = q + q * (1.0 + f)  ->  fbInt = qInt + (qInt * (32768 + fInt)) >> 15
     fbInt = qInt + ((int64_t)qInt * (32768 + fInt) >> 15);
   }
 
+  /** Alias for setNormalisedCutoff for backwards compatibility */
+  inline void setCutoff(float cutoff_val) { setNormalisedCutoff(cutoff_val); }
+
+  /** @return Current normalised cutoff frequency (0.0-1.0) */
+  inline float getNormalisedCutoff() {
+    return _normalisedCutoff;
+  }
+
+  /** Alias for getNormalisedCutoff for backwards compatibility */
+  inline float getCutoff() { return getNormalisedCutoff(); }
+
   /** Calculate next lowpass sample
-   * @param input Audio sample
+   * @param input Audio sample, clipped to allow overdriven input
    * @return Filtered sample
    */
   inline int16_t nextLPF(int32_t input) {
@@ -220,6 +233,7 @@ private:
   int32_t simplePrev = 0;
   int32_t maxFreq = SAMPLE_RATE * 0.195f;
   int32_t freq = 0;
+  float _normalisedCutoff = 0.0f;  // Stored normalized cutoff (0.0-1.0)
 
   // Fixed-point coefficients (15-bit, 32768 = 1.0)
   int32_t fInt = 32768;
