@@ -6,7 +6,7 @@
 #include "FX.h"
 
 int16_t * wavetable; // empty array pointer
-const int poly = 4; // change polyphony as desired, each MCU type will handle particular amounts
+const int poly = 8; // change polyphony as desired, each MCU type will handle particular amounts
 Osc osc[poly]; // an array of oscillators
 Env env[poly];
 SVF filter[poly];
@@ -32,16 +32,22 @@ void setup() {
     filter[i].setFreq(3000);
   }
   // reverb setup
-  #if IS_ESP32() //8266 can't manage reverb as well
+  #if IS_CAPABLE() //8266 can't manage reverb as well
     effect1.setReverbSize(16); // quality, decay and memory >= 1
     effect1.setReverbLength(0.6); // 0-1 feedback level
     effect1.setReverbMix(0.7); // 0-1 balance between dry and wet signals
   #endif
   // seti2sPins(7,8,9,41);
+  noteTime = millis(); // schedule first note
+  envTime = millis();
   audioStart();
 }
 
 void loop() {
+  #if IS_RP2040()
+    audioLoop();  // Process audio on Core 0 in dual-core mode
+  #endif
+
   msNow = millis();
 
   if ((unsigned long)(msNow - noteTime) >= noteDelta) {
@@ -68,12 +74,12 @@ void audioUpdate() {
   int32_t mix = 0;
   for (int i=0; i<poly; i++) {
     mix += filter[i].nextLPF((osc[i].next() * env[i].getValue())>>16);
-    mix = (mix * 717) >> 10;  // 717/1024 ≈ 0.7, integer multiply
+    mix = (mix * 550) >> 10; // amplitude compensation for polyphony
   }
   // stereo
   int32_t leftVal = mix; 
   int32_t rightVal = leftVal;
-  #if IS_ESP32() //8266 can't manage reverb as well
+  #if IS_CAPABLE() //8266 can't manage reverb as well
     effect1.reverbStereo(mix, mix, leftVal, rightVal);
   #endif
   i2s_write_samples(clip16(leftVal), clip16(rightVal));
