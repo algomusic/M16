@@ -43,7 +43,7 @@ public:
     // Cache coefficients atomically to prevent race conditions with setFreq()/setRes()
     // This ensures we use a consistent set of coefficients for the entire sample
     float cached_alpha, cached_KQ, cached_pbg;
-    #if defined(ESP32) || defined(ESP_PLATFORM)
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
     uint32_t tmp;
     tmp = __atomic_load_n((uint32_t*)&alpha_, __ATOMIC_RELAXED);
     cached_alpha = *(float*)&tmp;

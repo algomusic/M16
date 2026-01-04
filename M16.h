@@ -117,6 +117,17 @@ float SAMPLE_RATE_INV = 1.0f / SAMPLE_RATE;
 #define MAX_16 32767
 #define MIN_16 -32767
 const float MAX_16_INV = 0.00003052;
+bool isDualCore = true; // assume dual-core unless changed in setup()
+
+/** Specify the use of one or two cores for audio processing
+* @dualCore True to use both cores (ESP32/PiPico2), false for single-core mode
+* Call this function before audioStart() in setUp() to set the desired number of cores used for audio.
+* ESP32 uses FreeRTOS which preemptively schedules tasks. 
+* Pi Pico 2 requires cooperative scheduling - the user must call audioLoop() from loop() to process audio on Core 0.
+*/
+void setIsDualCore(bool dualCore) { 
+  isDualCore = dualCore;
+}
 
 // TABLE_SIZE can be overridden by defining it in your sketch BEFORE including M16.h
 // Example: #define TABLE_SIZE 2048
@@ -202,6 +213,9 @@ inline bool isPSRAMAvailable() {
   void seti2sPins(int bck, int ws, int dout, int din) {
     Serial.println("seti2sPins() is not availible for the ESP8266 which has fixed i2s pins");
   } // ignored for ESP8266
+
+  /** No-op on ESP8266 - included for API compatibility with Pico dual-core mode */
+  inline void audioLoop() {}
 #elif IS_ESP32()
   // i2s
   #include <driver/i2s_std.h>
@@ -259,7 +273,7 @@ inline bool isPSRAMAvailable() {
   void audioCallback(void* param) {
       for (;;) {
           audioUpdate();
-          yield(); // i2s_write_samples() already has a yield()
+          yield(); // required? i2s_write_samples() already has a yield()
       }
   }
 
@@ -326,17 +340,24 @@ inline bool isPSRAMAvailable() {
           &audioCallback1Handle,
           0
       );
-      xTaskCreatePinnedToCore(
-          audioCallback,
-          "FillAudioBuffer1",
-          8192,
-          NULL,
-          2,
-          &audioCallback2Handle,
-          1
-      );
+      if (isDualCore) {
+        xTaskCreatePinnedToCore(
+            audioCallback,
+            "FillAudioBuffer1",
+            8192,
+            NULL,
+            2,
+            &audioCallback2Handle,
+            1
+        );
+      }
       Serial.println("M16 is running (dual-core mode)");
   }
+
+  /** No-op on ESP32 - FreeRTOS handles audio tasks automatically
+   *  Included for API compatibility with Pico dual-core mode
+   */
+  inline void audioLoop() {}
   /*
   // ESP32 Arduino Core V2
   #include "driver/i2s.h"
@@ -424,16 +445,25 @@ inline bool isPSRAMAvailable() {
   */
 #elif IS_RP2040()
   // Raspberry Pi Pico / Pico 2 (RP2040/RP2350)
-  // Core 1 dedicated to audio for maximum performance
+  // Dual-core audio support with cooperative scheduling on Core 0
   #include <I2S.h>
+  #include "pico/multicore.h"
+  #include "pico/mutex.h"
+
+  // Enable separate 8KB stack for Core 1 (recommended for audio processing)
+  // This prevents stack collisions between cores during heavy DSP work
+  bool core1_separate_stack = true;
 
   // Default I2S pins - BCLK on GPIO 16, WS is implicitly BCLK+1 (GPIO 17), DOUT on GPIO 18, DIN on GPIO 19
   static int picoI2sPins[] = {16, 18, 19}; // {BCLK, DOUT, DIN}
 
-  // Separate I2S instances for input and output (safest approach)
-  // Using two instances avoids bidirectional mode clock edge timing issues
-  I2S i2sOut(OUTPUT);  // Audio output
+  // I2S instance for output
+  I2S i2sOut(OUTPUT);
   I2S i2sIn(INPUT);    // Audio input (microphone)
+
+  // Mutex for thread-safe initialization (mirrors ESP32's audioInitMutex)
+  static mutex_t picoAudioInitMutex;
+  static bool picoMutexInitialized = false;
 
   // Flags for core synchronization
   static volatile bool picoAudioRunning = false;
@@ -471,36 +501,94 @@ inline bool isPSRAMAvailable() {
   static int32_t _prevOutL = 0;
   static int32_t _prevOutR = 0;
 
-  void i2s_write_samples(int16_t leftSample, int16_t rightSample) {
-    // Lightweight one-pole low-pass filter for output smoothing
-    int32_t smoothL = (leftSample + _prevOutL) >> 1;
-    int32_t smoothR = (rightSample + _prevOutR) >> 1;
-    _prevOutL = smoothL;
-    _prevOutR = smoothR;
-    leftAudioOuputValue = smoothL;
-    rightAudioOuputValue = smoothR;
+  // ============== Dual-core audio with direct I2S writes ==============
+  // Simpler approach: use mutex to serialize I2S writes directly (like ESP32)
+  // This avoids ring buffer ordering issues at the cost of some serialization
+  auto_init_mutex(picoAudioMutex);
+  auto_init_mutex(picoI2SMutex);  // Separate mutex for I2S writes
+
+  // Callbacks for oscillator phase sync (set by Osc.h)
+  typedef void (*PhaseAdvanceCallback)(int coreNum);
+  typedef void (*PhaseClearCallback)(int coreNum);
+  static PhaseAdvanceCallback picoPhaseAdvanceFunc = nullptr;
+  static PhaseClearCallback picoPhaseClearFunc = nullptr;
+
+  /** Register phase sync callbacks (called from Osc.h) */
+  inline void registerPhaseSyncCallbacks(PhaseAdvanceCallback advance, PhaseClearCallback clear) {
+    picoPhaseAdvanceFunc = advance;
+    picoPhaseClearFunc = clear;
   }
 
-  // Core 1: Dedicated audio generation - optimized tight loop
-  void __attribute__((weak)) setup1() {
+  /** Write audio samples - direct I2S write with mutex serialization */
+  void i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+    int32_t outL = leftSample;
+    int32_t outR = rightSample;
+
+    leftAudioOuputValue = outL;
+    rightAudioOuputValue = outR;
+
+    int32_t sample32 = ((int32_t)outL << 16) | ((uint16_t)outR);
+
+    if (isDualCore) {
+      // Serialize I2S writes with mutex - samples go directly to I2S in order
+      mutex_enter_blocking(&picoI2SMutex);
+      i2sOut.write(sample32);
+      mutex_exit(&picoI2SMutex);
+    } else {
+      i2sOut.write(sample32);
+    }
+  }
+
+  /** Core 1 audio callback */
+  void picoAudioCallback() {
     while (!picoAudioRunning) {
       tight_loop_contents();
     }
 
-    // Tight audio loop - no function call overhead for callback
-    while (true) {
-      audioUpdate();
-      int32_t sample32 = ((int32_t)leftAudioOuputValue << 16) |
-                         ((uint16_t)rightAudioOuputValue);
-      i2sOut.write(sample32);  // Blocking write paced by I2S hardware
+    if (isDualCore) {
+      while (true) {
+        // Under mutex: advance all oscillator phases atomically
+        mutex_enter_blocking(&picoAudioMutex);
+        if (picoPhaseAdvanceFunc) picoPhaseAdvanceFunc(1);  // Advance phases for Core 1
+        mutex_exit(&picoAudioMutex);
+
+        // Generate sample (uses pre-advanced phase)
+        audioUpdate();  // This calls i2s_write_samples which serializes I2S writes
+
+        // Clear this core's stored phase flags
+        if (picoPhaseClearFunc) picoPhaseClearFunc(1);
+      }
+    } else {
+      // Single-core: simple tight loop
+      while (true) {
+        audioUpdate();
+      }
     }
   }
 
-  void __attribute__((weak)) loop1() {
-    // Empty - audio loop runs in setup1()
+  /** Core 0 audio processing - call from loop() in dual-core mode */
+  inline void audioLoop() {
+    if (isDualCore && picoAudioRunning) {
+      // Under mutex: advance all oscillator phases atomically
+      mutex_enter_blocking(&picoAudioMutex);
+      if (picoPhaseAdvanceFunc) picoPhaseAdvanceFunc(0);  // Advance phases for Core 0
+      mutex_exit(&picoAudioMutex);
+
+      // Generate sample (uses pre-advanced phase)
+      audioUpdate();  // This calls i2s_write_samples which serializes I2S writes
+
+      // Clear this core's stored phase flags
+      if (picoPhaseClearFunc) picoPhaseClearFunc(0);
+    }
   }
 
   void audioStart() {
+    // Initialize mutex for thread-safe initialization protection
+    if (!picoMutexInitialized) {
+      mutex_init(&picoAudioInitMutex);
+      picoMutexInitialized = true;
+    }
+
     // Configure I2S OUTPUT with optimized buffer settings
     i2sOut.setBCLK(picoI2sPins[0]);
     i2sOut.setDOUT(picoI2sPins[1]);
@@ -512,10 +600,21 @@ inline bool isPSRAMAvailable() {
       while(1);
     }
 
-    // Signal core 1 to start
+    // Signal that I2S is ready
     picoAudioRunning = true;
 
-    Serial.println("M16 is running (Pico)");
+    // Launch Core 1 for dedicated audio processing
+    multicore_launch_core1(picoAudioCallback);
+
+    if (isDualCore) {
+      Serial.println("M16 is running (Pico dual-core mode)");
+      Serial.println("  Core 1: dedicated audio");
+      Serial.println("  Core 0: call audioLoop() from loop() for audio + UI");
+    } else {
+      Serial.println("M16 is running (Pico single-core mode)");
+      Serial.println("  Core 1: dedicated audio");
+      Serial.println("  Core 0: free for UI in loop()");
+    }
   }
 
   /** Start audio input for microphone/line-in on Pico

@@ -18,10 +18,59 @@
 class Osc {
 
 public:
+  // ============== Dual-core phase synchronization (RP2040) ==============
+  #if IS_RP2040()
+  static constexpr int MAX_REGISTERED_OSCS = 32;
+  static Osc* registeredOscs[MAX_REGISTERED_OSCS];
+  static int numRegisteredOscs;
+
+  // Per-core phase storage for synchronized dual-core operation
+  uint32_t storedPhase[2] = {0, 0};
+  bool useStoredPhase[2] = {false, false};  // Per-core flag to prevent race conditions
+
+  /** Register this oscillator for dual-core phase sync */
+  void registerForDualCore() {
+    if (numRegisteredOscs < MAX_REGISTERED_OSCS) {
+      // Check if already registered
+      for (int i = 0; i < numRegisteredOscs; i++) {
+        if (registeredOscs[i] == this) return;
+      }
+      registeredOscs[numRegisteredOscs++] = this;
+    }
+  }
+
+  /** Advance phases for all registered oscillators (call under mutex) */
+  static void advanceAllPhases(int coreNum) {
+    for (int i = 0; i < numRegisteredOscs; i++) {
+      Osc* osc = registeredOscs[i];
+      if (osc) {
+        // Store current phase for this core, then advance
+        osc->storedPhase[coreNum] = osc->phase_fractional;
+        osc->phase_fractional += osc->phase_increment_fractional;
+        osc->useStoredPhase[coreNum] = true;  // Only set flag for this core
+      }
+    }
+  }
+
+  /** Mark this core's oscillators as done with stored phase */
+  static void clearStoredPhaseFlag(int coreNum) {
+    for (int i = 0; i < numRegisteredOscs; i++) {
+      if (registeredOscs[i]) {
+        registeredOscs[i]->useStoredPhase[coreNum] = false;  // Only clear this core's flag
+      }
+    }
+  }
+  #endif
+  // ========================================================================
+
   /** Constructor.
 	* Has no table specified - make sure to use setTable() after initialising
 	*/
-  Osc() {}
+  Osc() {
+    #if IS_RP2040()
+    registerForDualCore();
+    #endif
+  }
 
   /** Updates the phase according to the current frequency and returns the sample at the new phase position.
 	* @return outSamp The next sample.
@@ -32,6 +81,28 @@ public:
 
     // Fast path: atomic phase increment for thread-safe dual-core operation
     // Pulse width, noise, and crackle modes use the slower non-atomic path
+    #if IS_RP2040()
+    // Pico dual-core: use pre-acquired phase if available (set by advanceAllPhases)
+    if (isDualCore && !pulseWidthOn && !isNoise && !isCrackle) {
+      int coreNum = get_core_num();
+      // Check this core's flag - prevents race where other core clears our flag
+      if (useStoredPhase[coreNum]) {
+        int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+        if (cachedBandPtr == nullptr) return 0;
+
+        // Use the phase that was stored for this core (already advanced under mutex)
+        uint32_t myPhase = storedPhase[coreNum];
+        int idx = (myPhase >> 16) & (TABLE_SIZE - 1);
+        sampVal = cachedBandPtr[idx];
+
+        if (spreadActive) {
+          sampVal = doSpreadAtomic(sampVal);
+        }
+        return sampVal;
+      }
+    }
+    #endif
+
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
       // Cache volatile values atomically to prevent torn reads during setFreq()
@@ -562,20 +633,43 @@ public:
 		if (freq > 0) {
       frequency = freq;
       // 16.16 fixed-point: phase_inc = (freq * TABLE_SIZE / SAMPLE_RATE) * 65536
-      phase_increment_fractional = (uint32_t)(freq * TABLE_SIZE * 65536.0f / SAMPLE_RATE);
+      uint32_t newIncrement = (uint32_t)(freq * TABLE_SIZE * 65536.0f / SAMPLE_RATE);
+
+      // Calculate new band pointer before atomic update
+      int16_t* newBandPtr = bandPtr;
+      if (waveTable != nullptr) {
+        if (freq > 831) {
+          newBandPtr = waveTable + TABLE_SIZE * 2;  // high band
+        } else if (freq > 208) {
+          newBandPtr = waveTable + TABLE_SIZE;      // mid band
+        } else {
+          newBandPtr = waveTable;                   // low band
+        }
+      }
+
+      // Atomic stores for thread-safety with next() on dual-core systems
+      #if IS_ESP32() || IS_RP2040()
+        // Update bandPtr first, then increment (next() reads increment first, then bandPtr)
+        __atomic_store_n((uintptr_t*)&bandPtr, (uintptr_t)newBandPtr, __ATOMIC_RELEASE);
+        __atomic_store_n(&phase_increment_fractional, newIncrement, __ATOMIC_RELEASE);
+      #else
+        bandPtr = newBandPtr;
+        phase_increment_fractional = newIncrement;
+      #endif
+
       if (pulseWidthOn) {
         // Calculate pulse width variants in 16.16
-        uint32_t halfInc = phase_increment_fractional >> 1;
+        uint32_t halfInc = newIncrement >> 1;
         phase_increment_fractional_w1 = (uint32_t)(halfInc / pulseWidth);
         phase_increment_fractional_w2 = (uint32_t)(halfInc / (1.0f - pulseWidth));
       }
       if (spreadActive) {
         // 16.16 spread increments
-        phase_increment_fractional_s1 = (uint32_t)(phase_increment_fractional * spread1);
-        phase_increment_fractional_s2 = (uint32_t)(phase_increment_fractional * spread2);
+        phase_increment_fractional_s1 = (uint32_t)(newIncrement * spread1);
+        phase_increment_fractional_s2 = (uint32_t)(newIncrement * spread2);
       } else {
-        phase_increment_fractional_s1 = phase_increment_fractional;
-        phase_increment_fractional_s2 = phase_increment_fractional;
+        phase_increment_fractional_s1 = newIncrement;
+        phase_increment_fractional_s2 = newIncrement;
       }
       cycleLengthPerMS = frequency * 0.001f;
 
@@ -590,17 +684,6 @@ public:
         // Scale down based on remaining headroom: (nyquist - freq) / (nyquist - threshold)
         float headroom = (nyquist - freq) / (nyquist - thresholdFreq);
         modDepthScale = (int32_t)(1024.0f * fmaxf(0.05f, fminf(1.0f, headroom)));
-      }
-
-      // Pre-compute band pointer to avoid per-sample branching in next()
-      if (waveTable != nullptr) {
-        if (freq > 831) {
-          bandPtr = waveTable + TABLE_SIZE * 2;  // high band
-        } else if (freq > 208) {
-          bandPtr = waveTable + TABLE_SIZE;      // mid band
-        } else {
-          bandPtr = waveTable;                   // low band
-        }
       }
     }
 	}
@@ -1165,5 +1248,25 @@ private:
   }
   #endif
 };
+
+// Static member definitions for RP2040 dual-core phase sync
+#if IS_RP2040()
+Osc* Osc::registeredOscs[Osc::MAX_REGISTERED_OSCS] = {nullptr};
+int Osc::numRegisteredOscs = 0;
+
+// Wrapper functions for callbacks (can't use static member functions directly as function pointers easily)
+void _oscAdvanceAllPhases(int coreNum) { Osc::advanceAllPhases(coreNum); }
+void _oscClearStoredPhaseFlag(int coreNum) { Osc::clearStoredPhaseFlag(coreNum); }
+
+// Auto-register callbacks when Osc.h is included
+namespace {
+  struct OscPhaseSyncRegistrar {
+    OscPhaseSyncRegistrar() {
+      registerPhaseSyncCallbacks(_oscAdvanceAllPhases, _oscClearStoredPhaseFlag);
+    }
+  };
+  static OscPhaseSyncRegistrar _oscPhaseSyncRegistrar;
+}
+#endif
 
 #endif /* OSC_H_ */

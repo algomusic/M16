@@ -20,6 +20,10 @@
 #include "SVF.h"
 #include "EMA.h"
 
+#if IS_RP2040()
+  #include "pico/mutex.h"
+#endif
+
 class FX {
 
   public:
@@ -428,7 +432,7 @@ class FX {
     */
     inline
     void reverbStereo(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
-      // Thread-safe lazy initialization with mutex (ESP32 only)
+      // Thread-safe lazy initialization with mutex (dual-core platforms)
       if (!reverbInitiated) {
         #if IS_ESP32()
           extern SemaphoreHandle_t audioInitMutex;
@@ -438,6 +442,18 @@ class FX {
               initReverb(reverbSize);
             }
             xSemaphoreGive(audioInitMutex);
+          } else {
+            initReverb(reverbSize);
+          }
+        #elif IS_RP2040()
+          extern mutex_t picoAudioInitMutex;
+          extern bool picoMutexInitialized;
+          if (picoMutexInitialized) {
+            mutex_enter_blocking(&picoAudioInitMutex);
+            if (!reverbInitiated) {
+              initReverb(reverbSize);
+            }
+            mutex_exit(&picoAudioInitMutex);
           } else {
             initReverb(reverbSize);
           }
@@ -466,7 +482,7 @@ class FX {
     */
     inline
     void reverbStereoInterp(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
-      // Thread-safe lazy initialization with mutex (ESP32 only)
+      // Thread-safe lazy initialization with mutex (dual-core platforms)
       if (!reverbInitiated) {
         #if IS_ESP32()
           extern SemaphoreHandle_t audioInitMutex;
@@ -475,6 +491,18 @@ class FX {
               initReverb(reverbSize);
             }
             xSemaphoreGive(audioInitMutex);
+          } else {
+            initReverb(reverbSize);
+          }
+        #elif IS_RP2040()
+          extern mutex_t picoAudioInitMutex;
+          extern bool picoMutexInitialized;
+          if (picoMutexInitialized) {
+            mutex_enter_blocking(&picoAudioInitMutex);
+            if (!reverbInitiated) {
+              initReverb(reverbSize);
+            }
+            mutex_exit(&picoAudioInitMutex);
           } else {
             initReverb(reverbSize);
           }
