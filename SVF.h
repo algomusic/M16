@@ -25,11 +25,14 @@ class SVF {
       low = 0;
       band = 0;
       high = 0;
-      notch = 0;
-      allpassPrevIn = 0;
-      allpassPrevOut = 0;
-      simplePrev = 0;
       setRes(0.2);
+    }
+
+    /** Reset filter state to zero - useful for consistent attack transients */
+    inline void reset() {
+      low = 0;
+      band = 0;
+      high = 0;
     }
 
     /** Set how resonant the filter will be.
@@ -37,12 +40,18 @@ class SVF {
     */
     inline
     void setRes(float resonance) {
-      float resClamp = max(0.01f, min(0.84f, resonance));
+      // Minimum 0.3 to avoid transient overshoot at low resonance
+      float resClamp = max(0.3f, min(0.84f, resonance));
       q = (int32_t)((1.0f - resClamp) * MAX_16);
-      scale = (int32_t)(sqrt(max(0.1f, resClamp)) * MAX_16);
-      // Convert resOffset to 15-bit fixed-point (range ~0.4 to 1.2)
-      float resOffsetF = 1.2f - resClamp * 1.6f;
+      scale = (int32_t)(sqrt(resClamp) * MAX_16);
+      // Linear curve with floor - more attenuation at low res to prevent transient overshoot
+      // Range: 0.8 at res=0.3 down to 0.3 floor at high res
+      float resOffsetF = fmaxf(0.3f, 1.04f - resClamp * 0.8f);
       resOffsetInt = (int32_t)(resOffsetF * 32768.0f);
+      // Resonance-dependent output gain - less boost at low res, more at high res
+      // Range: ~0.7 at res=0.2 up to ~1.2 at res=0.84
+      float gainCompF = 0.55f + resClamp * 0.75f;
+      gainCompInt = (int32_t)(gainCompF * 32768.0f);
     }
 
     /** Set the cutoff or centre frequency of the filter.
@@ -110,7 +119,7 @@ class SVF {
     int16_t nextLPF(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      return clip16((low * gainComp) >> 15);
+      return clip16((int32_t)(((int64_t)low * gainCompInt) >> 15));
     }
 
     /** Calculate the next Lowpass filter sample, given an input signal.
@@ -138,7 +147,7 @@ class SVF {
     int16_t nextHPF(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      return clip16((high * gainComp) >> 15);
+      return clip16((int32_t)(((int64_t)high * gainCompInt) >> 15));
     }
 
     /** Retrieve the current Highpass filter sample.
@@ -157,7 +166,7 @@ class SVF {
     int16_t nextBPF(int input) {
       input = clip16(input);
       calcFilter(input);
-      return clip16((band * gainComp) >> 15);
+      return clip16((int32_t)(((int64_t)band * gainCompInt) >> 15));
     }
 
     /** Retrieve the current Bandpass filter sample.
@@ -198,7 +207,7 @@ class SVF {
           hpfAmnt = (int32_t)(high * hpfMix);
       }
 
-      int32_t sum = ((lpfAmnt + bpfAmnt + hpfAmnt) * gainComp) >> 15;
+      int32_t sum = (int32_t)(((int64_t)(lpfAmnt + bpfAmnt + hpfAmnt) * gainCompInt) >> 15);
       if (sum > MAX_16) return MAX_16;
       if (sum < -MAX_16) return -MAX_16;
       return (int16_t)sum;
@@ -211,41 +220,40 @@ class SVF {
     int16_t nextNotch(int32_t input) {
       input = clip16(input);
       calcFilter(input);
-      return clip16((notch * gainComp) >> 15);
+      int32_t notch = high + low;  // Compute on demand
+      return clip16((int32_t)(((int64_t)notch * gainCompInt) >> 15));
     }
 
   private:
-    int32_t low, band, high, notch, allpassPrevIn, allpassPrevOut, simplePrev;
+    int32_t low = 0, band = 0, high = 0;
     int32_t q = MAX_16;
     int32_t scale = (int32_t)(sqrt(1.0f) * MAX_16);
     int32_t fInt = 32768;        // 15-bit fixed-point frequency coefficient (1.0 = 32768)
     int32_t resOffsetInt = 32768; // 15-bit fixed-point resonance offset (1.0 = 32768)
-    static const int32_t gainComp = 40370;  // ~1.23x gain compensation for filter level loss
+    int32_t gainCompInt = 32768;  // Resonance-dependent output gain compensation
     float _normalisedCutoff = 1.0f;  // Stored normalized cutoff (0.0-1.0), default fully open
 
     /** Integer-only filter calculation for maximum performance.
      *  Uses 15-bit fixed-point for frequency and resonance coefficients.
-     *  Mathematically equivalent to the original float version.
+     *  Uses 64-bit intermediates to prevent overflow with larger state limits.
      */
     inline void calcFilter(int32_t input) {
       // Apply resonance offset (15-bit fixed-point multiply)
       input = (input * resOffsetInt) >> 15;
 
       // SVF difference equations using 15-bit fixed-point
-      // low += f * band  ->  low += (fInt * band) >> 15
-      low += (fInt * band) >> 15;
+      // Use 64-bit intermediates to prevent overflow with larger LIMIT
+      low += (int32_t)(((int64_t)fInt * band) >> 15);
 
       // high = scaled_input - low - (q * band)
-      high = ((scale * input) >> 14) - low - ((q * band) >> 15);
+      high = ((scale * input) >> 14) - low - (int32_t)(((int64_t)q * band) >> 15);
 
-      // band += f * high  ->  band += (fInt * high) >> 15
-      band += (fInt * high) >> 15;
+      // band += f * high
+      band += (int32_t)(((int64_t)fInt * high) >> 15);
 
-      notch = high + low;
-
-      // Prevent state variable overflow - tighter bounds for 32-bit safety
-      // Using 2^24 (~16M) is sufficient headroom while staying well within int32 range
-      const int32_t LIMIT = 16777216;
+      // Prevent state variable overflow - only clamp accumulated states (low, band)
+      // high is recalculated each sample so doesn't need clamping
+      const int32_t LIMIT = 2000000;
       if (low > LIMIT) low = LIMIT;
       else if (low < -LIMIT) low = -LIMIT;
       if (band > LIMIT) band = LIMIT;
