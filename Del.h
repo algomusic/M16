@@ -73,34 +73,23 @@ public:
     delayBufferSize_samples = maxDelayTime_ms * SAMPLE_RATE * 0.001;
 
     #if IS_ESP32()
-      // Use cached global PSRAM availability
-      if (isPSRAMAvailable() && ESP.getFreePsram() > delayBufferSize_samples * sizeof(int16_t)) {
-        delayBuffer = (int16_t *) ps_calloc(delayBufferSize_samples, sizeof(int16_t));
-        if (!delayBuffer) {
-          Serial.println("PSRAM alloc failed, using regular RAM");
-          delayBuffer = new int16_t[delayBufferSize_samples];
-        }
-      } else {
+      // Try PSRAM allocation with size checking (silent for delay buffers)
+      delayBuffer = psramAllocInt16(delayBufferSize_samples, nullptr);
+      if (!delayBuffer) {
+        // Fallback to regular RAM
         delayBuffer = new int16_t[delayBufferSize_samples];
       }
-
-      if (!delayBuffer) {
-        Serial.println("ERROR: Del buffer allocation failed!");
-        delayBufferSize_samples = 0;
-        maxDelayTime_ms = 0;
-        return;  // Don't call empty() with NULL buffer!
-      }
-      empty();
     #else
       delayBuffer = new int16_t[delayBufferSize_samples];
-      if (!delayBuffer) {  
-        Serial.println("ERROR: Del buffer allocation failed!");
-        delayBufferSize_samples = 0;
-        maxDelayTime_ms = 0;
-        return;
-      }
-      empty();
     #endif
+
+    if (!delayBuffer) {
+      Serial.println("ERROR: Del buffer allocation failed!");
+      delayBufferSize_samples = 0;
+      maxDelayTime_ms = 0;
+      return;
+    }
+    empty();
   }
 
   /** Constructor.
