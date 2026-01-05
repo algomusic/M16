@@ -112,21 +112,27 @@ public:
 
     // Allocate buffers
     #if IS_ESP32()
-      if (usePSRAM && isPSRAMAvailable()) {
+      // Calculate total PSRAM needed for all buffers
+      size_t totalSize = (combBufSize * numCombs + allpassBufSize * numAllpass) * sizeof(int16_t);
+      bool usedPSRAM = false;
+
+      if (usePSRAM && isPSRAMAvailable() && getFreePSRAM() > totalSize + (totalSize / 10)) {
         Serial.println("Verb: Using PSRAM for buffers");
+        usedPSRAM = true;
         for (int i = 0; i < numCombs; i++) {
-          combBuf[i] = (int16_t*)ps_calloc(combBufSize, sizeof(int16_t));
+          combBuf[i] = psramAllocInt16(combBufSize, nullptr);
           if (!combBuf[i]) {
             combBuf[i] = new int16_t[combBufSize]();
           }
         }
         for (int i = 0; i < numAllpass; i++) {
-          allpassBuf[i] = (int16_t*)ps_calloc(allpassBufSize, sizeof(int16_t));
+          allpassBuf[i] = psramAllocInt16(allpassBufSize, nullptr);
           if (!allpassBuf[i]) {
             allpassBuf[i] = new int16_t[allpassBufSize]();
           }
         }
-      } else {
+      }
+      if (!usedPSRAM) {
         Serial.println("Verb: Using regular RAM for buffers");
         for (int i = 0; i < numCombs; i++) {
           combBuf[i] = new int16_t[combBufSize]();

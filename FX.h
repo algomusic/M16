@@ -630,12 +630,8 @@ class FX {
     inline
     void initReverbSafe() {
       if (!reverbInitiated) {
-        // Use global PSRAM check instead of direct call
-        if (isPSRAMAvailable()) {
-          Serial.println("PSRAM available for reverb delays");
-        } else {
-          Serial.println("No PSRAM - using regular RAM for reverb");
-        }
+        // Trigger PSRAM diagnostics if not already done
+        isPSRAMAvailable();
         initReverb(reverbSize);
 
         // Pre-initialize allpass filters to prevent lazy init in audio tasks
@@ -899,16 +895,20 @@ class FX {
       if (revBuf1) return;  // Already allocated
 
       #if IS_ESP32()
-        if (isPSRAMAvailable()) {
-          revBuf1 = (int16_t*)ps_calloc(REV_BUF_SIZE, sizeof(int16_t));
-          revBuf2 = (int16_t*)ps_calloc(REV_BUF_SIZE, sizeof(int16_t));
-          revBuf3 = (int16_t*)ps_calloc(REV_BUF_SIZE, sizeof(int16_t));
-          revBuf4 = (int16_t*)ps_calloc(REV_BUF_SIZE, sizeof(int16_t));
+        // Calculate total size needed for all 4 buffers
+        size_t totalSize = REV_BUF_SIZE * sizeof(int16_t) * 4;
+        size_t available = getFreePSRAM();
+
+        if (isPSRAMAvailable() && available > totalSize + (totalSize / 10)) {
+          revBuf1 = psramAllocInt16(REV_BUF_SIZE, "reverb buf 1");
+          revBuf2 = psramAllocInt16(REV_BUF_SIZE, nullptr);
+          revBuf3 = psramAllocInt16(REV_BUF_SIZE, nullptr);
+          revBuf4 = psramAllocInt16(REV_BUF_SIZE, nullptr);
         }
       #endif
 
       // Fallback to regular RAM if PSRAM not available or allocation failed
-      if (!revBuf1) revBuf1 = new int16_t[REV_BUF_SIZE]();
+      if (!revBuf1) { revBuf1 = new int16_t[REV_BUF_SIZE](); Serial.println("Reverb buffers in regular RAM"); }
       if (!revBuf2) revBuf2 = new int16_t[REV_BUF_SIZE]();
       if (!revBuf3) revBuf3 = new int16_t[REV_BUF_SIZE]();
       if (!revBuf4) revBuf4 = new int16_t[REV_BUF_SIZE]();
@@ -1042,16 +1042,14 @@ class FX {
 
     void initChorus() {
       #if IS_ESP32()
-        // Use cached global PSRAM availability
-        if (isPSRAMAvailable() && ESP.getFreePsram() > FULL_TABLE_SIZE * sizeof(int16_t)) {
-          chorusLfoTable = (int16_t *) ps_calloc(FULL_TABLE_SIZE, sizeof(int16_t)); // calloc fills array with zeros
-          Serial.println("PSRAM is availible in chorus");
-        } else {
-          chorusLfoTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
-          Serial.println("PSRAM not available in chorus");
+        // Try PSRAM allocation with size checking
+        chorusLfoTable = psramAllocInt16(FULL_TABLE_SIZE, "chorus LFO");
+        if (!chorusLfoTable) {
+          chorusLfoTable = new int16_t[FULL_TABLE_SIZE];
+          Serial.println("Chorus LFO in regular RAM");
         }
       #else
-        chorusLfoTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
+        chorusLfoTable = new int16_t[FULL_TABLE_SIZE];
       #endif
       Osc::sinGen(chorusLfoTable); // fill the wavetable
       chorusLfo.setTable(chorusLfoTable);

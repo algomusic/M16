@@ -157,22 +157,120 @@ int16_t rightAudioOuputValue = 0;
 // Global PSRAM availability flag - set once at startup
 static bool g_psramAvailable = false;
 static bool g_psramChecked = false;
+static size_t g_psramTotal = 0;
 
+/** Check if PSRAM is available and functional
+ *  Performs comprehensive diagnostics on first call
+ *  @return true if PSRAM is available and usable
+ */
 inline bool isPSRAMAvailable() {
   if (!g_psramChecked) {
     #if IS_ESP32()
-      g_psramAvailable = psramFound();
-      if (g_psramAvailable) {
-        Serial.print("PSRAM detected: ");
-        Serial.print(ESP.getFreePsram() / 1024);
-        Serial.println(" KB free");
+      bool hwDetected = psramFound();
+      size_t freePsram = ESP.getFreePsram();
+      g_psramTotal = freePsram;
+
+      // PSRAM is only truly available if both detected AND has free space
+      g_psramAvailable = hwDetected && (freePsram > 0);
+
+      Serial.println("--- M16 PSRAM Diagnostics ---");
+      Serial.print("  Hardware detected: ");
+      Serial.println(hwDetected ? "Yes" : "No");
+      Serial.print("  Free PSRAM: ");
+      Serial.print(freePsram / 1024);
+      Serial.println(" KB");
+
+      if (hwDetected && freePsram == 0) {
+        Serial.println("  WARNING: PSRAM detected but not usable!");
+        Serial.println("  Check Arduino IDE board settings:");
+        Serial.println("  - PSRAM type (QSPI vs OPI) must match your chip");
+        Serial.println("  - Ensure psramInit() is called before M16 allocations");
+      } else if (g_psramAvailable) {
+        Serial.println("  Status: PSRAM ready for use");
       } else {
-        Serial.println("No PSRAM detected");
+        Serial.println("  Status: No PSRAM available");
       }
+      Serial.println("-----------------------------");
     #endif
     g_psramChecked = true;
   }
   return g_psramAvailable;
+}
+
+/** Get current free PSRAM in bytes
+ *  @return Free PSRAM bytes, or 0 if not available
+ */
+inline size_t getFreePSRAM() {
+  #if IS_ESP32()
+    return ESP.getFreePsram();
+  #else
+    return 0;
+  #endif
+}
+
+/** Safely allocate memory from PSRAM with size checking
+ *  @param size Number of bytes to allocate
+ *  @param description Name/description for debug output (can be nullptr to suppress)
+ *  @return Pointer to allocated memory, or nullptr if failed
+ */
+inline void* psramAllocSafe(size_t size, const char* description = nullptr) {
+  #if IS_ESP32()
+    if (!isPSRAMAvailable()) {
+      if (description) {
+        Serial.print("PSRAM alloc failed (unavailable): ");
+        Serial.println(description);
+      }
+      return nullptr;
+    }
+
+    size_t available = ESP.getFreePsram();
+    // Require 10% headroom to avoid fragmentation issues
+    size_t required = size + (size / 10);
+
+    if (available < required) {
+      if (description) {
+        Serial.print("PSRAM alloc failed (insufficient): ");
+        Serial.print(description);
+        Serial.print(" needs ");
+        Serial.print(size / 1024);
+        Serial.print("KB, only ");
+        Serial.print(available / 1024);
+        Serial.println("KB free");
+      }
+      return nullptr;
+    }
+
+    void* ptr = ps_calloc(size, 1);
+    if (!ptr) {
+      if (description) {
+        Serial.print("PSRAM alloc failed (ps_calloc): ");
+        Serial.println(description);
+      }
+      return nullptr;
+    }
+
+    if (description) {
+      Serial.print("PSRAM allocated: ");
+      Serial.print(description);
+      Serial.print(" (");
+      Serial.print(size / 1024);
+      Serial.print("KB, ");
+      Serial.print(ESP.getFreePsram() / 1024);
+      Serial.println("KB remaining)");
+    }
+    return ptr;
+  #else
+    return nullptr;
+  #endif
+}
+
+/** Safely allocate int16_t array from PSRAM with size checking
+ *  @param count Number of int16_t elements to allocate
+ *  @param description Name/description for debug output (can be nullptr to suppress)
+ *  @return Pointer to allocated array, or nullptr if failed
+ */
+inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr) {
+  return (int16_t*)psramAllocSafe(count * sizeof(int16_t), description);
 }
 
 // ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)

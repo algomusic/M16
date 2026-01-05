@@ -193,7 +193,7 @@ public:
       // Dynamic allocation - try PSRAM first (ESP32 only)
       #if IS_ESP32()
         if (isPSRAMAvailable()) {
-          size_t availablePsram = ESP.getFreePsram();
+          size_t availablePsram = getFreePSRAM();
           // Apply max allocation limit if set (reserves space for effects, etc.)
           // Use 90% of available to leave margin for fragmentation/alignment
           size_t safeAvailable = (availablePsram * 9) / 10;
@@ -204,18 +204,14 @@ public:
             bufferSize = maxAlloc;
             totalSamples = bufferSize / (numChannels * sizeof(int16_t));
           }
-          audioBuffer = (int16_t*)ps_malloc(bufferSize);
-          if (audioBuffer) {
-            Serial.printf("Wav: Allocated %d bytes in PSRAM\n", bufferSize);
-          } else {
+          // Use safe allocation with size check
+          audioBuffer = (int16_t*)psramAllocSafe(bufferSize, "WAV audio");
+          if (!audioBuffer) {
             // PSRAM alloc failed, try smaller size
-            Serial.printf("Wav: PSRAM alloc failed for %d bytes, trying 75%%\n", bufferSize);
+            Serial.printf("Wav: Trying 75%% size...\n");
             bufferSize = (bufferSize * 3) / 4;
             totalSamples = bufferSize / (numChannels * sizeof(int16_t));
-            audioBuffer = (int16_t*)ps_malloc(bufferSize);
-            if (audioBuffer) {
-              Serial.printf("Wav: Allocated %d bytes in PSRAM (reduced)\n", bufferSize);
-            }
+            audioBuffer = (int16_t*)psramAllocSafe(bufferSize, "WAV audio (reduced)");
           }
         }
       #endif

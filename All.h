@@ -165,9 +165,11 @@ class All {
 
       // Allocate buffers
       #if IS_ESP32()
-        if (usePSRAM && isPSRAMAvailable()) {
-          inputBuffer = (int16_t*)ps_calloc(bufferSize_samples, sizeof(int16_t));
-          outputBuffer = (int16_t*)ps_calloc(bufferSize_samples, sizeof(int16_t));
+        // Check if enough PSRAM for both buffers with headroom
+        size_t totalSize = bufferSize_samples * sizeof(int16_t) * 2;
+        if (usePSRAM && isPSRAMAvailable() && getFreePSRAM() > totalSize + (totalSize / 10)) {
+          inputBuffer = psramAllocInt16(bufferSize_samples, nullptr);
+          outputBuffer = psramAllocInt16(bufferSize_samples, nullptr);
           if (!inputBuffer || !outputBuffer) {
             // Fallback to regular RAM
             if (inputBuffer) { free(inputBuffer); inputBuffer = nullptr; }
