@@ -462,9 +462,16 @@ public:
     int idx = (p >> 16) & (TABLE_SIZE - 1);
     int frac = (p >> 6) & 0x3FF;  // 10-bit fractional (0-1023)
 
+    // Atomic load of bandPtr for thread-safety with setFreq on dual-core systems
+    #if IS_ESP32() || IS_RP2040()
+      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+    #else
+      int16_t* cachedBandPtr = bandPtr;
+    #endif
+
     // Linear interpolation between adjacent samples
-    int16_t s0 = bandPtr[idx];
-    int16_t s1 = bandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+    int16_t s0 = cachedBandPtr[idx];
+    int16_t s1 = cachedBandPtr[(idx + 1) & (TABLE_SIZE - 1)];
     int32_t sampVal = s0 + (((s1 - s0) * frac) >> 10);
 
     incrementPhase();
@@ -782,7 +789,7 @@ public:
   */
   static void cosGen(int16_t * theTable) {
     for(int i=0; i<TABLE_SIZE; i++) {
-      int samp = (cos(2 * 3.1459 * i * TABLE_SIZE_INV) * MAX_16);
+      int samp = (cos(2 * 3.14159 * i * TABLE_SIZE_INV) * MAX_16);
       theTable[i] = samp; // low
       theTable[i + TABLE_SIZE] = samp; // mid
       theTable[i + TABLE_SIZE * 2] = samp; // high
@@ -794,7 +801,7 @@ public:
   */
   static void sinGen(int16_t * theTable) {
     for(int i=0; i<TABLE_SIZE; i++) {
-      int samp = (sin(2 * 3.1459 * i * TABLE_SIZE_INV) * MAX_16);
+      int samp = (sin(2 * 3.14159 * i * TABLE_SIZE_INV) * MAX_16);
       theTable[i] = samp; // low
       theTable[i + TABLE_SIZE] = samp; // mid
       theTable[i + TABLE_SIZE * 2] = samp; // high
@@ -805,7 +812,7 @@ public:
   void sinGen() {
     allocateWavetable();
     for(int i=0; i<TABLE_SIZE; i++) {
-      int samp = (sin(2 * 3.1459 * i * TABLE_SIZE_INV) * MAX_16);
+      int samp = (sin(2 * 3.14159 * i * TABLE_SIZE_INV) * MAX_16);
       waveTable[i] = samp; // low
       waveTable[i + TABLE_SIZE] = samp; // mid
       waveTable[i + TABLE_SIZE * 2] = samp; // high
@@ -1046,20 +1053,19 @@ public:
     }
   }
 
-  /** Allocate memory for an external waveTable 
+  /** Allocate memory for an external waveTable
    * @theTable The waveTable pointer
-   * Be careful of the pointer to pointer argbrequiring &NAME is the calling pointer
+   * Be careful of the pointer to pointer arg requiring &NAME in the calling pointer
   */
   static void allocateWaveMemory(int16_t** theTable) {
     #if IS_ESP32()
-    // Use cached global PSRAM availability
-    if (isPSRAMAvailable() && ESP.getFreePsram() > FULL_TABLE_SIZE * sizeof(int16_t)) {
-      *theTable = (int16_t*) ps_calloc(FULL_TABLE_SIZE, sizeof(int16_t));
-      Serial.println("PSRAM is availible for wavetable");
-    } else {
-      *theTable = new int16_t[FULL_TABLE_SIZE];
-      Serial.println("PSRAM not available for wavetable");
-    }
+      // Try PSRAM allocation with size checking
+      *theTable = psramAllocInt16(FULL_TABLE_SIZE, "wavetable");
+      if (!*theTable) {
+        // Fallback to regular RAM
+        *theTable = new int16_t[FULL_TABLE_SIZE];
+        Serial.println("Wavetable allocated in regular RAM");
+      }
     #else
       *theTable = new int16_t[FULL_TABLE_SIZE];
     #endif
@@ -1116,16 +1122,16 @@ private:
   void allocateWavetable() {
     if (!allocated) {
       #if IS_ESP32()
-        // Use global PSRAM check instead of direct call
-        usePSRAM = isPSRAMAvailable();
-        if (usePSRAM && ESP.getFreePsram() > FULL_TABLE_SIZE * sizeof(int16_t)) {
-          waveTable = (int16_t *) ps_calloc(FULL_TABLE_SIZE, sizeof(int16_t)); // calloc fills array with zeros
-        } else {
-          waveTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
+        // Try PSRAM allocation with size checking (silent - no debug output for internal tables)
+        waveTable = psramAllocInt16(FULL_TABLE_SIZE, nullptr);
+        usePSRAM = (waveTable != nullptr);
+        if (!waveTable) {
+          // Fallback to regular RAM
+          waveTable = new int16_t[FULL_TABLE_SIZE];
           empty(waveTable);
         }
       #else
-        waveTable = new int16_t[FULL_TABLE_SIZE]; // create a new waveTable array
+        waveTable = new int16_t[FULL_TABLE_SIZE];
         empty(waveTable);
       #endif
       // Initialize bandPtr for default frequency (440Hz = mid band)
@@ -1191,7 +1197,13 @@ private:
               phase_fractional += phase_increment_fractional_w2;
           }
       } else {
-          phase_fractional += phase_increment_fractional;
+          // Use atomic load for thread-safety with setFreq on dual-core systems
+          #if IS_ESP32() || IS_RP2040()
+            uint32_t inc = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+            phase_fractional += inc;
+          #else
+            phase_fractional += phase_increment_fractional;
+          #endif
       }
 
       // Fast path: normal wrapping using bitwise AND (TABLE_SIZE must be power of 2)
