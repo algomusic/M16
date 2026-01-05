@@ -88,6 +88,10 @@ class Env {
     void start() {
       peaked = false;
       envState = 1; // attack
+      // Reset envelope value to 0 if enabled (useful for consistent drum attacks)
+      if (resetOnStart) {
+        envVal = 0;
+      }
       // JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (rand(MAX_ENV_LEVEL * 0.05));
       JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (audioRand(MAX_ENV_LEVEL * 0.05));
       releaseStartLevelDiff = JIT_MAX_ENV_LEVEL; // 0
@@ -96,9 +100,22 @@ class Env {
       jitEnvAttack = envAttack;
       jitEnvDecay = envDecay;
       invJitEnvDecay = (jitEnvDecay > 0) ? (1.0f / jitEnvDecay) : 0.0f;
-      envStartTime = micros(); 
+      envStartTime = micros();
       currDecayRepeats = decayRepeats;
       next();
+    }
+
+    /** Enable/disable resetting envelope value to 0 on start()
+     * Useful for drum sounds where consistent attack transients are important
+     * @param enable true to reset to 0, false (default) to allow retrigger from current level
+     */
+    void setResetOnStart(bool enable) {
+      resetOnStart = enable;
+    }
+
+    /** Get resetOnStart setting */
+    bool getResetOnStart() {
+      return resetOnStart;
     }
 
     /** Return the envelope's start time */
@@ -170,7 +187,8 @@ class Env {
       else if (envState == 2) {
         // hold
         if (envHold > 0 && (unsigned long)(elapsedTime) <= (jitEnvAttack + envHold)) {
-          // still holding
+          // still holding - maintain peak level
+          envVal = JIT_MAX_ENV_LEVEL;
         }
         else {
           // If decay=0, skip decay phase entirely
@@ -293,6 +311,7 @@ class Env {
     int currDecayRepeats = 0;
 
     int envState = 0; // complete = 0, attack = 1, hold = 2, decay = 3, sustain = 4, release = 5
+    bool resetOnStart = false; // If true, reset envVal to 0 on start() for consistent drum attacks
 
 };
 
