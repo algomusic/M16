@@ -51,8 +51,12 @@ public:
    * @param resonance 0.01 to 1.0
    */
   inline void setRes(float resonance) {
-    float qFloat = min(0.96f, pow(max(0.0f, min(1.0f, resonance)), 0.6f));
+    float qFloat = min(0.96f, pow(max(0.0f, min(1.0f, resonance)), 0.3f));
     qInt = (int32_t)(qFloat * 32768.0f);
+    // Resonance-dependent gain compensation to prevent clipping at high Q
+    // At res=0: gainComp=1.0, at res=1: gainComp≈0.6 (gentler curve)
+    float gainCompF = 1.0f / (1.0f + qFloat * 0.7f);
+    gainCompInt = (int32_t)(gainCompF * 32768.0f);
     updateFeedback();
   }
 
@@ -239,6 +243,7 @@ private:
   int32_t fInt = 32768;
   int32_t qInt = 0;
   int32_t fbInt = 0;
+  int32_t gainCompInt = 32768;  // Resonance-dependent gain compensation
 
   // Filter state as 15-bit fixed-point (scaled by 32768)
   int32_t buf0 = 0;
@@ -259,8 +264,8 @@ private:
    *  Input expected in range -32767 to 32767, treated as -1.0 to 1.0
    */
   inline void calcFilter(int32_t input) {
-    // Input is already in 16-bit range, use directly as 15-bit fixed-point
-    int32_t in = input;
+    // Apply resonance-dependent gain compensation to prevent clipping at high Q
+    int32_t in = ((int64_t)input * gainCompInt) >> 15;
 
     // buf0 = buf0 + f * (in - buf0 + fb * (buf0 - buf1))
     int32_t diff01 = buf0 - buf1;
@@ -272,8 +277,8 @@ private:
     buf1 += ((int64_t)fInt * (buf0 - buf1)) >> 15;
 
     // Prevent fixed-point overflow (equivalent to denormal flush)
-    // Clamp to reasonable range to prevent runaway
-    const int32_t LIMIT = 32767 * 4;  // Allow some headroom for resonance
+    // Clamp to reasonable range - increased headroom since input is gain-compensated
+    const int32_t LIMIT = 32767 * 8;  // 8x headroom for resonance peaks
     if (buf0 > LIMIT) buf0 = LIMIT;
     else if (buf0 < -LIMIT) buf0 = -LIMIT;
     if (buf1 > LIMIT) buf1 = LIMIT;
