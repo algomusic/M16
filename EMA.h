@@ -31,6 +31,12 @@ public:
   /** Set resonance - no-op for compatibility with other M16 filters */
   inline void setRes(float resonance) {}
 
+  /** Reset filter state to zero - useful for consistent attack transients */
+  inline void reset() {
+    outPrev = 0;
+    inPrev = 0;
+  }
+
   /** Set cutoff frequency in Hz
    * @param freq_val Frequency 40-10000 Hz
    */
