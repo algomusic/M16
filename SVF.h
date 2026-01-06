@@ -118,8 +118,14 @@ class SVF {
     inline
     int16_t nextLPF(int32_t input) {
       input = clip16(input);
+      // Cache gainCompInt atomically for thread-safe output scaling
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      int32_t cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
+      #else
+      int32_t cached_gainCompInt = gainCompInt;
+      #endif
       calcFilter(input);
-      return clip16((int32_t)(((int64_t)low * gainCompInt) >> 15));
+      return clip16((int32_t)(((int64_t)low * cached_gainCompInt) >> 15));
     }
 
     /** Calculate the next Lowpass filter sample, given an input signal.
@@ -146,8 +152,13 @@ class SVF {
     inline
     int16_t nextHPF(int32_t input) {
       input = clip16(input);
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      int32_t cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
+      #else
+      int32_t cached_gainCompInt = gainCompInt;
+      #endif
       calcFilter(input);
-      return clip16((int32_t)(((int64_t)high * gainCompInt) >> 15));
+      return clip16((int32_t)(((int64_t)high * cached_gainCompInt) >> 15));
     }
 
     /** Retrieve the current Highpass filter sample.
@@ -165,8 +176,13 @@ class SVF {
     inline
     int16_t nextBPF(int input) {
       input = clip16(input);
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      int32_t cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
+      #else
+      int32_t cached_gainCompInt = gainCompInt;
+      #endif
       calcFilter(input);
-      return clip16((int32_t)(((int64_t)band * gainCompInt) >> 15));
+      return clip16((int32_t)(((int64_t)band * cached_gainCompInt) >> 15));
     }
 
     /** Retrieve the current Bandpass filter sample.
@@ -186,6 +202,11 @@ class SVF {
     inline
     int16_t nextFiltMix(int input, float mix) {
       input = clip16(input);
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      int32_t cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
+      #else
+      int32_t cached_gainCompInt = gainCompInt;
+      #endif
       calcFilter(input);
 
       // Fast linear crossfade (avoids expensive pow/sqrt calls)
@@ -207,7 +228,7 @@ class SVF {
           hpfAmnt = (int32_t)(high * hpfMix);
       }
 
-      int32_t sum = (int32_t)(((int64_t)(lpfAmnt + bpfAmnt + hpfAmnt) * gainCompInt) >> 15);
+      int32_t sum = (int32_t)(((int64_t)(lpfAmnt + bpfAmnt + hpfAmnt) * cached_gainCompInt) >> 15);
       if (sum > MAX_16) return MAX_16;
       if (sum < -MAX_16) return -MAX_16;
       return (int16_t)sum;
@@ -219,9 +240,14 @@ class SVF {
     inline
     int16_t nextNotch(int32_t input) {
       input = clip16(input);
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      int32_t cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
+      #else
+      int32_t cached_gainCompInt = gainCompInt;
+      #endif
       calcFilter(input);
       int32_t notch = high + low;  // Compute on demand
-      return clip16((int32_t)(((int64_t)notch * gainCompInt) >> 15));
+      return clip16((int32_t)(((int64_t)notch * cached_gainCompInt) >> 15));
     }
 
   private:
@@ -238,18 +264,33 @@ class SVF {
      *  Uses 64-bit intermediates to prevent overflow with larger state limits.
      */
     inline void calcFilter(int32_t input) {
+      // Cache coefficients atomically to prevent race conditions with setFreq()/setRes()
+      // This ensures we use a consistent set of coefficients for the entire sample
+      int32_t cached_fInt, cached_q, cached_scale, cached_resOffsetInt;
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      cached_fInt = __atomic_load_n(&fInt, __ATOMIC_RELAXED);
+      cached_q = __atomic_load_n(&q, __ATOMIC_RELAXED);
+      cached_scale = __atomic_load_n(&scale, __ATOMIC_RELAXED);
+      cached_resOffsetInt = __atomic_load_n(&resOffsetInt, __ATOMIC_RELAXED);
+      #else
+      cached_fInt = fInt;
+      cached_q = q;
+      cached_scale = scale;
+      cached_resOffsetInt = resOffsetInt;
+      #endif
+
       // Apply resonance offset (15-bit fixed-point multiply)
-      input = (input * resOffsetInt) >> 15;
+      input = (input * cached_resOffsetInt) >> 15;
 
       // SVF difference equations using 15-bit fixed-point
       // Use 64-bit intermediates to prevent overflow with larger LIMIT
-      low += (int32_t)(((int64_t)fInt * band) >> 15);
+      low += (int32_t)(((int64_t)cached_fInt * band) >> 15);
 
       // high = scaled_input - low - (q * band)
-      high = ((scale * input) >> 14) - low - (int32_t)(((int64_t)q * band) >> 15);
+      high = ((cached_scale * input) >> 14) - low - (int32_t)(((int64_t)cached_q * band) >> 15);
 
       // band += f * high
-      band += (int32_t)(((int64_t)fInt * high) >> 15);
+      band += (int32_t)(((int64_t)cached_fInt * high) >> 15);
 
       // Prevent state variable overflow - only clamp accumulated states (low, band)
       // high is recalculated each sample so doesn't need clamping

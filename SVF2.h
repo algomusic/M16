@@ -264,17 +264,30 @@ private:
    *  Input expected in range -32767 to 32767, treated as -1.0 to 1.0
    */
   inline void calcFilter(int32_t input) {
+    // Cache coefficients atomically to prevent race conditions with setFreq()/setRes()
+    // This ensures we use a consistent set of coefficients for the entire sample
+    int32_t cached_fInt, cached_fbInt, cached_gainCompInt;
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    cached_fInt = __atomic_load_n(&fInt, __ATOMIC_RELAXED);
+    cached_fbInt = __atomic_load_n(&fbInt, __ATOMIC_RELAXED);
+    cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
+    #else
+    cached_fInt = fInt;
+    cached_fbInt = fbInt;
+    cached_gainCompInt = gainCompInt;
+    #endif
+
     // Apply resonance-dependent gain compensation to prevent clipping at high Q
-    int32_t in = ((int64_t)input * gainCompInt) >> 15;
+    int32_t in = ((int64_t)input * cached_gainCompInt) >> 15;
 
     // buf0 = buf0 + f * (in - buf0 + fb * (buf0 - buf1))
     int32_t diff01 = buf0 - buf1;
-    int32_t fbTerm = ((int64_t)fbInt * diff01) >> 15;
+    int32_t fbTerm = ((int64_t)cached_fbInt * diff01) >> 15;
     int32_t innerSum = in - buf0 + fbTerm;
-    buf0 += ((int64_t)fInt * innerSum) >> 15;
+    buf0 += ((int64_t)cached_fInt * innerSum) >> 15;
 
     // buf1 = buf1 + f * (buf0 - buf1)
-    buf1 += ((int64_t)fInt * (buf0 - buf1)) >> 15;
+    buf1 += ((int64_t)cached_fInt * (buf0 - buf1)) >> 15;
 
     // Prevent fixed-point overflow (equivalent to denormal flush)
     // Clamp to reasonable range - increased headroom since input is gain-compensated
