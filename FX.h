@@ -268,7 +268,110 @@ class FX {
       return clip16(clipOut * MAX_16);
     }
 
-    /** Compressor with gain compensation
+    /** Set compression parameters (call when parameters change, not every sample)
+    *  @param threshold is the threshold value between 0.0 and 1.0
+    *  @param ratio is the ratio value, > 1.0, typically 2 to 4
+    *  @param attackMs is attack time in milliseconds (default 5ms for percussive)
+    *  @param releaseMs is release time in milliseconds (default 100ms for percussive)
+    */
+    inline
+    void setCompression(float threshold, float ratio, float attackMs = 5.0f, float releaseMs = 100.0f) {
+      compThreshold = threshold;
+      compRatio = ratio;
+      compThresh = (int16_t)(threshold * MAX_16);
+      compInvRatio = 1.0f / ratio;
+      compGainCompensation = 1.0f + (1.0f - threshold * (1.0f + compInvRatio));
+      // Calculate envelope coefficients from time constants
+      // coeff = exp(-1 / (time_seconds * sample_rate))
+      float attackSamples = attackMs * 0.001f * SAMPLE_RATE;
+      float releaseSamples = releaseMs * 0.001f * SAMPLE_RATE;
+      compAttackCoeff = attackSamples > 0 ? fastExpNeg(1.0f / attackSamples) : 0.0f;
+      compReleaseCoeff = releaseSamples > 0 ? fastExpNeg(1.0f / releaseSamples) : 0.0f;
+    }
+
+    /** Compressor with gain compensation and attack/release envelope
+    *  @param sample is the input sample value
+    *  Call setCompression() first to set threshold, ratio, attack and release times
+    */
+    inline
+    int16_t compression(int32_t sample) {
+      int16_t absSample = sample > 0 ? sample : -sample;
+
+      // Calculate target gain reduction
+      float targetGainReduction = 0.0f;
+      if (absSample > compThresh) {
+        // How much over threshold?
+        float excess = absSample - compThresh;
+        float compressedExcess = excess * compInvRatio;
+        // Calc gain reduction needed (as a ratio)
+        targetGainReduction = (excess - compressedExcess) / (float)absSample;
+      }
+      // Apply envelope with attack/release
+      if (targetGainReduction > compEnvelope) {
+        compEnvelope = compAttackCoeff * compEnvelope + (1.0f - compAttackCoeff) * targetGainReduction;
+      } else {
+        compEnvelope = compReleaseCoeff * compEnvelope + (1.0f - compReleaseCoeff) * targetGainReduction;
+      }
+      // Apply gain reduction and makeup gain
+      float gain = (1.0f - compEnvelope) * compGainCompensation;
+      int32_t output = (int32_t)(sample * gain);
+      // Clip to prevent overflow
+      if (output > MAX_16) output = MAX_16;
+      if (output < MIN_16) output = MIN_16;
+      return (int16_t)output;
+    }
+
+    /** Left channel compressor with independent envelope state
+    *  @param sample is the input sample value
+    *  Call setCompression() first to set threshold, ratio, attack and release times
+    */
+    inline
+    int16_t compressionL(int32_t sample) {
+      int16_t absSample = sample > 0 ? sample : -sample;
+      float targetGainReduction = 0.0f;
+      if (absSample > compThresh) {
+        float excess = absSample - compThresh;
+        float compressedExcess = excess * compInvRatio;
+        targetGainReduction = (excess - compressedExcess) / (float)absSample;
+      }
+      if (targetGainReduction > compEnvelopeL) {
+        compEnvelopeL = compAttackCoeff * compEnvelopeL + (1.0f - compAttackCoeff) * targetGainReduction;
+      } else {
+        compEnvelopeL = compReleaseCoeff * compEnvelopeL + (1.0f - compReleaseCoeff) * targetGainReduction;
+      }
+      float gain = (1.0f - compEnvelopeL) * compGainCompensation;
+      int32_t output = (int32_t)(sample * gain);
+      if (output > MAX_16) output = MAX_16;
+      if (output < MIN_16) output = MIN_16;
+      return (int16_t)output;
+    }
+
+    /** Right channel compressor with independent envelope state
+    *  @param sample is the input sample value
+    *  Call setCompression() first to set threshold, ratio, attack and release times
+    */
+    inline
+    int16_t compressionR(int32_t sample) {
+      int16_t absSample = sample > 0 ? sample : -sample;
+      float targetGainReduction = 0.0f;
+      if (absSample > compThresh) {
+        float excess = absSample - compThresh;
+        float compressedExcess = excess * compInvRatio;
+        targetGainReduction = (excess - compressedExcess) / (float)absSample;
+      }
+      if (targetGainReduction > compEnvelopeR) {
+        compEnvelopeR = compAttackCoeff * compEnvelopeR + (1.0f - compAttackCoeff) * targetGainReduction;
+      } else {
+        compEnvelopeR = compReleaseCoeff * compEnvelopeR + (1.0f - compReleaseCoeff) * targetGainReduction;
+      }
+      float gain = (1.0f - compEnvelopeR) * compGainCompensation;
+      int32_t output = (int32_t)(sample * gain);
+      if (output > MAX_16) output = MAX_16;
+      if (output < MIN_16) output = MIN_16;
+      return (int16_t)output;
+    }
+
+    /** Compressor with gain compensation (legacy version - parameters computed every sample)
     *  @param sample is the input sample value
     *  @param threshold is the threshold value between 0.0 and 1.0
     *  @param ratio is the ratio value, > 1.0, typically 2 to 4
@@ -866,6 +969,18 @@ class FX {
     int32_t prevSmoothValue = 0;
     int32_t prevSmoothValueL = 0;
     int32_t prevSmoothValueR = 0;
+
+    // Compression state
+    float compThreshold = 0.5f;        // Cached threshold (0.0-1.0)
+    float compRatio = 4.0f;            // Cached ratio
+    int16_t compThresh = 16383;        // Threshold in samples (threshold * MAX_16)
+    float compInvRatio = 0.25f;        // 1.0 / ratio
+    float compGainCompensation = 1.0f; // Makeup gain
+    float compAttackCoeff = 0.9955f;   // Attack smoothing coeff (~5ms at 44.1kHz)
+    float compReleaseCoeff = 0.9998f;  // Release smoothing coeff (~100ms at 44.1kHz)
+    float compEnvelope = 0.0f;         // Mono envelope state
+    float compEnvelopeL = 0.0f;        // Left channel envelope state
+    float compEnvelopeR = 0.0f;        // Right channel envelope state
 
     void initPluckBuffer() {
       pluckBuffer = new int[PLUCK_BUFFER_SIZE]; // create a new array
