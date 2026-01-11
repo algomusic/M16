@@ -823,7 +823,7 @@ public:
   * @theTable The the wavetable to be filled
   */
   static void triGen(int16_t * theTable) {
-    Osc::generateWave(theTable, 0, 48, 1); // low
+    Osc::generateWave(theTable, 0, 48, 1); // low 
     Osc::generateWave(theTable, 1, 20, 1); // mid
     Osc::generateWave(theTable, 2, 12, 1); // high
     // for (int i=0; i<TABLE_SIZE; i++) {
@@ -890,7 +890,7 @@ public:
   * @theTable The the wavetable to be filled
   */
   static void sawGen(int16_t * theTable) {
-    Osc::generateWave(theTable, 0, 84, 3); // low
+    Osc::generateWave(theTable, 0, 96, 3); // low 
     Osc::generateWave(theTable, 1, 34, 3); // mid
     Osc::generateWave(theTable, 2, 8, 3); // high
     // for (int i=0; i<TABLE_SIZE; i++) {
@@ -903,7 +903,7 @@ public:
   */
   void sawGen() { 
     allocateWavetable();
-    Osc::generateWave(waveTable, 0, 84, 3); // low
+    Osc::generateWave(waveTable, 0, 96, 3); // low
     Osc::generateWave(waveTable, 1, 34, 3); // mid
     Osc::generateWave(waveTable, 2, 8, 3); // high
   }
