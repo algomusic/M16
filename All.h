@@ -35,6 +35,7 @@ class All {
     }
 
     /** Calculate the next Allpass filter sample, given an input signal.
+     *  First-order Schroeder allpass: y[n] = -g*x[n] + x[n-D] + g*y[n-D]
      *  @Input is an output sample from an oscillator or other audio element.
      */
     inline
@@ -123,6 +124,63 @@ class All {
       } else Serial.println("Allpass delay time must be >= 0");
     }
 
+    /** Calculate the next second-order allpass filter sample.
+     *  y[n] = a2*x[n] + a1*x[n-1] + x[n-2] - a1*y[n-1] - a2*y[n-2]
+     *  @param input is an audio sample value
+     */
+    inline
+    int16_t secondOrder(int32_t input) {
+      // y[n] = a2*x[n] + a1*x[n-1] + x[n-2] - a1*y[n-1] - a2*y[n-2]
+      int32_t output = ((so_a2 * input) >> 10)
+                     + ((so_a1 * so_x1) >> 10)
+                     + so_x2
+                     - ((so_a1 * so_y1) >> 10)
+                     - ((so_a2 * so_y2) >> 10);
+
+      output = clip16(output);
+
+      // Shift delay states
+      so_x2 = so_x1;
+      so_x1 = input;
+      so_y2 = so_y1;
+      so_y1 = output;
+
+      return (int16_t)output;
+    }
+
+    /** Set second-order allpass coefficients directly.
+     *  @param a1 coefficient (-2.0 to 2.0, typically around -2*cos(w0))
+     *  @param a2 coefficient (0.0 to 1.0, controls bandwidth)
+     */
+    inline
+    void setSecondOrderCoeffs(float a1, float a2) {
+      so_a1 = (int16_t)(a1 * 1024.0f);
+      so_a2 = (int16_t)(a2 * 1024.0f);
+    }
+
+    /** Set second-order allpass from frequency and Q.
+     *  @param freq center frequency in Hz
+     *  @param q Q factor (0.1 to 10, higher = narrower notch in phase response)
+     */
+    inline
+    void setSecondOrderFreq(float freq, float q) {
+      float w0 = 2.0f * 3.14159265f * freq / SAMPLE_RATE;
+      float alpha = sin(w0) / (2.0f * q);
+      float a2 = (1.0f - alpha) / (1.0f + alpha);
+      float a1 = -2.0f * cos(w0) / (1.0f + alpha);
+      so_a1 = (int16_t)(a1 * 1024.0f);
+      so_a2 = (int16_t)(a2 * 1024.0f);
+    }
+
+    /** Reset second-order filter state (call when changing parameters significantly) */
+    inline
+    void resetSecondOrder() {
+      so_x1 = 0;
+      so_x2 = 0;
+      so_y1 = 0;
+      so_y2 = 0;
+    }
+
   private:
 
     bool allpassInitiated = false;
@@ -137,6 +195,14 @@ class All {
     uint16_t bufferWriteIndex = 0;
     uint16_t bufferReadIndex = 0;
     bool usePSRAM = false;
+
+    // Second-order allpass state
+    int32_t so_x1 = 0;  // x[n-1]
+    int32_t so_x2 = 0;  // x[n-2]
+    int32_t so_y1 = 0;  // y[n-1]
+    int32_t so_y2 = 0;  // y[n-2]
+    int16_t so_a1 = 0;  // a1 coefficient (fixed-point, /1024)
+    int16_t so_a2 = 512; // a2 coefficient (fixed-point, /1024) default 0.5
 
     /** Update read index based on current write index and delay */
     void updateReadIndex() {
