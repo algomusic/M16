@@ -16,13 +16,13 @@
 #include "SdFat.h"
 #include "SPI.h"
 
-#define WAV_READ_BUFFER_SIZE 2048  // 2KB buffer - balance of speed vs stack safety on ESP32
+#define WAV_READ_BUFFER_SIZE 8192  // 8KB buffer - faster SD reads while keeping memory reasonable
 
 class Wav {
 
 public:
   /** Constructor */
-  Wav() : audioBuffer(nullptr), totalSamples(0), wavSampleRate(44100), numChannels(0), bitsPerSample(16), wavAudioFormat(1), sd(nullptr), currentFileIndex(-1), wavFileCount(0), maxAllocationBytes(0), externalBuffer(nullptr), externalBufferSize(0), usingExternalBuffer(false) {
+  Wav() : audioBuffer(nullptr), totalSamples(0), fileTotalSamples(0), wavSampleRate(44100), numChannels(0), bitsPerSample(16), wavAudioFormat(1), dataStart(0), bytesPerFrame(0), sd(nullptr), currentFileIndex(-1), wavFileCount(0), maxAllocationBytes(0), externalBuffer(nullptr), externalBufferSize(0), usingExternalBuffer(false), streamFileOpen(false) {
     currentFilename[0] = '\0';
   }
 
@@ -50,6 +50,7 @@ public:
 
   /** Destructor - free allocated memory (only if not using external buffer) */
   ~Wav() {
+    closeForStreaming();
     if (audioBuffer != nullptr && !usingExternalBuffer) {
       free(audioBuffer);
       audioBuffer = nullptr;
@@ -175,7 +176,10 @@ public:
     // Calculate buffer size
     // totalSamples is number of frames (mono sample or L/R pair)
     size_t bytesPerSample = bitsPerSample / 8;
-    totalSamples = dataSize / (numChannels * bytesPerSample);
+    bytesPerFrame = numChannels * bytesPerSample;
+    totalSamples = dataSize / bytesPerFrame;
+    fileTotalSamples = totalSamples;
+    dataStart = dataChunkPos + 8;
     // Always store as 16-bit (conversion happens during load)
     size_t bufferSize = totalSamples * numChannels * sizeof(int16_t);
 
@@ -229,7 +233,7 @@ public:
     }  // end dynamic allocation branch
 
     // Seek to audio data
-    if (!wavFile.seekSet(dataChunkPos + 8)) {
+    if (!wavFile.seekSet(dataStart)) {
       Serial.println("Wav: Failed to seek to audio data.");
       if (!usingExternalBuffer) {
         free(audioBuffer);
@@ -486,6 +490,14 @@ public:
     return totalSamples;
   }
 
+  /** Get total number of sample frames in the file (untruncated)
+   * @return total frames in file
+   */
+  inline
+  unsigned long getFileFrameCount() const {
+    return fileTotalSamples;
+  }
+
   /** Get sample rate in Hz
    * @return sample rate
    */
@@ -508,6 +520,309 @@ public:
   inline
   bool isLoaded() const {
     return audioBuffer != nullptr && totalSamples > 0;
+  }
+
+  /** Read frames from current file into destination buffer (no wrap).
+   * @param startFrame Frame offset from file start
+   * @param frames Number of frames to read
+   * @param dest Destination buffer (int16_t, interleaved if stereo)
+   * @return true if any frames read
+   */
+  bool readFrames(uint64_t startFrame, uint32_t frames, int16_t* dest) {
+    if (sd == nullptr) return false;
+    if (currentFilename[0] == '\0') return false;
+    if (fileTotalSamples == 0 || frames == 0) return false;
+
+    uint64_t maxFrame = fileTotalSamples;
+    if (startFrame >= maxFrame) startFrame = startFrame % maxFrame;
+
+    FsFile wavFile;
+    if (!wavFile.open(currentFilename, O_RDONLY)) {
+      return false;
+    }
+
+    uint64_t byteOffset = dataStart + (startFrame * bytesPerFrame);
+    if (!wavFile.seekSet(byteOffset)) {
+      wavFile.close();
+      return false;
+    }
+
+    uint32_t framesRead = 0;
+    static uint8_t tempBuffer[WAV_READ_BUFFER_SIZE];
+    while (framesRead < frames) {
+      uint32_t framesLeft = frames - framesRead;
+      uint32_t maxFramesInChunk = (WAV_READ_BUFFER_SIZE / bytesPerFrame);
+      uint32_t chunkFrames = (framesLeft < maxFramesInChunk) ? framesLeft : maxFramesInChunk;
+      size_t bytesToRead = (size_t)chunkFrames * bytesPerFrame;
+      int readBytes = wavFile.read(tempBuffer, bytesToRead);
+      if (readBytes <= 0) break;
+      size_t gotFrames = readBytes / bytesPerFrame;
+      if (gotFrames == 0) break;
+
+      size_t sampleCount = gotFrames * numChannels;
+      int16_t* out = dest + (framesRead * numChannels);
+
+      if (bitsPerSample == 8) {
+        for (size_t i = 0; i < sampleCount; i++) {
+          uint8_t sample8 = tempBuffer[i];
+          out[i] = (int16_t)((sample8 - 128) << 8);
+        }
+      } else if (bitsPerSample == 16) {
+        for (size_t i = 0; i < sampleCount; i++) {
+          size_t bytePos = i * 2;
+          out[i] = (int16_t)(tempBuffer[bytePos] | (tempBuffer[bytePos + 1] << 8));
+        }
+      } else if (bitsPerSample == 24) {
+        for (size_t i = 0; i < sampleCount; i++) {
+          size_t bytePos = i * 3;
+          int32_t sample24 = (int8_t)tempBuffer[bytePos + 2];
+          sample24 = (sample24 << 8) | tempBuffer[bytePos + 1];
+          sample24 = (sample24 << 8) | tempBuffer[bytePos];
+          out[i] = (int16_t)(sample24 >> 8);
+        }
+      } else if (bitsPerSample == 32) {
+        if (wavAudioFormat == 3) {
+          for (size_t i = 0; i < sampleCount; i++) {
+            size_t bytePos = i * 4;
+            union { uint32_t u; float f; } converter;
+            converter.u = tempBuffer[bytePos] |
+                         (tempBuffer[bytePos + 1] << 8) |
+                         (tempBuffer[bytePos + 2] << 16) |
+                         (tempBuffer[bytePos + 3] << 24);
+            float sample = converter.f;
+            if (sample > 1.0f) sample = 1.0f;
+            if (sample < -1.0f) sample = -1.0f;
+            out[i] = (int16_t)(sample * 32767.0f);
+          }
+        } else {
+          for (size_t i = 0; i < sampleCount; i++) {
+            size_t bytePos = i * 4;
+            int32_t sample32 = tempBuffer[bytePos] |
+                              (tempBuffer[bytePos + 1] << 8) |
+                              (tempBuffer[bytePos + 2] << 16) |
+                              ((int8_t)tempBuffer[bytePos + 3] << 24);
+            out[i] = (int16_t)(sample32 >> 16);
+          }
+        }
+      }
+
+      framesRead += (uint32_t)gotFrames;
+      if (gotFrames < chunkFrames) break;
+    }
+
+    wavFile.close();
+    return framesRead > 0;
+  }
+
+  /** Read frames with wrap-around at file boundaries. */
+  bool readFramesWrap(uint64_t startFrame, uint32_t frames, int16_t* dest) {
+    if (fileTotalSamples == 0 || frames == 0) return false;
+    uint64_t maxFrame = fileTotalSamples;
+    if (startFrame >= maxFrame) startFrame = startFrame % maxFrame;
+    uint64_t framesToEnd = maxFrame - startFrame;
+    if (frames <= framesToEnd) {
+      return readFrames(startFrame, frames, dest);
+    }
+    uint32_t firstFrames = (uint32_t)framesToEnd;
+    uint32_t secondFrames = frames - firstFrames;
+    bool ok1 = readFrames(startFrame, firstFrames, dest);
+    bool ok2 = readFrames(0, secondFrames, dest + (firstFrames * numChannels));
+    return ok1 || ok2;
+  }
+
+  /** Open a persistent file handle for streaming reads (avoids open/close per chunk).
+   *  Call before streaming playback. Call closeForStreaming() when done.
+   *  @return true if successful
+   */
+  bool openForStreaming() {
+    if (streamFileOpen) return true; // already open
+    if (currentFilename[0] == '\0') return false;
+    if (!streamFile.open(currentFilename, O_RDONLY)) {
+      Serial.println("Wav: Failed to open file for streaming");
+      return false;
+    }
+    streamFileOpen = true;
+    Serial.printf("Wav: Opened '%s' for streaming\n", currentFilename);
+    return true;
+  }
+
+  /** Close the persistent streaming file handle. */
+  void closeForStreaming() {
+    if (streamFileOpen) {
+      streamFile.close();
+      streamFileOpen = false;
+    }
+  }
+
+  /** Read frames using the persistent file handle (fast, no open/close per call).
+   *  Falls back to readFrames() if streaming handle not open.
+   */
+  bool readFramesFast(uint64_t startFrame, uint32_t frames, int16_t* dest) {
+    if (!streamFileOpen) return readFrames(startFrame, frames, dest);
+    if (fileTotalSamples == 0 || frames == 0) return false;
+
+    uint64_t maxFrame = fileTotalSamples;
+    if (startFrame >= maxFrame) startFrame = startFrame % maxFrame;
+
+    uint64_t byteOffset = dataStart + (startFrame * bytesPerFrame);
+    if (!streamFile.seekSet(byteOffset)) {
+      // Seek failed — try reopening the file handle
+      Serial.println("Wav: Seek failed, reopening stream");
+      streamFile.close();
+      streamFileOpen = false;
+      if (!openForStreaming()) return false;
+      if (!streamFile.seekSet(byteOffset)) return false;
+    }
+
+    uint32_t framesRead = 0;
+    static uint8_t tempBuffer[WAV_READ_BUFFER_SIZE];
+    while (framesRead < frames) {
+      uint32_t framesLeft = frames - framesRead;
+      uint32_t maxFramesInChunk = (WAV_READ_BUFFER_SIZE / bytesPerFrame);
+      uint32_t chunkFrames = (framesLeft < maxFramesInChunk) ? framesLeft : maxFramesInChunk;
+      size_t bytesToRead = (size_t)chunkFrames * bytesPerFrame;
+      int readBytes = streamFile.read(tempBuffer, bytesToRead);
+      if (readBytes <= 0) break;
+      size_t gotFrames = readBytes / bytesPerFrame;
+      if (gotFrames == 0) break;
+
+      size_t sampleCount = gotFrames * numChannels;
+      int16_t* out = dest + (framesRead * numChannels);
+
+      if (bitsPerSample == 8) {
+        for (size_t i = 0; i < sampleCount; i++) {
+          out[i] = (int16_t)((tempBuffer[i] - 128) << 8);
+        }
+      } else if (bitsPerSample == 16) {
+        for (size_t i = 0; i < sampleCount; i++) {
+          size_t bytePos = i * 2;
+          out[i] = (int16_t)(tempBuffer[bytePos] | (tempBuffer[bytePos + 1] << 8));
+        }
+      } else if (bitsPerSample == 24) {
+        for (size_t i = 0; i < sampleCount; i++) {
+          size_t bytePos = i * 3;
+          int32_t sample24 = (int8_t)tempBuffer[bytePos + 2];
+          sample24 = (sample24 << 8) | tempBuffer[bytePos + 1];
+          sample24 = (sample24 << 8) | tempBuffer[bytePos];
+          out[i] = (int16_t)(sample24 >> 8);
+        }
+      } else if (bitsPerSample == 32) {
+        if (wavAudioFormat == 3) {
+          float* floatBuf = (float*)tempBuffer;
+          for (size_t i = 0; i < sampleCount; i++) {
+            out[i] = (int16_t)(floatBuf[i] * 32767.0f);
+          }
+        } else {
+          for (size_t i = 0; i < sampleCount; i++) {
+            size_t bytePos = i * 4;
+            int32_t sample32 = tempBuffer[bytePos] | (tempBuffer[bytePos+1]<<8)
+                             | (tempBuffer[bytePos+2]<<16) | ((int8_t)tempBuffer[bytePos+3]<<24);
+            out[i] = (int16_t)(sample32 >> 16);
+          }
+        }
+      }
+      framesRead += gotFrames;
+    }
+    return framesRead > 0;
+  }
+
+  /** Read frames with wrap-around using persistent file handle. */
+  bool readFramesWrapFast(uint64_t startFrame, uint32_t frames, int16_t* dest) {
+    if (fileTotalSamples == 0 || frames == 0) return false;
+    uint64_t maxFrame = fileTotalSamples;
+    if (startFrame >= maxFrame) startFrame = startFrame % maxFrame;
+    uint64_t framesToEnd = maxFrame - startFrame;
+    if (frames <= framesToEnd) {
+      return readFramesFast(startFrame, frames, dest);
+    }
+    uint32_t firstFrames = (uint32_t)framesToEnd;
+    uint32_t secondFrames = frames - firstFrames;
+    bool ok1 = readFramesFast(startFrame, firstFrames, dest);
+    bool ok2 = readFramesFast(0, secondFrames, dest + (firstFrames * numChannels));
+    return ok1 || ok2;
+  }
+
+  // -------------------------------------------------------------------------
+  // Streaming helpers (generic, reusable)
+  // -------------------------------------------------------------------------
+
+  /** Normalize a frame index to [0, fileFrames). */
+  static inline int64_t normalizeFrame(int64_t frame, int64_t fileFrames) {
+    if (fileFrames <= 0) return 0;
+    return ((frame % fileFrames) + fileFrames) % fileFrames;
+  }
+
+  /** Normalize loadedStart/loadedEnd to the playhead epoch (handles wrap). */
+  static inline void normalizeEpoch(int64_t &loadedStart, int64_t &loadedEnd,
+                                    int64_t playHead, int64_t fileFrames) {
+    if (fileFrames <= 0) return;
+    if (loadedStart > playHead) {
+      int64_t shift = ((loadedStart - playHead - 1) / fileFrames + 1) * fileFrames;
+      loadedStart -= shift;
+      loadedEnd -= shift;
+    } else if (playHead - loadedStart >= fileFrames) {
+      int64_t shift = (playHead - loadedStart) / fileFrames * fileFrames;
+      loadedStart += shift;
+      loadedEnd += shift;
+    }
+  }
+
+  /** Compute signed headroom relative to playhead and direction. */
+  static inline int64_t computeHeadroom(int64_t loadedStart, int64_t loadedEnd,
+                                       int64_t playHead, int direction) {
+    return (direction > 0) ? (loadedEnd - playHead) : (playHead - loadedStart);
+  }
+
+  /** Write a chunk of file data into a ring buffer with extension mirror. */
+  static inline bool writeChunkToRing(Wav& wav,
+                                      int16_t* extendedBuffer,
+                                      unsigned long bufferFrames,
+                                      unsigned long extensionFrames,
+                                      uint64_t fileFrames,
+                                      int64_t filePos,
+                                      unsigned long frames,
+                                      int channels) {
+    if (!extendedBuffer || bufferFrames == 0 || fileFrames == 0 || frames == 0) {
+      return false;
+    }
+
+    int64_t ff = (int64_t)fileFrames;
+    int64_t normPos = normalizeFrame(filePos, ff);
+    unsigned long ringIdx = (unsigned long)(normPos % (int64_t)bufferFrames);
+
+    if (ringIdx + frames <= bufferFrames) {
+      if (!wav.readFramesWrapFast((uint64_t)normPos, frames,
+                                  &extendedBuffer[ringIdx * channels])) {
+        return false;
+      }
+    } else {
+      unsigned long firstFrames = bufferFrames - ringIdx;
+      unsigned long secondFrames = frames - firstFrames;
+      if (!wav.readFramesWrapFast((uint64_t)normPos, firstFrames,
+                                  &extendedBuffer[ringIdx * channels])) {
+        return false;
+      }
+      uint64_t secondPos = (uint64_t)normalizeFrame(normPos + (int64_t)firstFrames, ff);
+      if (!wav.readFramesWrapFast(secondPos, secondFrames,
+                                  &extendedBuffer[0])) {
+        return false;
+      }
+    }
+
+    // Update extension mirror if we wrote near ring start
+    bool overlapsExtension = false;
+    if (ringIdx + frames > bufferFrames) {
+      overlapsExtension = true;
+    } else if (ringIdx < extensionFrames) {
+      overlapsExtension = true;
+    }
+    if (overlapsExtension) {
+      memcpy(&extendedBuffer[bufferFrames * channels],
+             &extendedBuffer[0],
+             extensionFrames * channels * sizeof(int16_t));
+    }
+
+    return true;
   }
 
   /** Print first samples for debugging
@@ -535,10 +850,13 @@ public:
 private:
   int16_t* audioBuffer;
   unsigned long totalSamples;
+  unsigned long fileTotalSamples;
   uint32_t wavSampleRate;
   uint8_t numChannels;
   uint8_t bitsPerSample;
   uint8_t wavAudioFormat;     // 1 = PCM integer, 3 = IEEE float
+  uint32_t dataStart;
+  uint32_t bytesPerFrame;
   SdFs* sd;
   int currentFileIndex;       // Current file index (0-based), -1 if none loaded
   int wavFileCount;           // Total number of WAV files on SD card
@@ -547,6 +865,8 @@ private:
   int16_t* externalBuffer;    // Pre-allocated external buffer (nullptr if not used)
   size_t externalBufferSize;  // Size of external buffer in bytes
   bool usingExternalBuffer;   // True if using external buffer instead of allocating
+  FsFile streamFile;          // Persistent file handle for streaming reads
+  bool streamFileOpen;        // True if streamFile is open
 
   /** Load WAV file by index (0-based)
    * @param index Index of file to load
@@ -640,7 +960,7 @@ private:
   bool readAudioData(FsFile& wavFile) {
     size_t samplesLoaded = 0;
     size_t bufferIndex = 0;
-    uint8_t tempBuffer[WAV_READ_BUFFER_SIZE];
+    static uint8_t tempBuffer[WAV_READ_BUFFER_SIZE];
     size_t bytesPerSample = bitsPerSample / 8;
     int yieldCounter = 0;
     const int YIELD_INTERVAL = 8;  // Yield every 8 chunks (16KB)
@@ -650,6 +970,12 @@ private:
       if (readBytes <= 0) break;
 
       size_t chunkSamples = readBytes / (numChannels * bytesPerSample);
+      // Clamp to remaining frames to avoid buffer overrun when file is truncated
+      size_t remainingSamples = (samplesLoaded < totalSamples) ? (totalSamples - samplesLoaded) : 0;
+      if (chunkSamples > remainingSamples) {
+        chunkSamples = remainingSamples;
+      }
+      if (chunkSamples == 0) break;
 
       // Convert samples to 16-bit based on bit depth
       if (bitsPerSample == 8) {
