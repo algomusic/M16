@@ -30,7 +30,7 @@ private:
   int16_t delayBuffer[BUFFER_SIZE];
 
   uint32_t phase = 0;
-  uint16_t scanRate = 32768;
+  uint32_t scanRate = 32768;  // Fixed-point 16.16: 65536 = 1.0, supports up to 3.0
   uint16_t bufferIndex = 0;
 
   int16_t delayLevel = 1024;
@@ -116,16 +116,17 @@ public:
   }
 
   /** Set delay time - longer delays produce darker sound
-   * @param msDur Delay time in milliseconds (92ms to ~9000ms)
+   * @param msDur Delay time in milliseconds (~31ms to ~9000ms)
    */
   void setTime(float msDur) {
-    msDur = max(BASE_DELAY_MS, msDur);
+    float minDelay = BASE_DELAY_MS / 3.0f;  // ~31ms minimum
+    msDur = max(minDelay, msDur);
     float rate = BASE_DELAY_MS / msDur;
-    rate = max(0.01f, min(1.0f, rate));
-    scanRate = (uint16_t)(rate * 65536.0f);
+    rate = max(0.01f, min(3.0f, rate));  // Allow up to 3x scan rate for short delays
+    scanRate = (uint32_t)(rate * 65536.0f);
     if (scanRate < 655) scanRate = 655;
     // Adjust output smoothing: more smoothing at lower scan rates (longer delays)
-    smoothCoeff = (uint16_t)(2048.0f + rate * 6144.0f);
+    smoothCoeff = (uint16_t)(2048.0f + min(1.0f, rate) * 6144.0f);
   }
 
   /** @return Current delay time in milliseconds */
@@ -137,15 +138,15 @@ public:
 
   /** Set scan rate directly (BBD clock rate equivalent)
    * Higher = shorter delay, brighter. Lower = longer delay, darker.
-   * @param rate Scan rate 0.01 to 1.0
+   * @param rate Scan rate 0.01 to 3.0
    */
   void setScanRate(float rate) {
-    rate = max(0.01f, min(1.0f, rate));
-    scanRate = (uint16_t)(rate * 65536.0f);
+    rate = max(0.01f, min(3.0f, rate));  // Allow up to 3x for short delays
+    scanRate = (uint32_t)(rate * 65536.0f);
     if (scanRate < 655) scanRate = 655;
     // Adjust output smoothing: more smoothing at lower scan rates (longer delays)
     // Lower coeff = heavier smoothing. At rate 1.0: ~8192, at rate 0.1: ~2048
-    smoothCoeff = (uint16_t)(2048.0f + rate * 6144.0f);
+    smoothCoeff = (uint16_t)(2048.0f + min(1.0f, rate) * 6144.0f);
   }
 
   /** @return Current scan rate (0.01 to 1.0) */
@@ -215,12 +216,18 @@ public:
     inputCount++;
     uint32_t prevPhase = phase;
     phase += scanRate;
-    // Clock tick when phase crosses integer boundary
-    bool clockTick = (phase >> 16) != (prevPhase >> 16);
+    // Calculate how many buffer positions we advanced (supports rate > 1.0)
+    uint16_t prevPos = prevPhase >> 16;
+    uint16_t currPos = phase >> 16;
+    // Handle wrap-around
     if (phase >= (BUFFER_SIZE << 16)) {
       phase -= (BUFFER_SIZE << 16);
+      currPos = (currPos >= BUFFER_SIZE) ? currPos - BUFFER_SIZE : currPos;
     }
-    if (clockTick) {
+    // Calculate steps (handling wrap-around)
+    int16_t steps = currPos - prevPos;
+    if (steps < 0) steps += BUFFER_SIZE;  // Wrapped around
+    if (steps > 0) {
       // Read from buffer
       int32_t outValue = delayBuffer[bufferIndex];
       // Output low-pass filtering
@@ -254,7 +261,8 @@ public:
       // Soft saturation and write to buffer
       writeValue = softSaturate(writeValue);
       delayBuffer[bufferIndex] = writeValue;
-      bufferIndex = (bufferIndex + 1) & BUFFER_MASK;
+      // Advance buffer by number of steps (enables shorter delays at rate > 1.0)
+      bufferIndex = (bufferIndex + steps) & BUFFER_MASK;
     }
     // Smooth output every sample to reduce staircase buzz
     // One-pole lowpass with rate-proportional smoothing (more at longer delays)
