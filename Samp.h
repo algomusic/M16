@@ -477,7 +477,11 @@ public:
 
     // Advance phase now (while we have the lock)
     // Pre-computed 64-bit increment avoids shift in hot path
-    phase_fractional += phaseInc64;
+    if (reverse) {
+      phase_fractional -= phaseInc64;
+    } else {
+      phase_fractional += phaseInc64;
+    }
 
     // Cache envelope state
     uint32_t localEnvPhase = envPhase;
