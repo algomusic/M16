@@ -12,6 +12,9 @@
  * M16 is licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
  */
 
+#ifndef M16_H_
+#define M16_H_
+
 #include "Arduino.h"
 
 // based on "Hardware_defines.h" in Mozzi
@@ -19,7 +22,7 @@
 #define IS_ESP32() (defined(ESP32))
 #define IS_ESP32S2() (defined(CONFIG_IDF_TARGET_ESP32S2))
 #define IS_ESP32C3() (defined(CONFIG_IDF_TARGET_ESP32C3))
-#define IS_RP2040() (defined(ARDUINO_ARCH_RP2040))
+#define IS_RP2040() (defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_RP2035) || defined(ARDUINO_ARCH_RP2350))
 // IS_CAPABLE() groups platforms with sufficient CPU/memory for complex DSP (filters, reverb, etc.)
 #define IS_CAPABLE() (IS_ESP32() || IS_RP2040())
 
@@ -1131,3 +1134,4 @@ float chaosRand(float range) {
   }
 
 // /* M16_H_ */
+#endif /* M16_H_ */
