@@ -455,21 +455,41 @@ public:
 
     modOffset <<= 8; // Scale to 16.16 format
 
-    // Add modulation offset to phase (both 16.16)
+    #if IS_ESP32() || IS_RP2040()
+    if (!pulseWidthOn && !isNoise && !isCrackle) {
+      // Atomic path: each core gets a unique phase value (matches next() pattern)
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+
+      if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
+
+      uint32_t myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
+
+      // Add modulation offset to this core's phase
+      uint32_t p = myPhase + modOffset;
+
+      int idx = (p >> 16) & (TABLE_SIZE - 1);
+      int frac = (p >> 6) & 0x3FF;
+
+      int16_t s0 = cachedBandPtr[idx];
+      int16_t s1 = cachedBandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+      int32_t sampVal = s0 + (((s1 - s0) * frac) >> 10);
+
+      if (spreadActive) {
+        sampVal = doSpreadAtomic(sampVal);
+      }
+      return sampVal;
+    }
+    #endif
+
+    // Non-atomic fallback for pulse width, noise, crackle, or single-core platforms
     uint32_t p = phase_fractional + modOffset;
 
-    // Extract table index and fractional part for interpolation
     int idx = (p >> 16) & (TABLE_SIZE - 1);
     int frac = (p >> 6) & 0x3FF;  // 10-bit fractional (0-1023)
 
-    // Atomic load of bandPtr for thread-safety with setFreq on dual-core systems
-    #if IS_ESP32() || IS_RP2040()
-      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
-    #else
-      int16_t* cachedBandPtr = bandPtr;
-    #endif
+    int16_t* cachedBandPtr = bandPtr;
 
-    // Linear interpolation between adjacent samples
     int16_t s0 = cachedBandPtr[idx];
     int16_t s1 = cachedBandPtr[(idx + 1) & (TABLE_SIZE - 1)];
     int32_t sampVal = s0 + (((s1 - s0) * frac) >> 10);
@@ -509,7 +529,43 @@ public:
     modOffset = (modOffset * modDepthScale) >> 10;
     modOffset <<= 8; // Scale to 16.16 format
 
-    // Half phase increment for 2x oversampling
+    #if IS_ESP32() || IS_RP2040()
+    if (!pulseWidthOn && !isNoise && !isCrackle) {
+      // Atomic path: advance full increment atomically, compute two lookups from it
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+
+      if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
+
+      uint32_t myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
+      uint32_t halfInc = cachedIncrement >> 1;
+
+      // --- Sample 1: at start of this core's phase slice ---
+      uint32_t p1 = myPhase + modOffset;
+      int idx1 = (p1 >> 16) & (TABLE_SIZE - 1);
+      int frac1 = (p1 >> 6) & 0x3FF;
+      int16_t s0 = cachedBandPtr[idx1];
+      int16_t s1 = cachedBandPtr[(idx1 + 1) & (TABLE_SIZE - 1)];
+      int32_t samp1 = s0 + (((s1 - s0) * frac1) >> 10);
+
+      // --- Sample 2: at half-step within this core's phase slice ---
+      uint32_t p2 = (myPhase + halfInc) + modOffset;
+      int idx2 = (p2 >> 16) & (TABLE_SIZE - 1);
+      int frac2 = (p2 >> 6) & 0x3FF;
+      s0 = cachedBandPtr[idx2];
+      s1 = cachedBandPtr[(idx2 + 1) & (TABLE_SIZE - 1)];
+      int32_t samp2 = s0 + (((s1 - s0) * frac2) >> 10);
+
+      int32_t sampVal = (samp1 + samp2) >> 1;
+
+      if (spreadActive) {
+        sampVal = doSpreadAtomic(sampVal);
+      }
+      return sampVal;
+    }
+    #endif
+
+    // Non-atomic fallback for pulse width, noise, crackle, or single-core platforms
     uint32_t halfInc = phase_increment_fractional >> 1;
 
     // --- Sample 1: at current phase ---
