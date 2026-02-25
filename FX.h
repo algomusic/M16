@@ -27,6 +27,10 @@
 class FX {
 
   public:
+    #if IS_ESP32() || IS_RP2040()
+    std::atomic<bool> _fxLock{false};
+    #endif
+
     /** Constructor. */
     FX() {}
 
@@ -493,21 +497,25 @@ class FX {
     inline
     int16_t pluck(int16_t audioIn, float pluckFreq, float depth) {
       if (!pluckBufferEstablished) initPluckBuffer();
-      // read
-      //float read_index_fractional = SAMPLE_RATE / pluckFreq;
-      int pluck_buffer_read_index = pluck_buffer_write_index - SAMPLE_RATE / pluckFreq + 1;
-      if (pluck_buffer_read_index < 0) pluck_buffer_read_index += PLUCK_BUFFER_SIZE;
-      int bufferRead = pluckBuffer[pluck_buffer_read_index] * depth;
-      // update buffer
-      int32_t output = audioIn + bufferRead;
-      pluckBuffer[(int)pluck_buffer_write_index] = output; // divide?
-      int32_t aveOut = (output + prevPluckOutput)>>1;
-      prevPluckOutput = aveOut;
-      // increment buffer phase
-      pluck_buffer_write_index += 1;
-      if (pluck_buffer_write_index > PLUCK_BUFFER_SIZE) pluck_buffer_write_index -= PLUCK_BUFFER_SIZE;
-      // send output
-      return aveOut;
+      int16_t result = 0;
+      M16_ATOMIC_GUARD_BLOCKING(_fxLock, {
+        // read
+        //float read_index_fractional = SAMPLE_RATE / pluckFreq;
+        int pluck_buffer_read_index = pluck_buffer_write_index - SAMPLE_RATE / pluckFreq + 1;
+        if (pluck_buffer_read_index < 0) pluck_buffer_read_index += PLUCK_BUFFER_SIZE;
+        int bufferRead = pluckBuffer[pluck_buffer_read_index] * depth;
+        // update buffer
+        int32_t output = audioIn + bufferRead;
+        pluckBuffer[(int)pluck_buffer_write_index] = output; // divide?
+        int32_t aveOut = (output + prevPluckOutput)>>1;
+        prevPluckOutput = aveOut;
+        // increment buffer phase
+        pluck_buffer_write_index += 1;
+        if (pluck_buffer_write_index > PLUCK_BUFFER_SIZE) pluck_buffer_write_index -= PLUCK_BUFFER_SIZE;
+        // send output
+        result = aveOut;
+      });
+      return result;
     }
 
     /** A simple reverb using recursive delay lines.
@@ -521,8 +529,12 @@ class FX {
       if (!reverbInitiated) {
         initReverb(reverbSize);
       }
-      processReverb(audioIn, audioIn);
-      return clip16(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12) + ((revP2 * reverbMix)>>12));
+      int16_t result = 0;
+      M16_ATOMIC_GUARD_BLOCKING(_fxLock, {
+        processReverb(audioIn, audioIn);
+        result = clip16(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12) + ((revP2 * reverbMix)>>12));
+      });
+      return result;
     }
 
     /** A simple 'spring' reverb using recursive delay lines.
@@ -565,14 +577,16 @@ class FX {
         #endif
       }
 
-      if (reverb2Initiated) {
-        processReverb((audioInLeft + allpassRevOut)>>1, clip16(audioInRight + allpassRevOut)>>1);
-      } else {
-        processReverb(clip16(audioInLeft), clip16(audioInRight));
-      }
+      M16_ATOMIC_GUARD_BLOCKING(_fxLock, {
+        if (reverb2Initiated) {
+          processReverb((audioInLeft + allpassRevOut)>>1, clip16(audioInRight + allpassRevOut)>>1);
+        } else {
+          processReverb(clip16(audioInLeft), clip16(audioInRight));
+        }
 
-      audioOutLeft = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
-      audioOutRight = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
+        audioOutLeft = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
+        audioOutRight = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
+      });
     }
 
     /** Half-rate stereo reverb with interpolation for reduced CPU usage.
@@ -614,31 +628,38 @@ class FX {
         #endif
       }
 
-      int32_t outL, outR;
-      reverbInterpToggle = !reverbInterpToggle;
-
-      if (reverbInterpToggle) {
-        // Process reverb this sample
-        if (reverb2Initiated) {
-          processReverb((audioInLeft + allpassRevOut)>>1, clip16(audioInRight + allpassRevOut)>>1);
-        } else {
-          processReverb(clip16(audioInLeft), clip16(audioInRight));
-        }
-        outL = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
-        outR = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
-        reverbInterpPrevL = outL;
-        reverbInterpPrevR = outR;
-      } else {
-        // Skip reverb processing, use previous output
-        outL = reverbInterpPrevL;
-        outR = reverbInterpPrevR;
-      }
-
-      // Smooth output with 1-pole lowpass to reduce half-rate artifacts
-      reverbInterpSmoothL += (outL - reverbInterpSmoothL) >> 2;
-      reverbInterpSmoothR += (outR - reverbInterpSmoothR) >> 2;
+      // Default to cached smoothed output (used when lock not acquired)
       audioOutLeft = reverbInterpSmoothL;
       audioOutRight = reverbInterpSmoothR;
+
+      // Non-blocking: losing core uses cached output above instead of spinning
+      M16_ATOMIC_GUARD(_fxLock, {
+        int32_t outL; int32_t outR;
+        reverbInterpToggle = !reverbInterpToggle;
+
+        if (reverbInterpToggle) {
+          // Process reverb this sample
+          if (reverb2Initiated) {
+            processReverb((audioInLeft + allpassRevOut)>>1, clip16(audioInRight + allpassRevOut)>>1);
+          } else {
+            processReverb(clip16(audioInLeft), clip16(audioInRight));
+          }
+          outL = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
+          outR = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
+          reverbInterpPrevL = outL;
+          reverbInterpPrevR = outR;
+        } else {
+          // Skip reverb processing, use previous output
+          outL = reverbInterpPrevL;
+          outR = reverbInterpPrevR;
+        }
+
+        // Smooth output with 1-pole lowpass to reduce half-rate artifacts
+        reverbInterpSmoothL += (outL - reverbInterpSmoothL) >> 2;
+        reverbInterpSmoothR += (outR - reverbInterpSmoothR) >> 2;
+        audioOutLeft = reverbInterpSmoothL;
+        audioOutRight = reverbInterpSmoothR;
+      });
     }
 
     /** Reset the interpolated reverb smoothing state.
@@ -664,6 +685,9 @@ class FX {
         allpass2.setFeedbackLevel(0.79);
         reverb2Initiated = true;
       }
+      // Allpass pre-processing under the FX lock (reverbStereo also acquires it,
+      // but M16_ATOMIC_GUARD_BLOCKING is non-reentrant so we do allpass outside)
+      // Note: allpass filters have their own Del locks for thread safety
       int32_t summedMono = (audioInLeft + audioInRight) >> 1;
       allpassRevOut = allpass2.next(allpass1.next(summedMono));
       reverbStereo(audioInLeft , audioInRight, audioOutLeft, audioOutRight);
@@ -762,14 +786,18 @@ class FX {
       if (!chorusInitiated) {
         initChorus();
       }
-      float chorusLfoVal = chorusLfo.next() * MAX_16_INV;
-      chorusDelay.setTime(chorusDelayTime + chorusLfoVal * chorusLfoWidth);
-      int32_t delVal = chorusDelay.next(audioIn);
-      int32_t inVal = (audioIn * (chorusMixInput))>>10;
-      delVal = (delVal * chorusMixDelay)>>10;
-      // Normalize output to prevent clipping
-      int32_t sum = inVal + delVal;
-      return clip16((sum * chorusMixNorm)>>10);
+      int16_t result = 0;
+      M16_ATOMIC_GUARD_BLOCKING(_fxLock, {
+        float chorusLfoVal = chorusLfo.next() * MAX_16_INV;
+        chorusDelay.setTime(chorusDelayTime + chorusLfoVal * chorusLfoWidth);
+        int32_t delVal = chorusDelay.next(audioIn);
+        int32_t inVal = (audioIn * (chorusMixInput))>>10;
+        delVal = (delVal * chorusMixDelay)>>10;
+        // Normalize output to prevent clipping
+        int32_t sum = inVal + delVal;
+        result = clip16((sum * chorusMixNorm)>>10);
+      });
+      return result;
     }
 
     /** A stereo chorus using two modulated delay lines.
@@ -784,20 +812,22 @@ class FX {
       if (!chorusInitiated) {
         initChorus();
       }
-      float chorusLfoVal = chorusLfo.next() * MAX_16_INV;
-      chorusDelay.setTime(chorusDelayTime + chorusLfoVal * chorusLfoWidth);
-      chorusDelay2.setTime(chorusDelayTime2 + chorusLfoVal * chorusLfoWidth);
-      int32_t delVal = chorusDelay.next(audioInLeft);
-      int32_t delVal2 = chorusDelay2.next(audioInRight);
-      int32_t inVal = (audioInLeft * (chorusMixInput))>>10;
-      int32_t inVal2 = (audioInRight * (chorusMixInput))>>10;
-      delVal = (delVal * chorusMixDelay)>>10;
-      delVal2 = (delVal2 * chorusMixDelay)>>10;
-      // Normalize output to prevent clipping
-      int32_t sumL = inVal + delVal;
-      int32_t sumR = inVal2 + delVal2;
-      audioOutLeft = clip16((sumL * chorusMixNorm)>>10);
-      audioOutRight = clip16((sumR * chorusMixNorm)>>10);
+      M16_ATOMIC_GUARD_BLOCKING(_fxLock, {
+        float chorusLfoVal = chorusLfo.next() * MAX_16_INV;
+        chorusDelay.setTime(chorusDelayTime + chorusLfoVal * chorusLfoWidth);
+        chorusDelay2.setTime(chorusDelayTime2 + chorusLfoVal * chorusLfoWidth);
+        int32_t delVal = chorusDelay.next(audioInLeft);
+        int32_t delVal2 = chorusDelay2.next(audioInRight);
+        int32_t inVal = (audioInLeft * (chorusMixInput))>>10;
+        int32_t inVal2 = (audioInRight * (chorusMixInput))>>10;
+        delVal = (delVal * chorusMixDelay)>>10;
+        delVal2 = (delVal2 * chorusMixDelay)>>10;
+        // Normalize output to prevent clipping
+        int32_t sumL = inVal + delVal;
+        int32_t sumR = inVal2 + delVal2;
+        audioOutLeft = clip16((sumL * chorusMixNorm)>>10);
+        audioOutRight = clip16((sumR * chorusMixNorm)>>10);
+      });
     }
 
     /** Set the chorus effect depth
