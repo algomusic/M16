@@ -91,7 +91,8 @@ public:
    */
   inline void setNormalisedCutoff(float cutoff_val) {
     _normalisedCutoff = max(0.0f, min(1.0f, cutoff_val));
-    float fFloat = min(0.96f, pow(_normalisedCutoff, 2.2f));
+    // Minimum f of 0.001 (~20Hz) prevents filter from stalling at cutoff=0
+    float fFloat = max(0.001f, min(0.96f, pow(_normalisedCutoff, 2.2f)));
     fInt = (int32_t)(fFloat * 32768.0f);
     freq = (int32_t)(maxFreq * fFloat);
     // fb = q + q * (1.0 + f)  ->  fbInt = qInt + (qInt * (32768 + fInt)) >> 15
@@ -224,14 +225,16 @@ public:
   inline int16_t nextNotch(int32_t input) {
     input = clip16(input);
     calcFilter(input);
-    return max(-MAX_16, (int)min((int32_t)MAX_16, notch));
+    int32_t n = notch;
+    return max(-MAX_16, (int)min((int32_t)MAX_16, n));
   }
 
 private:
-  int32_t low = 0;
-  int32_t band = 0;
-  int32_t high = 0;
-  int32_t notch = 0;
+  // volatile: ensure cross-core visibility on dual-core ESP32 (no CPU overhead)
+  volatile int32_t low = 0;
+  volatile int32_t band = 0;
+  volatile int32_t high = 0;
+  volatile int32_t notch = 0;
   int32_t allpassPrevIn = 0;
   int32_t allpassPrevOut = 0;
   int32_t simplePrev = 0;
@@ -246,8 +249,9 @@ private:
   int32_t gainCompInt = 32768;  // Resonance-dependent gain compensation
 
   // Filter state as 15-bit fixed-point (scaled by 32768)
-  int32_t buf0 = 0;
-  int32_t buf1 = 0;
+  // volatile: ensure cross-core visibility on dual-core ESP32 (no CPU overhead)
+  volatile int32_t buf0 = 0;
+  volatile int32_t buf1 = 0;
 
   // DC blocker state (15-bit fixed-point)
   int32_t dcPrev = 0;
