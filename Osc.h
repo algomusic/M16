@@ -80,10 +80,9 @@ public:
     int32_t sampVal;
 
     // Fast path: atomic phase increment for thread-safe dual-core operation
-    // Pulse width, noise, and crackle modes use the slower non-atomic path
     #if IS_RP2040()
     // Pico dual-core: use pre-acquired phase if available (set by advanceAllPhases)
-    if (isDualCore && !pulseWidthOn && !isNoise && !isCrackle) {
+    if (isDualCore && !pulseWidthOn) {
       int coreNum = get_core_num();
       // Check this core's flag - prevents race where other core clears our flag
       if (useStoredPhase[coreNum]) {
@@ -92,7 +91,13 @@ public:
 
         // Use the phase that was stored for this core (already advanced under mutex)
         uint32_t myPhase = storedPhase[coreNum];
-        int idx = (myPhase >> 16) & (TABLE_SIZE - 1);
+        int idx;
+        if (isNoise && !isCrackle) {
+          uint32_t scrambled = myPhase * 2654435761u;
+          idx = (scrambled >> 16) & (TABLE_SIZE - 1);
+        } else {
+          idx = (myPhase >> 16) & (TABLE_SIZE - 1);
+        }
         sampVal = cachedBandPtr[idx];
 
         if (spreadActive) {
@@ -124,9 +129,37 @@ public:
       }
       return sampVal;
     }
+
+    // Atomic path for noise and crackle oscillators
+    if ((isNoise || isCrackle) && !pulseWidthOn) {
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+
+      if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
+
+      uint32_t myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
+
+      int idx;
+      if (isCrackle) {
+        // Crackle: normal index, sparse impulses in table
+        idx = (myPhase >> 16) & (TABLE_SIZE - 1);
+      } else {
+        // Noise: scramble phase via multiplicative hash to avoid periodicity
+        // Replaces the non-atomic random-jump-on-wrap with a deterministic scatter
+        // that maps sequential phases to pseudo-random table positions
+        uint32_t scrambled = myPhase * 2654435761u; // Knuth multiplicative hash
+        idx = (scrambled >> 16) & (TABLE_SIZE - 1);
+      }
+      sampVal = cachedBandPtr[idx];
+
+      if (spreadActive) {
+        sampVal = doSpreadAtomic(sampVal);
+      }
+      return sampVal;
+    }
     #endif
 
-    // Non-atomic path for pulse width, noise, crackle modes (or single-core platforms)
+    // Non-atomic fallback for pulse width mode (or single-core platforms)
     int idx = phase_fractional >> 16;
     sampVal = bandPtr[idx];
     incrementPhase();
@@ -490,6 +523,77 @@ public:
 
     int16_t* cachedBandPtr = bandPtr;
 
+    int16_t s0 = cachedBandPtr[idx];
+    int16_t s1 = cachedBandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+    int32_t sampVal = s0 + (((s1 - s0) * frac) >> 10);
+
+    incrementPhase();
+
+    if (spreadActive) {
+      sampVal = doSpread(sampVal);
+    }
+    return sampVal;
+  }
+
+  /** Phase Modulation using pre-scaled integer mod index (avoids per-sample float math)
+   *
+   * Equivalent to phMod() but replaces two per-sample float multiplies with one
+   * integer multiply + shift. Pre-compute the scaled value at parameter-change time
+   * (e.g., in loop() or at note trigger), then pass it here in audioUpdate().
+   *
+   * Pre-scaling formula:
+   *   int32_t modIndexScaled = (int32_t)(modIndex * 2048.0f);
+   *   // where 2048 = 8.0 * 256.0 (the internal scaling factors)
+   *
+   * Example usage:
+   *   // At parameter-change time (loop, envelope update, note trigger):
+   *   float modIndex = fmDepth * envelopeFollow;  // 0.0 to ~10.0
+   *   int32_t scaledMod = (int32_t)(modIndex * 2048.0f);
+   *
+   *   // In audioUpdate() (called at sample rate):
+   *   int16_t sample = osc.phModInt(fmOsc.next(), scaledMod);
+   *
+   * @param modulator - The next sample from the modulating waveform (int16_t)
+   * @param modIndexScaled - Pre-scaled mod index: (int32_t)(modIndex * 2048.0f)
+   */
+  inline int16_t phModInt(int16_t modulator, int32_t modIndexScaled) {
+    // modOffset = modulator * modIndex * 8.0f, pre-scaled by 256
+    int32_t modOffset = ((int32_t)modulator * modIndexScaled) >> 8;
+
+    // Anti-aliasing: reduce mod depth at high carrier frequencies
+    modOffset = (modOffset * modDepthScale) >> 10;
+
+    modOffset <<= 8; // Scale to 16.16 format
+
+    #if IS_ESP32() || IS_RP2040()
+    if (!pulseWidthOn && !isNoise && !isCrackle) {
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+
+      if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
+
+      uint32_t myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
+      uint32_t p = myPhase + modOffset;
+
+      int idx = (p >> 16) & (TABLE_SIZE - 1);
+      int frac = (p >> 6) & 0x3FF;
+
+      int16_t s0 = cachedBandPtr[idx];
+      int16_t s1 = cachedBandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+      int32_t sampVal = s0 + (((s1 - s0) * frac) >> 10);
+
+      if (spreadActive) {
+        sampVal = doSpreadAtomic(sampVal);
+      }
+      return sampVal;
+    }
+    #endif
+
+    uint32_t p = phase_fractional + modOffset;
+    int idx = (p >> 16) & (TABLE_SIZE - 1);
+    int frac = (p >> 6) & 0x3FF;
+
+    int16_t* cachedBandPtr = bandPtr;
     int16_t s0 = cachedBandPtr[idx];
     int16_t s1 = cachedBandPtr[(idx + 1) & (TABLE_SIZE - 1)];
     int32_t sampVal = s0 + (((s1 - s0) * frac) >> 10);
