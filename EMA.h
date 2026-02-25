@@ -92,8 +92,9 @@ public:
   }
 
 private:
-  int32_t outPrev = 0;
-  int32_t inPrev = 0;
+  // volatile: ensure cross-core visibility on dual-core ESP32 (no CPU overhead)
+  volatile int32_t outPrev = 0;
+  volatile int32_t inPrev = 0;
   volatile float f = 10000;
   int16_t alpha_val = 1024;
 };
