@@ -45,6 +45,7 @@ private:
   int16_t prevOutValue = 0;
   int16_t holdValue = 0;
   int32_t smoothedOut = 0;  // Per-sample smoothed output
+  int16_t lastResult = 0;   // Cached result for non-blocking dual-core
   uint16_t smoothCoeff = 8192;  // Smoothing coefficient (higher = more smoothing)
   int32_t inputAccum = 0;
   uint8_t inputCount = 0;
@@ -209,6 +210,7 @@ public:
     prevOutValue = 0;
     inputAccum = 0;
     inputCount = 0;
+    lastResult = 0;
   }
 
   /** Process one sample through the BBD
@@ -216,8 +218,8 @@ public:
    * @return Delayed output sample
    */
   inline int16_t next(int32_t inValue) {
-    int16_t result;
-    M16_ATOMIC_GUARD_BLOCKING(_bbdLock, {
+    bool handled = false;
+    M16_ATOMIC_GUARD(_bbdLock, {
       // Accumulate inputs for anti-aliasing at low scan rates
       inputAccum += inValue;
       inputCount++;
@@ -274,9 +276,10 @@ public:
       // Smooth output every sample to reduce staircase buzz
       // One-pole lowpass with rate-proportional smoothing (more at longer delays)
       smoothedOut += ((holdValue - smoothedOut) * smoothCoeff) >> 15;
-      result = (int16_t)smoothedOut;
+      lastResult = (int16_t)smoothedOut;
+      handled = true;
     });
-    return result;
+    return lastResult;
   }
 
   /** @return Current hold value */
