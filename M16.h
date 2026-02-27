@@ -384,8 +384,8 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
 
   bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
       // Lightweight one-pole low-pass filter for output smoothing
-      // Catches any remaining discontinuities from filter state races, etc.
-      // Formula: out = (in + prevOut) >> 1  (very lightweight: one add, one shift)
+      // Catches remaining discontinuities from RTOS stalls, dual-core races, etc.
+      // Formula: out = (in + prevOut) >> 1  (one add, one shift)
       // int32_t smoothL = (leftSample + _prevOutL) >> 1;
       // int32_t smoothR = (rightSample + _prevOutR) >> 1;
       // _prevOutL = smoothL;
@@ -447,7 +447,7 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
             "FillAudioBuffer1",
             8192,
             NULL,
-            2,
+            configMAX_PRIORITIES - 1,
             &audioCallback2Handle,
             1
         );
@@ -694,7 +694,7 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
     i2sOut.setBCLK(picoI2sPins[0]);
     i2sOut.setDOUT(picoI2sPins[1]);
     i2sOut.setBitsPerSample(32);
-    i2sOut.setBuffers(8, 64);  // Larger buffers for complex DSP headroom (8*64=512 samples ~11.6ms)
+    i2sOut.setBuffers(8, 128);  // Larger buffers for complex DSP headroom (8*64=512 samples ~11.6ms)
 
     if (!i2sOut.begin(SAMPLE_RATE)) {
       Serial.println("I2S output init failed!");
@@ -1068,37 +1068,49 @@ float chaosRand(float range) {
 
   /**  === ISR-safe Xoshiro128** PRNG ===
   * Good low-bit randomness for audio applications
+  * Per-core state arrays prevent dual-core race conditions that could
+  * corrupt the PRNG to the all-zero absorbing state.
   * */
-  static uint32_t s0 = 0x9E3779B9;
-  static uint32_t s1 = 0x243F6A88;
-  static uint32_t s2 = 0xB7E15162;
-  static uint32_t s3 = 0xC0DEC0DE;
+  #if IS_ESP32()
+    #define _M16_PRNG_CORES 2
+    #define _M16_CORE_ID() xPortGetCoreID()
+  #elif IS_RP2040()
+    #define _M16_PRNG_CORES 2
+    #define _M16_CORE_ID() get_core_num()
+  #else
+    #define _M16_PRNG_CORES 1
+    #define _M16_CORE_ID() 0
+  #endif
+
+  static uint32_t _prng_s0[_M16_PRNG_CORES] = {0x9E3779B9, 0x12345678};
+  static uint32_t _prng_s1[_M16_PRNG_CORES] = {0x243F6A88, 0xFEDCBA98};
+  static uint32_t _prng_s2[_M16_PRNG_CORES] = {0xB7E15162, 0xABCDEF01};
+  static uint32_t _prng_s3[_M16_PRNG_CORES] = {0xC0DEC0DE, 0x87654321};
 
   // Rotate left helper
   inline uint32_t rotl(const uint32_t x, int k) {
       return (x << k) | (x >> (32 - k));
   }
 
-  // Core generator: xoshiro128**
+  // Core generator: xoshiro128** (per-core state, no locking needed)
   inline uint32_t audioRand32() {
-      const uint32_t result = rotl(s1 * 5, 7) * 9; // strong low-bit mix
+      int c = _M16_CORE_ID();
+      const uint32_t result = rotl(_prng_s1[c] * 5, 7) * 9;
 
-      const uint32_t t = s1 << 9;
-      s2 ^= s0;
-      s3 ^= s1;
-      s1 ^= s2;
-      s0 ^= s3;
+      const uint32_t t = _prng_s1[c] << 9;
+      _prng_s2[c] ^= _prng_s0[c];
+      _prng_s3[c] ^= _prng_s1[c];
+      _prng_s1[c] ^= _prng_s2[c];
+      _prng_s0[c] ^= _prng_s3[c];
 
-      s2 ^= t;
-      s3 = rotl(s3, 11);
+      _prng_s2[c] ^= t;
+      _prng_s3[c] = rotl(_prng_s3[c], 11);
 
       return result;
   }
 
   // Uniform int in [0, maxVal)
   inline int audioRand(int32_t maxVal) {
-      // Use top 24 bits for better low-value uniformity
-      // return (int)((audioRand32() >> 8) * (uint32_t)maxVal >> 24);
     if (maxVal <= 0) return 0;
     return (int)(((uint64_t)(audioRand32() >> 8) * (uint64_t)maxVal) >> 24);
   }
@@ -1113,13 +1125,12 @@ float chaosRand(float range) {
   }
 
   // Portable seed function (no hardware RNG)
+  // Seeds both cores' PRNG state with different sequences
   inline void audioRandSeed(uint32_t seed) {
       if (seed == 0) {
-          // Use micros() + a simple LCG scramble for variety
           uint32_t t = (uint32_t)micros();
           seed = t ^ 0xA5A5A5A5UL;
       }
-      // SplitMix32 seeding — ensures all states are non-zero
       auto splitmix32 = [](uint32_t &x) {
           uint32_t z = (x += 0x9E3779B9UL);
           z = (z ^ (z >> 16)) * 0x85EBCA6BUL;
@@ -1127,10 +1138,12 @@ float chaosRand(float range) {
           return z ^ (z >> 16);
       };
 
-      s0 = splitmix32(seed);
-      s1 = splitmix32(seed);
-      s2 = splitmix32(seed);
-      s3 = splitmix32(seed);
+      for (int c = 0; c < _M16_PRNG_CORES; c++) {
+          _prng_s0[c] = splitmix32(seed);
+          _prng_s1[c] = splitmix32(seed);
+          _prng_s2[c] = splitmix32(seed);
+          _prng_s3[c] = splitmix32(seed);
+      }
   }
 
 // /* M16_H_ */
