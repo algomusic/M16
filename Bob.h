@@ -23,6 +23,9 @@
 
 #include <Arduino.h>
 #include <math.h>
+#if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+#include <atomic>
+#endif
 
 class Bob {
 public:
@@ -38,6 +41,16 @@ public:
    * @return Filtered sample
    */
   inline int16_t next(int32_t samp) {
+    // Dual-core protection: only one core processes the filter at a time.
+    // If the other core holds the lock, return the previous output immediately.
+    // This avoids spin-waiting and produces a 1-sample hold — inaudible at 44.1kHz.
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    bool expected = false;
+    if (!_bobLock.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+      return prevOutput_;
+    }
+    #endif
+
     const float input = (float)clip16(samp) * MAX_16_INV;
 
     // Cache coefficients atomically to prevent race conditions with setFreq()/setRes()
@@ -133,7 +146,13 @@ public:
     int32_t outi = (int32_t)(ft3_sum * ampCompHalf_);
     if (outi > MAX_16) outi = MAX_16;
     else if (outi < MIN_16) outi = MIN_16;
-    return (int16_t)outi;
+    prevOutput_ = (int16_t)outi;
+
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    _bobLock.store(false, std::memory_order_release);
+    #endif
+
+    return prevOutput_;
   }
 
   /** Alias for next() - for API compatibility
@@ -197,6 +216,11 @@ public:
   }
 
 private:
+  #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+  std::atomic<bool> _bobLock{false};
+  #endif
+  int16_t prevOutput_ = 0;
+
   static const uint8_t kInterpolation = 2;
   static const int LUT_SIZE = 1024;
   static constexpr float LUT_RANGE = 4.0f;
