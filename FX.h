@@ -331,7 +331,7 @@ class FX {
     */
     inline
     int16_t compressionL(int32_t sample) {
-      int16_t absSample = sample > 0 ? sample : -sample;
+      int32_t absSample = sample > 0 ? sample : -sample;
       float targetGainReduction = 0.0f;
       if (absSample > compThresh) {
         float excess = absSample - compThresh;
@@ -356,7 +356,7 @@ class FX {
     */
     inline
     int16_t compressionR(int32_t sample) {
-      int16_t absSample = sample > 0 ? sample : -sample;
+      int32_t absSample = sample > 0 ? sample : -sample;
       float targetGainReduction = 0.0f;
       if (absSample > compThresh) {
         float excess = absSample - compThresh;
