@@ -363,14 +363,34 @@ public:
   */
 	inline
   int16_t nextMorph(int16_t * secondWaveTable, float morphAmount) {
+    if (morphAmount <= 0) return next(); // identical to next() when not morphing
     int intMorphAmount = max(0, min (1024, (int)(1024 * morphAmount)));
-    int idx = phase_fractional >> 16; // 16.16 fixed-point
-    int32_t sampVal = waveTable[idx];
-    int32_t sampVal2 = secondWaveTable[idx];
-    if (morphAmount > 0) sampVal = (((sampVal2 * intMorphAmount) >> 10) +
-      ((sampVal * (1024 - intMorphAmount)) >> 10));
-    sampVal = (sampVal + prevSampVal)>>1; // smooth
-    prevSampVal = sampVal;
+    int32_t sampVal;
+    #if IS_ESP32() || IS_RP2040()
+    {
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+      if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
+      uint32_t myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
+      int idx = (myPhase >> 16) & (TABLE_SIZE - 1);
+      int bandOffset = (int)(cachedBandPtr - waveTable);
+      int32_t sampVal1 = cachedBandPtr[idx];
+      int32_t sampVal2 = secondWaveTable[bandOffset + idx];
+      sampVal = (((sampVal2 * intMorphAmount) >> 10) +
+        ((sampVal1 * (1024 - intMorphAmount)) >> 10));
+      if (spreadActive) {
+        sampVal = doSpreadAtomic(sampVal);
+      }
+      return sampVal;
+    }
+    #endif
+    // Non-atomic fallback for single-core platforms
+    int idx = (phase_fractional >> 16) & (TABLE_SIZE - 1);
+    int bandOffset = (int)(bandPtr - waveTable);
+    int32_t sampVal1 = bandPtr[idx];
+    int32_t sampVal2 = secondWaveTable[bandOffset + idx];
+    sampVal = (((sampVal2 * intMorphAmount) >> 10) +
+      ((sampVal1 * (1024 - intMorphAmount)) >> 10));
     incrementPhase();
     if (spreadActive) {
       sampVal = doSpread(sampVal);
@@ -384,12 +404,46 @@ public:
   */
 	inline
   int16_t currentMorph(int16_t * secondWaveTable, float morphAmount) {
+    if (morphAmount <= 0) {
+      // Read current sample without morphing
+      #if IS_ESP32() || IS_RP2040()
+        int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+        if (cachedBandPtr == nullptr) return 0;
+        uint32_t myPhase = __atomic_load_n(&phase_fractional, __ATOMIC_RELAXED);
+        int idx = (myPhase >> 16) & (TABLE_SIZE - 1);
+        prevSampVal = cachedBandPtr[idx];
+      #else
+        int idx = (phase_fractional >> 16) & (TABLE_SIZE - 1);
+        prevSampVal = bandPtr[idx];
+      #endif
+      return prevSampVal;
+    }
     int intMorphAmount = max(0, min(1024, (int)(1024 * morphAmount)));
-    int idx = phase_fractional >> 16; // 16.16 fixed-point
-    int32_t sampVal = waveTable[idx];
-    int32_t sampVal2 = secondWaveTable[idx];
-    if (morphAmount > 0) sampVal = (((sampVal2 * intMorphAmount) >> 10) +
-      ((sampVal * (1024 - intMorphAmount)) >> 10));
+    int32_t sampVal;
+    #if IS_ESP32() || IS_RP2040()
+    {
+      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+      if (cachedBandPtr == nullptr) return 0;
+      uint32_t myPhase = __atomic_load_n(&phase_fractional, __ATOMIC_RELAXED);
+      int idx = (myPhase >> 16) & (TABLE_SIZE - 1);
+      int bandOffset = (int)(cachedBandPtr - waveTable);
+      int32_t sampVal1 = cachedBandPtr[idx];
+      int32_t sampVal2 = secondWaveTable[bandOffset + idx];
+      sampVal = (((sampVal2 * intMorphAmount) >> 10) +
+        ((sampVal1 * (1024 - intMorphAmount)) >> 10));
+      prevSampVal = sampVal;
+      if (spreadActive) {
+        sampVal = doSpreadAtomic(sampVal);
+      }
+      return sampVal;
+    }
+    #endif
+    int idx = (phase_fractional >> 16) & (TABLE_SIZE - 1);
+    int bandOffset = (int)(bandPtr - waveTable);
+    int32_t sampVal1 = bandPtr[idx];
+    int32_t sampVal2 = secondWaveTable[bandOffset + idx];
+    sampVal = (((sampVal2 * intMorphAmount) >> 10) +
+      ((sampVal1 * (1024 - intMorphAmount)) >> 10));
     prevSampVal = sampVal;
     if (spreadActive) {
       sampVal = doSpread(sampVal);
@@ -399,7 +453,7 @@ public:
 
   /** Get a window transform between this Osc and another waveTable .
   * Inspired by the Window Transform Function by Dove Audio
-  * @param secondWaveTable - an waveTable  array to transform with
+  * @param secondWaveTable - an waveTable array to transform with
   * @param windowSize - The amount (mix) of the second waveTable  to let through, 0.0 - 1.0
   * @param duel - Use a duel window that can increase harmonicity
   * @param invert - Invert the second wavefrom that can increase harmonicity
@@ -1316,7 +1370,7 @@ private:
     for (int i=0; i<TABLE_SIZE; i++) {
       if (waveType == 1) { // triangle
         for(int m=0; m<overtones; m+=2) { // low 48, mid 20, high 12
-          float nextOvertone = (maxAmp/((m+1)*(m+1)) * sin((angularFreq*(m+1))*i)); //triangle formula
+          float nextOvertone = (maxAmp/((m+1)*(m+1)) * sin((angularFreq*(m+1))*(i + TABLE_SIZE/4))); //triangle formula (cosine phase)
           if (m%4 == 0) nextOvertone *= -1;
           tempTable[i] = (tempTable[i] + nextOvertone); 
         }
