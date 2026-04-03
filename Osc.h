@@ -79,6 +79,31 @@ public:
 	int16_t next() {
     int32_t sampVal;
 
+    // Sample and hold: pick a random sample from the wavetable once per period
+    if (isSandH) {
+      #if IS_ESP32() || IS_RP2040()
+      {
+        uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+        int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+        if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
+        uint32_t myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
+        uint32_t newPhase = myPhase + cachedIncrement;
+        // Detect period wrap: check if we crossed a TABLE_SIZE boundary
+        if ((myPhase & ~TABLE_SIZE_FP_MASK) != (newPhase & ~TABLE_SIZE_FP_MASK)) {
+          sandHValue = cachedBandPtr[audioRand(TABLE_SIZE)];
+        }
+        return sandHValue;
+      }
+      #endif
+      // Non-atomic fallback
+      phase_fractional += phase_increment_fractional;
+      if (phase_fractional >= TABLE_SIZE_FP_CONST) {
+        phase_fractional &= TABLE_SIZE_FP_MASK;
+        sandHValue = bandPtr[audioRand(TABLE_SIZE)];
+      }
+      return sandHValue;
+    }
+
     // Fast path: atomic phase increment for thread-safe dual-core operation
     #if IS_RP2040()
     // Pico dual-core: use pre-acquired phase if available (set by advanceAllPhases)
@@ -375,7 +400,18 @@ public:
       int idx = (myPhase >> 16) & (TABLE_SIZE - 1);
       int bandOffset = (int)(cachedBandPtr - waveTable);
       int32_t sampVal1 = cachedBandPtr[idx];
-      int32_t sampVal2 = secondWaveTable[bandOffset + idx];
+      int32_t sampVal2;
+      if (isSandH && isNoise) {
+        uint32_t newPhase = myPhase + cachedIncrement;
+        if ((myPhase & ~TABLE_SIZE_FP_MASK) != (newPhase & ~TABLE_SIZE_FP_MASK)) {
+          sandHValue = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+        }
+        sampVal2 = sandHValue;
+      } else if (isNoise) {
+        sampVal2 = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+      } else {
+        sampVal2 = secondWaveTable[bandOffset + idx];
+      }
       sampVal = (((sampVal2 * intMorphAmount) >> 10) +
         ((sampVal1 * (1024 - intMorphAmount)) >> 10));
       if (spreadActive) {
@@ -388,10 +424,22 @@ public:
     int idx = (phase_fractional >> 16) & (TABLE_SIZE - 1);
     int bandOffset = (int)(bandPtr - waveTable);
     int32_t sampVal1 = bandPtr[idx];
-    int32_t sampVal2 = secondWaveTable[bandOffset + idx];
+    int32_t sampVal2;
+    if (isSandH && isNoise) {
+      phase_fractional += phase_increment_fractional;
+      if (phase_fractional >= TABLE_SIZE_FP_CONST) {
+        phase_fractional &= TABLE_SIZE_FP_MASK;
+        sandHValue = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+      }
+      sampVal2 = sandHValue;
+    } else if (isNoise) {
+      sampVal2 = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+    } else {
+      sampVal2 = secondWaveTable[bandOffset + idx];
+    }
     sampVal = (((sampVal2 * intMorphAmount) >> 10) +
       ((sampVal1 * (1024 - intMorphAmount)) >> 10));
-    incrementPhase();
+    if (!(isSandH && isNoise)) incrementPhase();
     if (spreadActive) {
       sampVal = doSpread(sampVal);
     }
@@ -950,6 +998,24 @@ public:
 		isNoise = val;
 	}
 
+  /** Set sample and hold mode.
+  * When true, a random sample from the wavetable is selected once per period
+  * and held for the duration, creating a sample-and-hold effect at the oscillator frequency.
+  * @val Is true or false
+  */
+	inline
+	void setSandH(bool val) {
+		isSandH = val;
+	}
+
+  /** Get the current sample and hold value.
+  * @return The held sample value
+  */
+	inline
+	int16_t getSandHValue() {
+		return sandHValue;
+	}
+
   /** Set using crackle waveform flag.
   * @val Is true or false
   */
@@ -1310,6 +1376,8 @@ private:
   int32_t prevSampVal = 0;
   bool isNoise = false;
   bool isCrackle = false;
+  bool isSandH = false;
+  int16_t sandHValue = 0;
   int crackleAmnt = MAX_16 * 0.5; //MAX_16 * 0.5;
   float frequency = 440;
   float prevFrequency = 440;
@@ -1371,7 +1439,7 @@ private:
       if (waveType == 1) { // triangle
         for(int m=0; m<overtones; m+=2) { // low 48, mid 20, high 12
           float nextOvertone = (maxAmp/((m+1)*(m+1)) * sin((angularFreq*(m+1))*(i + TABLE_SIZE/4))); //triangle formula (cosine phase)
-          if (m%4 == 0) nextOvertone *= -1;
+          if (m%4 == 2) nextOvertone *= -1;
           tempTable[i] = (tempTable[i] + nextOvertone); 
         }
       }
