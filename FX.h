@@ -133,10 +133,11 @@ class FX {
       return clip16((int32_t)(out * MAX_16));
     }
 
-    /** Integer-only Soft Clipping (no floats)
-    * Warm approximation of tube saturation using only integer math.
-    * Uses rational function: out = x / (1 + |x|/threshold)
-    * Optimized to avoid int64 division for better ESP32 performance.
+    /** Soft Clipping
+    * Warm approximation of tube saturation.
+    * Uses rational function: out = x * T / (T + |x|) where T = 32768
+    * Float division is optimal on ESP32-S3 (hardware FPU, no hardware int divider)
+    * and compiles correctly on all platforms.
     * @param sample_in The next sample value
     * @param amount The drive amount as integer, 1024 = unity, 2048 = 2x drive, etc.
     *               Useful range: 1024 (mild) to 10240 (heavy distortion)
@@ -150,15 +151,10 @@ class FX {
       if (x > 98304) x = 98304;         // 3x MAX_16
       else if (x < -98304) x = -98304;
 
-      // Rational soft clip: out = x * threshold / (threshold + |x|)
-      // Use threshold = 32768, scaled math to stay in 32-bit
+      // Rational soft clip: out = x * T / (T + |x|), T = 32768
       int32_t absX = (x >= 0) ? x : -x;
-
-      // Scale down, compute, scale back up to avoid overflow
-      // out = x * 32768 / (32768 + absX)
-      // Rewrite as: out = x / (1 + absX/32768) = x / (1 + absX>>15)
-      int32_t denom = 32768 + (absX >> 1);  // Approximate: threshold + absX/2
-      int32_t out = (x << 14) / (denom >> 1);  // Scaled 32-bit division
+      float invDenom = 32768.0f / (32768.0f + (float)absX);
+      int32_t out = (int32_t)((float)x * invDenom);
 
       // Final clamp to valid 16-bit range
       if (out > MAX_16) out = MAX_16;
@@ -284,6 +280,7 @@ class FX {
       compRatio = ratio;
       compThresh = (int16_t)(threshold * MAX_16);
       compInvRatio = 1.0f / ratio;
+      compOneMinusInvRatio = 1.0f - compInvRatio;  // Pre-compute: eliminates 1 sub + 1 mul per sample
       compGainCompensation = 1.0f + (1.0f - threshold * (1.0f + compInvRatio));
       // Calculate envelope coefficients from time constants
       // coeff = exp(-1 / (time_seconds * sample_rate))
@@ -291,6 +288,9 @@ class FX {
       float releaseSamples = releaseMs * 0.001f * SAMPLE_RATE;
       compAttackCoeff = attackSamples > 0 ? fastExpNeg(1.0f / attackSamples) : 0.0f;
       compReleaseCoeff = releaseSamples > 0 ? fastExpNeg(1.0f / releaseSamples) : 0.0f;
+      // Pre-compute one-minus coefficients: eliminates 2 float subtractions per sample
+      compOneMinusAttack = 1.0f - compAttackCoeff;
+      compOneMinusRelease = 1.0f - compReleaseCoeff;
     }
 
     /** Compressor with gain compensation and attack/release envelope
@@ -304,17 +304,15 @@ class FX {
       // Calculate target gain reduction
       float targetGainReduction = 0.0f;
       if (absSample > compThresh) {
-        // How much over threshold?
-        float excess = absSample - compThresh;
-        float compressedExcess = excess * compInvRatio;
-        // Calc gain reduction needed (as a ratio)
-        targetGainReduction = (excess - compressedExcess) / (float)absSample;
+        // gain_reduction = excess * (1 - 1/ratio) / level
+        // compOneMinusInvRatio pre-computed in setCompression()
+        targetGainReduction = (float)(absSample - compThresh) * compOneMinusInvRatio / (float)absSample;
       }
-      // Apply envelope with attack/release
+      // Apply envelope with attack/release (one-minus coeffs pre-computed in setCompression)
       if (targetGainReduction > compEnvelope) {
-        compEnvelope = compAttackCoeff * compEnvelope + (1.0f - compAttackCoeff) * targetGainReduction;
+        compEnvelope = compAttackCoeff * compEnvelope + compOneMinusAttack * targetGainReduction;
       } else {
-        compEnvelope = compReleaseCoeff * compEnvelope + (1.0f - compReleaseCoeff) * targetGainReduction;
+        compEnvelope = compReleaseCoeff * compEnvelope + compOneMinusRelease * targetGainReduction;
       }
       // Apply gain reduction and makeup gain
       float gain = (1.0f - compEnvelope) * compGainCompensation;
@@ -334,14 +332,12 @@ class FX {
       int32_t absSample = sample > 0 ? sample : -sample;
       float targetGainReduction = 0.0f;
       if (absSample > compThresh) {
-        float excess = absSample - compThresh;
-        float compressedExcess = excess * compInvRatio;
-        targetGainReduction = (excess - compressedExcess) / (float)absSample;
+        targetGainReduction = (float)(absSample - compThresh) * compOneMinusInvRatio / (float)absSample;
       }
       if (targetGainReduction > compEnvelopeL) {
-        compEnvelopeL = compAttackCoeff * compEnvelopeL + (1.0f - compAttackCoeff) * targetGainReduction;
+        compEnvelopeL = compAttackCoeff * compEnvelopeL + compOneMinusAttack * targetGainReduction;
       } else {
-        compEnvelopeL = compReleaseCoeff * compEnvelopeL + (1.0f - compReleaseCoeff) * targetGainReduction;
+        compEnvelopeL = compReleaseCoeff * compEnvelopeL + compOneMinusRelease * targetGainReduction;
       }
       float gain = (1.0f - compEnvelopeL) * compGainCompensation;
       int32_t output = (int32_t)(sample * gain);
@@ -359,14 +355,12 @@ class FX {
       int32_t absSample = sample > 0 ? sample : -sample;
       float targetGainReduction = 0.0f;
       if (absSample > compThresh) {
-        float excess = absSample - compThresh;
-        float compressedExcess = excess * compInvRatio;
-        targetGainReduction = (excess - compressedExcess) / (float)absSample;
+        targetGainReduction = (float)(absSample - compThresh) * compOneMinusInvRatio / (float)absSample;
       }
       if (targetGainReduction > compEnvelopeR) {
-        compEnvelopeR = compAttackCoeff * compEnvelopeR + (1.0f - compAttackCoeff) * targetGainReduction;
+        compEnvelopeR = compAttackCoeff * compEnvelopeR + compOneMinusAttack * targetGainReduction;
       } else {
-        compEnvelopeR = compReleaseCoeff * compEnvelopeR + (1.0f - compReleaseCoeff) * targetGainReduction;
+        compEnvelopeR = compReleaseCoeff * compEnvelopeR + compOneMinusRelease * targetGainReduction;
       }
       float gain = (1.0f - compEnvelopeR) * compGainCompensation;
       int32_t output = (int32_t)(sample * gain);
@@ -1005,9 +999,12 @@ class FX {
     float compRatio = 4.0f;            // Cached ratio
     int16_t compThresh = 16383;        // Threshold in samples (threshold * MAX_16)
     float compInvRatio = 0.25f;        // 1.0 / ratio
+    float compOneMinusInvRatio = 0.75f; // 1.0 - 1.0/ratio (pre-computed, saves 1 sub + 1 mul per sample)
     float compGainCompensation = 1.0f; // Makeup gain
     float compAttackCoeff = 0.9955f;   // Attack smoothing coeff (~5ms at 44.1kHz)
     float compReleaseCoeff = 0.9998f;  // Release smoothing coeff (~100ms at 44.1kHz)
+    float compOneMinusAttack = 0.0045f;  // 1.0 - compAttackCoeff (pre-computed)
+    float compOneMinusRelease = 0.0002f; // 1.0 - compReleaseCoeff (pre-computed)
     float compEnvelope = 0.0f;         // Mono envelope state
     float compEnvelopeL = 0.0f;        // Left channel envelope state
     float compEnvelopeR = 0.0f;        // Right channel envelope state
