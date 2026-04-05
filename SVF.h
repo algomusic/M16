@@ -16,6 +16,10 @@
 #ifndef SVF_H_
 #define SVF_H_
 
+#if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+#include <atomic>
+#endif
+
 class SVF {
 
   public:
@@ -118,14 +122,21 @@ class SVF {
     inline
     int16_t nextLPF(int32_t input) {
       input = clip16(input);
-      // Cache gainCompInt atomically for thread-safe output scaling
       #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      bool expected = false;
+      if (!_svfLock.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+        return prevOutput_;
+      }
       int32_t cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
       #else
       int32_t cached_gainCompInt = gainCompInt;
       #endif
       calcFilter(input);
-      return clip16((int32_t)(((int64_t)low * cached_gainCompInt) >> 15));
+      prevOutput_ = clip16((int32_t)(((int64_t)low * cached_gainCompInt) >> 15));
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      _svfLock.store(false, std::memory_order_release);
+      #endif
+      return prevOutput_;
     }
 
     /** Calculate the next Lowpass filter sample, given an input signal.
@@ -153,12 +164,20 @@ class SVF {
     int16_t nextHPF(int32_t input) {
       input = clip16(input);
       #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      bool expected = false;
+      if (!_svfLock.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+        return prevOutput_;
+      }
       int32_t cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
       #else
       int32_t cached_gainCompInt = gainCompInt;
       #endif
       calcFilter(input);
-      return clip16((int32_t)(((int64_t)high * cached_gainCompInt) >> 15));
+      prevOutput_ = clip16((int32_t)(((int64_t)high * cached_gainCompInt) >> 15));
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      _svfLock.store(false, std::memory_order_release);
+      #endif
+      return prevOutput_;
     }
 
     /** Retrieve the current Highpass filter sample.
@@ -177,12 +196,20 @@ class SVF {
     int16_t nextBPF(int input) {
       input = clip16(input);
       #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      bool expected = false;
+      if (!_svfLock.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+        return prevOutput_;
+      }
       int32_t cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
       #else
       int32_t cached_gainCompInt = gainCompInt;
       #endif
       calcFilter(input);
-      return clip16((int32_t)(((int64_t)band * cached_gainCompInt) >> 15));
+      prevOutput_ = clip16((int32_t)(((int64_t)band * cached_gainCompInt) >> 15));
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      _svfLock.store(false, std::memory_order_release);
+      #endif
+      return prevOutput_;
     }
 
     /** Retrieve the current Bandpass filter sample.
@@ -203,6 +230,10 @@ class SVF {
     int16_t nextFiltMix(int input, float mix) {
       input = clip16(input);
       #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      bool expected = false;
+      if (!_svfLock.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+        return prevOutput_;
+      }
       int32_t cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
       #else
       int32_t cached_gainCompInt = gainCompInt;
@@ -229,9 +260,13 @@ class SVF {
       }
 
       int32_t sum = (int32_t)(((int64_t)(lpfAmnt + bpfAmnt + hpfAmnt) * cached_gainCompInt) >> 15);
-      if (sum > MAX_16) return MAX_16;
-      if (sum < -MAX_16) return -MAX_16;
-      return (int16_t)sum;
+      if (sum > MAX_16) prevOutput_ = MAX_16;
+      else if (sum < -MAX_16) prevOutput_ = -MAX_16;
+      else prevOutput_ = (int16_t)sum;
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      _svfLock.store(false, std::memory_order_release);
+      #endif
+      return prevOutput_;
     }
 
     /** Calculate the next Notch filter sample, given an input signal.
@@ -241,16 +276,29 @@ class SVF {
     int16_t nextNotch(int32_t input) {
       input = clip16(input);
       #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      bool expected = false;
+      if (!_svfLock.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+        return prevOutput_;
+      }
       int32_t cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
       #else
       int32_t cached_gainCompInt = gainCompInt;
       #endif
       calcFilter(input);
       int32_t notch = high + low;  // Compute on demand
-      return clip16((int32_t)(((int64_t)notch * cached_gainCompInt) >> 15));
+      prevOutput_ = clip16((int32_t)(((int64_t)notch * cached_gainCompInt) >> 15));
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      _svfLock.store(false, std::memory_order_release);
+      #endif
+      return prevOutput_;
     }
 
   private:
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    std::atomic<bool> _svfLock{false};
+    #endif
+    int16_t prevOutput_ = 0;  // Last output for lock-miss fallback
+
     int32_t low = 0, band = 0, high = 0;
     int32_t q = MAX_16;
     int32_t scale = (int32_t)(sqrt(1.0f) * MAX_16);
