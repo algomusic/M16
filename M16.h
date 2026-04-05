@@ -320,20 +320,54 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
 #elif IS_ESP32()
   // i2s
   #include <driver/i2s_std.h>
-  // #include <Arduino.h>
+
+  // Internal DAC support (ESP32 and ESP32-S2 only)
+  // SOC_DAC_SUPPORTED is defined by ESP-IDF for chips with internal DAC
+  #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
+    #include <driver/dac_continuous.h>
+  #endif
+
+  bool _useInternalDAC = false;
+
+  /** Enable internal DAC output instead of external I2S DAC.
+   *  Call before audioStart() in setup().
+   *  Only available on ESP32 (GPIO25/26) and ESP32-S2 (GPIO17/18).
+   *  Output is 8-bit (reduced from 16-bit internally).
+   *  On chips without internal DAC (S3, C3, etc.) this call is ignored.
+   *  Note: 8-bit resolution may produce audible quantization noise with
+   *  effects that have wide dynamic range (e.g. reverb). For best quality,
+   *  use an external I2S DAC.
+   */
+  void useInternalDAC() {
+    #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
+      _useInternalDAC = true;
+      Serial.println("Internal DAC mode enabled (8-bit output)");
+    #else
+      Serial.println("Warning: This chip has no internal DAC, using external I2S DAC");
+    #endif
+  }
 
   static const i2s_port_t i2s_num = I2S_NUM_0;
   int i2sPinsOut [] = {16, 17, 18, 21}; // bck, ws, dout, din
-  // int i2sPinsOut [] = {38, 39, 40, 41}; // bck, ws, dout, din
 
   i2s_chan_handle_t tx_handle = NULL;
   i2s_chan_handle_t rx_handle = NULL;
 
+  // Internal DAC handle and buffering
+  #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
+    dac_continuous_handle_t _dac_handle = NULL;
+
+    // Buffered output for internal DAC
+    // 256 bytes = 128 stereo frames per flush
+    #define DAC_ACCUM_SIZE 256
+    #define DAC_DESC_NUM 8        // DMA descriptors (8 × 256 = ~23ms buffer at 44.1kHz)
+    static uint8_t _dacAccum[DAC_ACCUM_SIZE];
+    static size_t _dacAccumPos = 0;
+  #endif
 
   // Configuration macros/constants
-  // #define SAMPLE_RATE         44100       // defined above
-  #define DMA_BUFFERS         4  // 8
-  #define DMA_BUFFER_LENGTH   512 // 64
+  #define DMA_BUFFERS         4
+  #define DMA_BUFFER_LENGTH   512
 
   // Channel (I2S port) config
   i2s_chan_config_t chan_cfg = {
@@ -374,28 +408,44 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
   void audioCallback(void* param) {
       for (;;) {
           audioUpdate();
-          yield(); // required? i2s_write_samples() already has a yield()
+          // No yield() here — i2s_channel_write() and dac_continuous_write()
+          // block on FreeRTOS semaphores when DMA is full, naturally yielding
+          // to all lower-priority tasks including loop() and IDLE (watchdog).
+          // Per-sample yield() adds ~2μs overhead (4-9% CPU) for no benefit,
+          // which can push heavy DSP (reverb) past the sample deadline.
       }
   }
 
-  // Output smoothing state - helps catch any remaining discontinuities from dual-core races
+  // Output smoothing state
   static int32_t _prevOutL = 0;
   static int32_t _prevOutR = 0;
 
   bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
-      // Lightweight one-pole low-pass filter for output smoothing
-      // Catches remaining discontinuities from RTOS stalls, dual-core races, etc.
-      // Formula: out = (in + prevOut) >> 1  (one add, one shift)
-      // int32_t smoothL = (leftSample + _prevOutL) >> 1;
-      // int32_t smoothR = (rightSample + _prevOutR) >> 1;
-      // _prevOutL = smoothL;
-      // _prevOutR = smoothR;
+    #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
+      if (_useInternalDAC) {
+        // Convert 16-bit signed to 8-bit unsigned for internal DAC
+        _dacAccum[_dacAccumPos++] = (uint8_t)((leftSample + 32768) >> 8);
+        _dacAccum[_dacAccumPos++] = (uint8_t)((rightSample + 32768) >> 8);
 
+        // Flush when buffer is full
+        if (_dacAccumPos >= DAC_ACCUM_SIZE) {
+          size_t bytesLoaded = 0;
+          size_t remaining = DAC_ACCUM_SIZE;
+          uint8_t* ptr = _dacAccum;
+          // Retry on partial writes to prevent dropped samples at DMA seams
+          while (remaining > 0) {
+            dac_continuous_write(_dac_handle, ptr, remaining, &bytesLoaded, portMAX_DELAY);
+            ptr += bytesLoaded;
+            remaining -= bytesLoaded;
+          }
+          _dacAccumPos = 0;
+        }
+        return true;
+      }
+    #endif
+
+      // External I2S DAC path (16-bit)
       uint8_t sampleBuffer[4];
-      // sampleBuffer[0] = smoothR & 0xFF;
-      // sampleBuffer[1] = (smoothR >> 8) & 0xFF;
-      // sampleBuffer[2] = smoothL & 0xFF;
-      // sampleBuffer[3] = (smoothL >> 8) & 0xFF;
       sampleBuffer[0] = rightSample & 0xFF;
       sampleBuffer[1] = (rightSample >> 8) & 0xFF;
       sampleBuffer[2] = leftSample & 0xFF;
@@ -420,14 +470,46 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
           audioInitMutex = xSemaphoreCreateMutex();
       }
 
-      // Create the channels
-      i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle); // both TX and RX
+    #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
+      if (_useInternalDAC) {
+        // Internal DAC initialization via dac_continuous driver
+        dac_continuous_config_t dac_cfg = {
+            .chan_mask = DAC_CHANNEL_MASK_ALL,
+            .desc_num = DAC_DESC_NUM,
+            .buf_size = DAC_ACCUM_SIZE,
+            .freq_hz = (uint32_t)SAMPLE_RATE,
+            .offset = 0,
+            .clk_src = DAC_DIGI_CLK_SRC_APLL,
+            .chan_mode = DAC_CHANNEL_MODE_ALTER,
+        };
+        ESP_ERROR_CHECK(dac_continuous_new_channels(&dac_cfg, &_dac_handle));
+        ESP_ERROR_CHECK(dac_continuous_enable(_dac_handle));
 
-      // Configure the channel(s) in standard Philips I2S mode
+        if (ESP.getChipCores() > 1) {
+          // Dual-core (ESP32): dedicated audio task on core 0, loop() on core 1.
+          // No starvation since they're on separate cores.
+          // Single task only — dual tasks cause buffer interleaving discontinuities.
+          xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 8192, NULL,
+              configMAX_PRIORITIES - 1, &audioCallback1Handle, 0);
+          Serial.println("M16 is running (internal DAC, 8-bit output, core 0)");
+        } else {
+          // Single-core (ESP32-S2): audio task at moderate priority.
+          // dac_continuous_write() blocks on a FreeRTOS semaphore when DMA is full,
+          // yielding CPU to loop() naturally. No audioLoop() needed.
+          // Priority 2 (just above Arduino loopTask at 1) ensures audio gets
+          // priority but loop() runs during every DMA write block (~3ms per buffer).
+          xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 8192, NULL,
+              2, &audioCallback1Handle, 0);
+          Serial.println("M16 is running (internal DAC, 8-bit output, single-core)");
+        }
+        return;
+      }
+    #endif
+
+      // External I2S DAC initialization
+      i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle);
       i2s_channel_init_std_mode(tx_handle, &std_cfg);
       i2s_channel_init_std_mode(rx_handle, &std_cfg);
-
-      // Enable channel(s)
       i2s_channel_enable(tx_handle);
       i2s_channel_enable(rx_handle);
 
@@ -455,8 +537,8 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
       Serial.println("M16 is running (dual-core mode)");
   }
 
-  /** No-op on ESP32 - FreeRTOS handles audio tasks automatically
-   *  Included for API compatibility with Pico dual-core mode
+  /** No-op on ESP32 — FreeRTOS tasks handle audio for both external I2S
+   *  and internal DAC modes. Included for API compatibility with RP2040.
    */
   inline void audioLoop() {}
   /*
