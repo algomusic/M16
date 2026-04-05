@@ -948,8 +948,8 @@ class FX {
     int32_t revInputHPF_L = 0, revInputHPF_R = 0;  // Input highpass filter state
 
     // Optimized reverb delay buffers - power-of-2 sizes for fast modulo via bitwise AND
-    // Buffer sizes chosen to accommodate delay times up to reverbSize=16
-    static const int REV_BUF_BITS = 10;  // 1024 samples = ~23ms at 44.1kHz
+    // 1024 samples (~23ms at 44.1kHz) - larger sizes use legacy Del path
+    static const int REV_BUF_BITS = 10;
     static const int REV_BUF_SIZE = 1 << REV_BUF_BITS;  // 1024
     static const int REV_BUF_MASK = REV_BUF_SIZE - 1;   // 0x3FF for fast wrap
 
@@ -1091,10 +1091,10 @@ class FX {
         // Fall back to Del-based reverb for large sizes
         delay1.setMaxDelayTime(8 * size); delay2.setMaxDelayTime(9 * size);
         delay3.setMaxDelayTime(11 * size); delay4.setMaxDelayTime(13 * size);
-        delay1.setTime(d1_ms); delay1.setLevel(reverbFeedbackLevel); delay1.setFeedback(true);
-        delay2.setTime(d2_ms); delay2.setLevel(reverbFeedbackLevel); delay2.setFeedback(true);
-        delay3.setTime(d3_ms); delay3.setLevel(reverbFeedbackLevel); delay3.setFeedback(true);
-        delay4.setTime(d4_ms); delay4.setLevel(reverbFeedbackLevel); delay4.setFeedback(true);
+        delay1.setTime(d1_ms); delay1.setLevel(reverbFeedbackLevel); delay1.setFeedback(true); delay1.setFiltered(0);
+        delay2.setTime(d2_ms); delay2.setLevel(reverbFeedbackLevel); delay2.setFeedback(true); delay2.setFiltered(0);
+        delay3.setTime(d3_ms); delay3.setLevel(reverbFeedbackLevel); delay3.setFeedback(true); delay3.setFiltered(0);
+        delay4.setTime(d4_ms); delay4.setLevel(reverbFeedbackLevel); delay4.setFeedback(true); delay4.setFiltered(0);
         useOptimizedReverb = false;
       }
       reverbInitiated = true;
@@ -1171,14 +1171,50 @@ class FX {
         // Increment write position with fast wrap
         revWritePos = (wp + 1) & REV_BUF_MASK;
       } else {
-        // Legacy path using Del objects
-        revD1 = delay1.read(); revD2 = delay2.read();
-        revD3 = delay3.read(); revD4 = delay4.read();
-        revP1 = audioInLeft + revD1; revP2 = audioInRight + revD2;
+        // Legacy path using Del objects — with HPF, dampening, and soft limiting
+        // to match the optimized path's audio quality
+
+        // Input HPF to prevent DC/low-freq accumulation in feedback loop
+        revInputHPF_L += (audioInLeft - revInputHPF_L + 8) >> 4;
+        revInputHPF_R += (audioInRight - revInputHPF_R + 8) >> 4;
+        int32_t inL = audioInLeft - revInputHPF_L;
+        int32_t inR = audioInRight - revInputHPF_R;
+
+        // Read from delay lines
+        int32_t d1 = delay1.read(); int32_t d2 = delay2.read();
+        int32_t d3 = delay3.read(); int32_t d4 = delay4.read();
+
+        // Dampening lowpass filter on delay outputs
+        revFilterStore1 += ((d1 - revFilterStore1) * reverbDampCoeff + 512) >> 10;
+        revFilterStore2 += ((d2 - revFilterStore2) * reverbDampCoeff + 512) >> 10;
+        revFilterStore3 += ((d3 - revFilterStore3) * reverbDampCoeff + 512) >> 10;
+        revFilterStore4 += ((d4 - revFilterStore4) * reverbDampCoeff + 512) >> 10;
+        d1 = revFilterStore1; d2 = revFilterStore2;
+        d3 = revFilterStore3; d4 = revFilterStore4;
+
+        // Mixing matrix (Hadamard-style diffusion)
+        revP1 = inL + d1; revP2 = inR + d2;
         int32_t p3 = revP1 + revP2; int32_t m3 = revP1 - revP2;
-        int32_t p4 = revD3 + revD4; int32_t m4 = revD3 - revD4;
-        delay1.write((p3 + p4) >> 1); delay2.write((m3 + m4) >> 1);
-        delay3.write((p3 - p4) >> 1); delay4.write((m3 - m4) >> 1);
+        int32_t p4 = d3 + d4; int32_t m4 = d3 - d4;
+
+        // Compute write values
+        int32_t w1 = (p3 + p4 + 1) >> 1;
+        int32_t w2 = (m3 + m4 + 1) >> 1;
+        int32_t w3 = (p3 - p4 + 1) >> 1;
+        int32_t w4 = (m3 - m4 + 1) >> 1;
+
+        // Soft limiting before hard clip — prevents harsh clipping in feedback loop
+        if (w1 > 24576) w1 = 24576 + ((w1 - 24576) >> 2);
+        else if (w1 < -24576) w1 = -24576 + ((w1 + 24576) >> 2);
+        if (w2 > 24576) w2 = 24576 + ((w2 - 24576) >> 2);
+        else if (w2 < -24576) w2 = -24576 + ((w2 + 24576) >> 2);
+        if (w3 > 24576) w3 = 24576 + ((w3 - 24576) >> 2);
+        else if (w3 < -24576) w3 = -24576 + ((w3 + 24576) >> 2);
+        if (w4 > 24576) w4 = 24576 + ((w4 - 24576) >> 2);
+        else if (w4 < -24576) w4 = -24576 + ((w4 + 24576) >> 2);
+
+        delay1.write(w1); delay2.write(w2);
+        delay3.write(w3); delay4.write(w4);
       }
     }
 
