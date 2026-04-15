@@ -5,7 +5,7 @@
 #include "M16.h" 
 #include "MIDI16.h"
 
-MIDI16 midi(37, 38); // MIDI in and out GPIO pins
+MIDI16 midi(45, 46); // MIDI in and out GPIO pins
 unsigned long msNow = millis();
 unsigned long midiTime = msNow;
 unsigned long onTime = msNow;
@@ -30,7 +30,7 @@ void handleNoteOn(byte channel, byte pitch, byte velocity) {
   Serial.println("Receive NoteOn: " + String(pitch) + " " + String(velocity) + " " + String(channel));
   // leds[0] = CRGB::Green;
   // FastLED.show();
-  pixels.setPixelColor(0, pixels.Color(0, 150, 0));
+  pixels.setPixelColor(0, pixels.Color(0, 255, 0));
   pixels.show(); 
 }
 
@@ -42,6 +42,13 @@ void handleNoteOff(byte channel, byte pitch, byte velocity) {
 
 void handleControlChange(byte channel, byte control, byte value) {
   Serial.println("Receive CC: " + String(control) + " " + String(value) + " " + String(channel));
+  pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+  pixels.show(); 
+}
+void handlePitchBend(byte channel, byte data1, byte data2) {
+  Serial.println("Receive PitchBend: " + String(channel) + " " + String(data1) + " " + String(data2) + " " + String(((uint16_t)data2 << 7) | data1));
+  pixels.setPixelColor(0, pixels.Color(0, 255, 255));
+  pixels.show(); 
 }
 
 void handleMidiClock() {
@@ -67,6 +74,7 @@ void handleMidiStop() {
 void setup() { 
     Serial.begin(115200);
     pixels.begin();
+    pixels.setBrightness(40);
     pixels.setPixelColor(0, pixels.Color(0, 0, 0));
     pixels.show(); 
     Serial.println("MIDI16-test");
@@ -87,6 +95,8 @@ void loop() {
       handleNoteOff(midi.getChannel(), midi.getData1(), midi.getData2());
     } else if (status == MIDI16::controlChange) {
       handleControlChange(midi.getChannel(), midi.getData1(), midi.getData2());
+    } else if (status == MIDI16::pitchBend) {
+      handlePitchBend(midi.getChannel(), midi.getData1(), midi.getData2());
     } else if (status == MIDI16::clock) {
       handleMidiClock();
     } else if (status == MIDI16::start) {
@@ -103,7 +113,7 @@ void loop() {
       onTime += onDelta;
     offTime = msNow + 250;
     midiPitch = rand(60) + 30;
-    pixels.setPixelColor(0, pixels.Color(0, 0, 150));
+    pixels.setPixelColor(0, pixels.Color(0, 0, 255));
     pixels.show(); 
     sounding = true;
     chan = rand(4);
