@@ -61,7 +61,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  int16_t sample = carrier.phMod(modulator.next(), modIndex);
+  int16_t sample = carrier.phMod(modulator, modIndex);
   // Output to both channels
   i2s_write_samples(sample, sample);
 }

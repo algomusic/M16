@@ -136,7 +136,9 @@ public:
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
       // Cache volatile values atomically to prevent torn reads during setFreq()
-      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      // ACQUIRE on increment synchronizes-with setFreq()'s RELEASE store, ensuring
+      // the subsequent bandPtr load sees the value written before that RELEASE.
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_ACQUIRE);
       int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
 
       // Safety check: if bandPtr is null or increment is zero, return silence
@@ -210,7 +212,8 @@ public:
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
       // Cache volatile values atomically to prevent torn reads during setFreq()
-      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      // ACQUIRE on increment synchronizes-with setFreq()'s RELEASE store.
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_ACQUIRE);
       int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
       float cachedFreq = frequency;  // Used for band selection decision
 
@@ -593,7 +596,8 @@ public:
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
       // Atomic path: each core gets a unique phase value (matches next() pattern)
-      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      // ACQUIRE on increment synchronizes-with setFreq()'s RELEASE store.
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_ACQUIRE);
       int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
 
       if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
@@ -669,7 +673,8 @@ public:
 
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
-      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      // ACQUIRE on increment synchronizes-with setFreq()'s RELEASE store.
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_ACQUIRE);
       int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
 
       if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
@@ -708,6 +713,202 @@ public:
     return sampVal;
   }
 
+  /** Phase Modulation with wavetable morphing (FM + Morph)
+   * Combines phMod and nextMorph in a single phase advance.
+   * @param modulator - The next sample from the modulating waveform (int16_t)
+   * @param modIndex - Modulation depth, 0.0 to ~10.0 typical
+   * @param secondWaveTable - A wavetable array to morph with
+   * @param morphAmount - The balance (mix) of the second wavetable, 0.0 - 1.0
+   */
+  inline int16_t phModMorph(int16_t modulator, float modIndex, int16_t * secondWaveTable, float morphAmount) {
+    if (morphAmount <= 0) return phMod(modulator, modIndex);
+    int intMorphAmount = max(0, min(1024, (int)(1024 * morphAmount)));
+
+    int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
+    modOffset = (modOffset * modDepthScale) >> 10;
+    modOffset <<= 8;
+
+    #if IS_ESP32() || IS_RP2040()
+    {
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+      if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
+      uint32_t myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
+      uint32_t p = myPhase + modOffset;
+      int idx = (p >> 16) & (TABLE_SIZE - 1);
+      int bandOffset = (int)(cachedBandPtr - waveTable);
+      int32_t sampVal1 = cachedBandPtr[idx];
+      int32_t sampVal2;
+      if (isSandH && isNoise) {
+        uint32_t newPhase = myPhase + cachedIncrement;
+        if ((myPhase & ~TABLE_SIZE_FP_MASK) != (newPhase & ~TABLE_SIZE_FP_MASK)) {
+          sandHValue = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+        }
+        sampVal2 = sandHValue;
+      } else if (isNoise) {
+        sampVal2 = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+      } else {
+        sampVal2 = secondWaveTable[bandOffset + idx];
+      }
+      int32_t sampVal = (((sampVal2 * intMorphAmount) >> 10) +
+        ((sampVal1 * (1024 - intMorphAmount)) >> 10));
+      if (spreadActive) {
+        sampVal = doSpreadAtomic(sampVal);
+      }
+      return sampVal;
+    }
+    #endif
+    // Non-atomic fallback
+    uint32_t p = phase_fractional + modOffset;
+    int idx = (p >> 16) & (TABLE_SIZE - 1);
+    int bandOffset = (int)(bandPtr - waveTable);
+    int32_t sampVal1 = bandPtr[idx];
+    int32_t sampVal2;
+    if (isSandH && isNoise) {
+      phase_fractional += phase_increment_fractional;
+      if (phase_fractional >= TABLE_SIZE_FP_CONST) {
+        phase_fractional &= TABLE_SIZE_FP_MASK;
+        sandHValue = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+      }
+      sampVal2 = sandHValue;
+    } else if (isNoise) {
+      sampVal2 = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+    } else {
+      sampVal2 = secondWaveTable[bandOffset + idx];
+    }
+    int32_t sampVal = (((sampVal2 * intMorphAmount) >> 10) +
+      ((sampVal1 * (1024 - intMorphAmount)) >> 10));
+    if (!(isSandH && isNoise)) incrementPhase();
+    if (spreadActive) {
+      sampVal = doSpread(sampVal);
+    }
+    return sampVal;
+  }
+
+  /** Phase Modulation with window transform (FM + WTrans)
+   * Combines phMod and nextWTrans in a single phase advance.
+   * @param modulator - The next sample from the modulating waveform (int16_t)
+   * @param modIndex - Modulation depth, 0.0 to ~10.0 typical
+   * @param secondWaveTable - A wavetable array for the window transform
+   * @param windowSize - Window size 0.0 - 1.0
+   * @param duel - Use dual windows (quarter-cycle spacing)
+   * @param invert - Invert the second wavetable in window regions
+   */
+  inline int16_t phModWTrans(int16_t modulator, float modIndex, int16_t * secondWaveTable, float windowSize, bool duel, bool invert) {
+    int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
+    modOffset = (modOffset * modDepthScale) >> 10;
+    modOffset <<= 8;
+
+    // Advance phase and compute modulated phase position
+    #if IS_ESP32() || IS_RP2040()
+    {
+      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+      if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
+      uint32_t myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
+      uint32_t p = myPhase + modOffset;
+      int phaseIdx = (p >> 16) & (TABLE_SIZE - 1);
+
+      int halfTable = HALF_TABLE_SIZE;
+      int portion12 = halfTable * windowSize;
+      int quarterTable = TABLE_SIZE * 0.25;
+      int threeQuarterTable = quarterTable * 3;
+      int portion14 = quarterTable * windowSize;
+      int32_t sampVal = 0;
+
+      if (duel) {
+        if (phaseIdx < (quarterTable - portion14) || (phaseIdx > (quarterTable + portion14) &&
+            phaseIdx < (threeQuarterTable - portion14)) || phaseIdx > (threeQuarterTable + portion14)) {
+          sampVal = cachedBandPtr[phaseIdx];
+        } else {
+          sampVal = secondWaveTable[phaseIdx];
+          if (invert) sampVal *= -1;
+        }
+      } else {
+        if (phaseIdx < (halfTable - portion12) || phaseIdx > (halfTable + portion12)) {
+          sampVal = cachedBandPtr[phaseIdx];
+        } else {
+          sampVal = secondWaveTable[phaseIdx];
+          if (invert) sampVal *= -1;
+        }
+      }
+      sampVal = (sampVal + prevSampVal) >> 1;
+      prevSampVal = sampVal;
+      if (spreadActive) {
+        sampVal = doSpreadAtomic(sampVal);
+      }
+      return sampVal;
+    }
+    #endif
+    // Non-atomic fallback
+    uint32_t p = phase_fractional + modOffset;
+    int phaseIdx = (p >> 16) & (TABLE_SIZE - 1);
+
+    int halfTable = HALF_TABLE_SIZE;
+    int portion12 = halfTable * windowSize;
+    int quarterTable = TABLE_SIZE * 0.25;
+    int threeQuarterTable = quarterTable * 3;
+    int portion14 = quarterTable * windowSize;
+    int32_t sampVal = 0;
+
+    if (duel) {
+      if (phaseIdx < (quarterTable - portion14) || (phaseIdx > (quarterTable + portion14) &&
+          phaseIdx < (threeQuarterTable - portion14)) || phaseIdx > (threeQuarterTable + portion14)) {
+        int idx = phaseIdx;
+        if (frequency > 831) {
+          sampVal = waveTable[idx + TABLE_SIZE + TABLE_SIZE];
+        } else if (frequency > 208) {
+          sampVal = waveTable[idx + TABLE_SIZE];
+        } else {
+          sampVal = (waveTable[idx] + prevSampVal) >> 1;
+          prevSampVal = sampVal;
+        }
+        if (spreadActive) {
+          sampVal = doSpread(sampVal);
+        }
+      } else {
+        sampVal = secondWaveTable[phaseIdx];
+        if (invert) sampVal *= -1;
+        if (spreadActive) {
+          int32_t spreadSamp1 = secondWaveTable[phaseIdx];
+          sampVal = (sampVal + spreadSamp1) >> 1;
+          int32_t spreadSamp2 = secondWaveTable[phaseIdx];
+          sampVal = (sampVal + spreadSamp2) >> 1;
+          incrementSpreadPhase();
+        }
+      }
+    } else {
+      if (phaseIdx < (halfTable - portion12) || phaseIdx > (halfTable + portion12)) {
+        int idx = phaseIdx;
+        if (frequency > 831) {
+          sampVal = waveTable[idx + TABLE_SIZE + TABLE_SIZE];
+        } else if (frequency > 208) {
+          sampVal = waveTable[idx + TABLE_SIZE];
+        } else {
+          sampVal = (waveTable[idx] + prevSampVal) >> 1;
+          prevSampVal = sampVal;
+        }
+        if (spreadActive) {
+          sampVal = doSpread(sampVal);
+        }
+      } else {
+        sampVal = secondWaveTable[phaseIdx];
+        if (invert) sampVal *= -1;
+        if (spreadActive) {
+          int32_t spreadSamp1 = secondWaveTable[phaseIdx];
+          sampVal = (sampVal + spreadSamp1) >> 1;
+          int32_t spreadSamp2 = secondWaveTable[phaseIdx];
+          sampVal = (sampVal + spreadSamp2) >> 1;
+          incrementSpreadPhase();
+        }
+      }
+    }
+    sampVal = (sampVal + prevSampVal) >> 1;
+    prevSampVal = sampVal;
+    incrementPhase();
+    return sampVal;
+  }
+
   /** Set cached mod index for use with single-argument phMod
    * @param modIndex - The depth value (0.0 - 10.0 typical)
    */
@@ -720,6 +921,56 @@ public:
    */
   inline int16_t phMod(int16_t modulator) {
     return phMod(modulator, cachedModIndexF);
+  }
+
+  /** Phase Modulation with atomically paired modulator advance (dual-core safe)
+   *
+   * Mirrors phModInt(Osc& modOsc, int32_t) — use when modIndex is a runtime float
+   * rather than a pre-scaled integer. On dual-core platforms, ensures modOsc.next()
+   * and the carrier phase advance are treated as an atomic pair.
+   *
+   * @param modOsc    - The modulator oscillator (advanced atomically with carrier)
+   * @param modIndex  - Modulation depth, 0.0 to ~10.0 typical
+   */
+  inline int16_t phMod(Osc& modOsc, float modIndex) {
+    #if IS_ESP32() || IS_RP2040()
+    int16_t result;
+    M16_ATOMIC_GUARD_BLOCKING(_pairLock, {
+      result = phMod(modOsc.next(), modIndex);
+    });
+    return result;
+    #else
+    return phMod(modOsc.next(), modIndex);
+    #endif
+  }
+
+  /** Phase Modulation with atomically paired modulator advance (dual-core safe)
+   *
+   * Use this overload instead of phModInt(int16_t, int32_t) when both the carrier
+   * and modulator oscillators are shared between dual-core audio callbacks. It
+   * guarantees that fmOsc.next() and the carrier phase advance happen as an atomic
+   * pair — preventing the interleaving race where one core picks up the wrong
+   * modulator sample relative to its carrier phase, causing FM discontinuities.
+   *
+   * Lock hold time is ~2 atomic fetch_add operations, so spinning is safe.
+   *
+   * Usage:
+   *   // Instead of: carrier.phModInt(modOsc.next(), scaledIdx)
+   *   carrier.phModInt(modOsc, scaledIdx)
+   *
+   * @param modOsc         - The modulator oscillator (advanced atomically with carrier)
+   * @param modIndexScaled - Pre-scaled mod index: (int32_t)(modIndex * 2048.0f)
+   */
+  inline int16_t phModInt(Osc& modOsc, int32_t modIndexScaled) {
+    #if IS_ESP32() || IS_RP2040()
+    int16_t result;
+    M16_ATOMIC_GUARD_BLOCKING(_pairLock, {
+      result = phModInt(modOsc.next(), modIndexScaled);
+    });
+    return result;
+    #else
+    return phModInt(modOsc.next(), modIndexScaled);
+    #endif
   }
 
   /** Phase Modulation with 2x oversampling (FM)
@@ -1352,6 +1603,12 @@ public:
   }
 
 private:
+  // Spinlock for paired modulator+carrier advance (dual-core only).
+  // Used by phModInt(Osc& modOsc, ...) to prevent cross-core phase mismatches.
+  #if IS_ESP32() || IS_RP2040()
+  std::atomic<bool> _pairLock{false};
+  #endif
+
   // 16.16 fixed-point constants (compile-time for efficiency)
   static constexpr uint32_t TABLE_SIZE_FP_CONST = TABLE_SIZE << 16;
   static constexpr uint32_t HALF_TABLE_SIZE_FP = HALF_TABLE_SIZE << 16;
@@ -1387,7 +1644,7 @@ private:
   float particleEnvReleaseRate = 0.92; // thresh and rate = number of apparent particles
   uint32_t feedback_phase_fractional = 0; // 16.16 fixed-point
   float cachedModIndexF = 1.0f; // Cached mod index for single-arg phMod
-  int32_t modDepthScale = 1024;  // Frequency-adaptive mod depth (0-1024, 1024 = full)
+  volatile int32_t modDepthScale = 1024;  // Frequency-adaptive mod depth (0-1024, 1024 = full)
   float testVal = 1.3;
   float cycleLengthPerMS = frequency * 0.001f; // / 1000.0f;
   float midiPitch = 69;

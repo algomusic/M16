@@ -40,7 +40,7 @@ void loop() {
 */
 void audioUpdate() {
   // modIndex changes modulation depth. Values for PM are about 1/100th of those typical for FM
-  int32_t leftVal = aOsc1.phMod(aOsc2.next(), modIndex); 
+  int32_t leftVal = aOsc1.phMod(aOsc2, modIndex);
   int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

@@ -73,7 +73,7 @@ void loop() {
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  int32_t leftVal = (aOsc1.phMod(modOsc.next(), modVal) * vol)>>10; // no filtering
+  int32_t leftVal = (aOsc1.phMod(modOsc, modVal) * vol)>>10; // no filtering
   int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }
