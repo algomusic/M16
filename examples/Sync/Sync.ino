@@ -12,7 +12,7 @@
 #include "Osc.h"
 #include "Env.h"
 
-Sync audioSync(15, 33); // in and out GPIO pins
+Sync audioSync(17, 48); // in and out GPIO pins
 Osc aOsc1;
 Env ampEnv;
 int envVal = 0;
@@ -36,6 +36,7 @@ void setup() {
   aOsc1.sinGen(); // fill the wavetable with a sinewave
   aOsc1.setPitch(69);
   // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change defaults
+  seti2sPins(38, 39, 40, 18);
   audioStart();
   Serial.println("Output BPM = " + String(audioSync.getOutBpm()));
 }
