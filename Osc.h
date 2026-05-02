@@ -135,11 +135,18 @@ public:
 
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
-      // Cache volatile values atomically to prevent torn reads during setFreq()
-      // ACQUIRE on increment synchronizes-with setFreq()'s RELEASE store, ensuring
-      // the subsequent bandPtr load sees the value written before that RELEASE.
-      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_ACQUIRE);
-      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+      // Seqlock read: retry if setFreq() is mid-update (odd seq) or the seq changed
+      // between our two loads — guarantees a consistent bandPtr+increment pair.
+      uint32_t cachedIncrement;
+      int16_t* cachedBandPtr;
+      uint32_t _seqBefore, _seqAfter;
+      do {
+        _seqBefore = _freqSeq.load(std::memory_order_acquire);
+        if (_seqBefore & 1) continue;  // write in progress — spin until stable
+        cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+        cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+        _seqAfter = _freqSeq.load(std::memory_order_acquire);
+      } while (_seqAfter != _seqBefore);
 
       // Safety check: if bandPtr is null or increment is zero, return silence
       if (cachedBandPtr == nullptr || cachedIncrement == 0) {
@@ -211,10 +218,17 @@ public:
     // Fast path: atomic phase increment for thread-safe dual-core operation
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
-      // Cache volatile values atomically to prevent torn reads during setFreq()
-      // ACQUIRE on increment synchronizes-with setFreq()'s RELEASE store.
-      uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_ACQUIRE);
-      int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+      // Seqlock read: same protocol as next() — guarantees consistent bandPtr+increment pair.
+      uint32_t cachedIncrement;
+      int16_t* cachedBandPtr;
+      uint32_t _seqBefore, _seqAfter;
+      do {
+        _seqBefore = _freqSeq.load(std::memory_order_acquire);
+        if (_seqBefore & 1) continue;
+        cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+        cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+        _seqAfter = _freqSeq.load(std::memory_order_acquire);
+      } while (_seqAfter != _seqBefore);
       float cachedFreq = frequency;  // Used for band selection decision
 
       // Safety check: if bandPtr is null or increment is zero, return silence
@@ -585,12 +599,12 @@ public:
    *   5.0-10.0: Aggressive FM
    */
   inline int16_t phMod(int16_t modulator, float modIndex) {
+    // Anti-aliasing: clamp modIndex to depth_max = 9000 / (freq * cmRatio)
+    float dMax = _cachedDepthMax;
+    if (modIndex > dMax) modIndex = dMax;
+
     // Calculate phase offset in 16.16 format
     int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
-
-    // Anti-aliasing: reduce mod depth at high carrier frequencies
-    modOffset = (modOffset * modDepthScale) >> 10;
-
     modOffset <<= 8; // Scale to 16.16 format
 
     #if IS_ESP32() || IS_RP2040()
@@ -663,12 +677,12 @@ public:
    * @param modIndexScaled - Pre-scaled mod index: (int32_t)(modIndex * 2048.0f)
    */
   inline int16_t phModInt(int16_t modulator, int32_t modIndexScaled) {
+    // Anti-aliasing: clamp pre-scaled modIndex to depth_max * 2048
+    int32_t dMaxScaled = _cachedDepthMaxScaled;
+    if (modIndexScaled > dMaxScaled) modIndexScaled = dMaxScaled;
+
     // modOffset = modulator * modIndex * 8.0f, pre-scaled by 256
     int32_t modOffset = ((int32_t)modulator * modIndexScaled) >> 8;
-
-    // Anti-aliasing: reduce mod depth at high carrier frequencies
-    modOffset = (modOffset * modDepthScale) >> 10;
-
     modOffset <<= 8; // Scale to 16.16 format
 
     #if IS_ESP32() || IS_RP2040()
@@ -724,8 +738,11 @@ public:
     if (morphAmount <= 0) return phMod(modulator, modIndex);
     int intMorphAmount = max(0, min(1024, (int)(1024 * morphAmount)));
 
+    // Anti-aliasing: clamp modIndex to depth_max = 9000 / (freq * cmRatio)
+    float dMax = _cachedDepthMax;
+    if (modIndex > dMax) modIndex = dMax;
+
     int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
-    modOffset = (modOffset * modDepthScale) >> 10;
     modOffset <<= 8;
 
     #if IS_ESP32() || IS_RP2040()
@@ -795,8 +812,11 @@ public:
    * @param invert - Invert the second wavetable in window regions
    */
   inline int16_t phModWTrans(int16_t modulator, float modIndex, int16_t * secondWaveTable, float windowSize, bool duel, bool invert) {
+    // Anti-aliasing: clamp modIndex to depth_max = 9000 / (freq * cmRatio)
+    float dMax = _cachedDepthMax;
+    if (modIndex > dMax) modIndex = dMax;
+
     int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
-    modOffset = (modOffset * modDepthScale) >> 10;
     modOffset <<= 8;
 
     // Advance phase and compute modulated phase position
@@ -933,6 +953,17 @@ public:
    * @param modIndex  - Modulation depth, 0.0 to ~10.0 typical
    */
   inline int16_t phMod(Osc& modOsc, float modIndex) {
+    // If C:M ratio wasn't set explicitly, derive depth_max from the modulator's
+    // own frequency: ratio = modOsc.freq / carrier.freq, so the cap simplifies to
+    // depth_max = 9000 / modOsc.freq. Pre-clamp here; the inner phMod still runs
+    // its own clamp against the cached cap (using ratio=1 default), so the final
+    // modIndex is the tighter of the two — strictly safer for anti-aliasing.
+    if (!_cmRatioSet) {
+      float modFreq = modOsc.getFreq();
+      if (modFreq < 1.0f) modFreq = 1.0f;
+      float dMax = 9000.0f / modFreq;
+      if (modIndex > dMax) modIndex = dMax;
+    }
     #if IS_ESP32() || IS_RP2040()
     int16_t result;
     M16_ATOMIC_GUARD_BLOCKING(_pairLock, {
@@ -962,6 +993,14 @@ public:
    * @param modIndexScaled - Pre-scaled mod index: (int32_t)(modIndex * 2048.0f)
    */
   inline int16_t phModInt(Osc& modOsc, int32_t modIndexScaled) {
+    // Auto-derive depth cap from modulator freq when C:M ratio wasn't explicitly set.
+    // See phMod(Osc&, float) for rationale.
+    if (!_cmRatioSet) {
+      float modFreq = modOsc.getFreq();
+      if (modFreq < 1.0f) modFreq = 1.0f;
+      int32_t dMaxScaled = (int32_t)((9000.0f / modFreq) * 2048.0f);
+      if (modIndexScaled > dMaxScaled) modIndexScaled = dMaxScaled;
+    }
     #if IS_ESP32() || IS_RP2040()
     int16_t result;
     M16_ATOMIC_GUARD_BLOCKING(_pairLock, {
@@ -979,11 +1018,12 @@ public:
    * @param modIndex - Modulation depth, 0.0 to ~10.0 typical
    */
   inline int16_t phMod2(int16_t modulator, float modIndex) {
+    // Anti-aliasing: clamp modIndex to depth_max = 9000 / (freq * cmRatio)
+    float dMax = _cachedDepthMax;
+    if (modIndex > dMax) modIndex = dMax;
+
     // Calculate phase offset in 16.16 format
     int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
-
-    // Anti-aliasing: reduce mod depth at high carrier frequencies
-    modOffset = (modOffset * modDepthScale) >> 10;
     modOffset <<= 8; // Scale to 16.16 format
 
     #if IS_ESP32() || IS_RP2040()
@@ -1167,11 +1207,15 @@ public:
         }
       }
 
-      // Atomic stores for thread-safety with next() on dual-core systems
+      // Seqlock write: mark odd (write in progress), store both, mark even (stable).
+      // next() reads the seqlock before and after loading the pair and retries if
+      // the count changed — guaranteeing it always sees a consistent bandPtr+increment.
       #if IS_ESP32() || IS_RP2040()
-        // Update bandPtr first, then increment (next() reads increment first, then bandPtr)
-        __atomic_store_n((uintptr_t*)&bandPtr, (uintptr_t)newBandPtr, __ATOMIC_RELEASE);
-        __atomic_store_n(&phase_increment_fractional, newIncrement, __ATOMIC_RELEASE);
+        uint32_t _seq = _freqSeq.load(std::memory_order_relaxed);
+        _freqSeq.store(_seq + 1, std::memory_order_release);  // odd = write in progress
+        __atomic_store_n((uintptr_t*)&bandPtr, (uintptr_t)newBandPtr, __ATOMIC_RELAXED);
+        __atomic_store_n(&phase_increment_fractional, newIncrement, __ATOMIC_RELAXED);
+        _freqSeq.store(_seq + 2, std::memory_order_release);  // even = stable
       #else
         bandPtr = newBandPtr;
         phase_increment_fractional = newIncrement;
@@ -1193,18 +1237,12 @@ public:
       }
       cycleLengthPerMS = frequency * 0.001f;
 
-      // Frequency-adaptive mod depth scaling for anti-aliasing in phMod
-      // Below 1500Hz: full depth. Above: reduce proportionally to headroom to Nyquist.
-      // This reduces FM sidebands that would alias at higher carrier frequencies.
-      const float nyquist = SAMPLE_RATE * 0.5f;
-      const float thresholdFreq = 1500.0f;
-      if (freq <= thresholdFreq) {
-        modDepthScale = 1024; // Full depth
-      } else {
-        // Scale down based on remaining headroom: (nyquist - freq) / (nyquist - threshold)
-        float headroom = (nyquist - freq) / (nyquist - thresholdFreq);
-        modDepthScale = (int32_t)(1024.0f * fmaxf(0.05f, fminf(1.0f, headroom)));
-      }
+      // Anti-aliasing depth cap for phMod variants: depth_max = 9000 / (freq * cmRatio).
+      // Each phMod clamps the caller's modIndex against this cap so FM sidebands stay
+      // bounded as the carrier rises and/or the C:M ratio widens.
+      float dMax = 9000.0f / (freq * _cmRatio);
+      _cachedDepthMax = dMax;
+      _cachedDepthMaxScaled = (int32_t)(dMax * 2048.0f);
     }
 	}
 
@@ -1213,6 +1251,30 @@ public:
 	float getFreq() {
 		return frequency;
 	}
+
+  /** Set the carrier-to-modulator ratio used by the anti-aliasing depth cap.
+   *
+   * The cap applied inside every phMod variant is:
+   *     depth_max = 9000 / (freq * ratio)
+   *
+   * Calling this marks the ratio as explicitly set, so the Osc& overloads
+   * (phMod(Osc&, ...), phModInt(Osc&, ...)) will use this value rather than
+   * auto-deriving from the modulator oscillator's frequency.
+   *
+   * @param ratio - C:M ratio (positive). Default before this is called is 1.0.
+   */
+  inline void setCMRatio(float ratio) {
+    if (ratio > 0.0f) {
+      _cmRatio = ratio;
+      _cmRatioSet = true;
+      float dMax = 9000.0f / (frequency * ratio);
+      _cachedDepthMax = dMax;
+      _cachedDepthMaxScaled = (int32_t)(dMax * 2048.0f);
+    }
+  }
+
+  /** Return the currently configured C:M ratio (1.0 if never set). */
+  inline float getCMRatio() const { return _cmRatio; }
 
 	/** Set the frequency via a MIDI pitch
   * @midiPitch The pitch, value 0 - 127
@@ -1607,6 +1669,10 @@ private:
   // Used by phModInt(Osc& modOsc, ...) to prevent cross-core phase mismatches.
   #if IS_ESP32() || IS_RP2040()
   std::atomic<bool> _pairLock{false};
+  // Seqlock for bandPtr+increment pair — ensures next() always reads a consistent
+  // pair even when setFreq() is updating both from the other core.
+  // Even value = stable; odd value = write in progress (reader must retry).
+  std::atomic<uint32_t> _freqSeq{0};
   #endif
 
   // 16.16 fixed-point constants (compile-time for efficiency)
@@ -1644,7 +1710,12 @@ private:
   float particleEnvReleaseRate = 0.92; // thresh and rate = number of apparent particles
   uint32_t feedback_phase_fractional = 0; // 16.16 fixed-point
   float cachedModIndexF = 1.0f; // Cached mod index for single-arg phMod
-  volatile int32_t modDepthScale = 1024;  // Frequency-adaptive mod depth (0-1024, 1024 = full)
+  // Anti-aliasing depth cap: depth_max = 9000 / (freq * cmRatio).
+  // _cmRatioSet=false → Osc& overloads auto-derive ratio from modulator freq.
+  float _cmRatio = 1.0f;
+  bool _cmRatioSet = false;
+  volatile float _cachedDepthMax = 9000.0f / 440.0f;          // for float modIndex (phMod, phMod2, phModMorph, phModWTrans)
+  volatile int32_t _cachedDepthMaxScaled = (int32_t)((9000.0f / 440.0f) * 2048.0f); // for phModInt's pre-scaled int32
   float testVal = 1.3;
   float cycleLengthPerMS = frequency * 0.001f; // / 1000.0f;
   float midiPitch = 69;
