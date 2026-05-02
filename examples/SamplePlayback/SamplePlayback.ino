@@ -67,6 +67,7 @@ void setup() {
     Samp::initSharedEnvelope(2048, 0.2, 1);
     // Initialize I2S audio
     // seti2sPins(I2S_BCK, I2S_WS, I2S_DOUT, I2S_DIN_NOT_USED); // if not using default
+    // useInternalDAC();
     audioStart();
     // Start sample playback from beginning
     sample.start();

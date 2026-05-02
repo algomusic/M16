@@ -39,10 +39,13 @@ void setup() {
   effect1.setReverbLength(0.8); // 0.0 - 1.0
   effect1.setReverbMix(0.4); // 0.0 - 1.0
   // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
+  // setSampleRate(22050);
+  useInternalDAC(); // enable internal DAC output, call before audioStart()
   audioStart();
 }
 
 void loop() {
+  // audioLoop(); // required for internal DAC mode
   msNow = millis();
 
   if ((unsigned long)(msNow - noteTime) >= noteDelta) {
@@ -77,4 +80,5 @@ void audioUpdate() {
     // effect1.reverbStereo2(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
   #endif
   i2s_write_samples(leftVal, rightVal);
+  // i2s_write_samples(oscVal, oscVal);
 }

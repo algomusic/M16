@@ -21,6 +21,7 @@ void setup() {
   osc1.setPitch(pitch); // MIDI pitch
   lfo1.setFreq(lfoRate); // Htz
   seti2sPins(38, 39, 40, 41); // bck, ws, data_out, data_in // change defaults
+  // useInternalDAC();
   audioStart();
 }
 

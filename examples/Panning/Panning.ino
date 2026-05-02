@@ -22,6 +22,7 @@ void setup() {
   osc1.triGen(); // fill the internal wavetable
   osc1.setPitch(69);
   // seti2sPins(38, 39, 40, 41); // bck, ws, data_out, data_in // change defaults
+  // useInternalDAC();
   audioStart();
 }
 

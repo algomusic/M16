@@ -21,6 +21,7 @@ void setup() {
   Osc::triGen(triTable); // fill the external wavetable
   aOsc1.setPitch(60);
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // useInternalDAC();
   audioStart();
 }
 

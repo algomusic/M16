@@ -14,6 +14,7 @@ void setup() {
   aOsc1.crackleGen(); // fill the wavetable
   aOsc1.setCrackle(true, 1000); // 0 - MAX_16
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // useInternalDAC();
   audioStart();
 }
 

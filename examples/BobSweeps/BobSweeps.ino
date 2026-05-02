@@ -30,7 +30,8 @@ void setup() {
   // osc1.setSpread(0.0002, -0.0002);
   lfo1.setFreq(0.2);
   lfo2.setFreq(0.04);
-  // seti2sPins(38, 39, 40, 41);
+  seti2sPins(38, 39, 40, 18);
+  // useInternalDAC(); // enable internal DAC output, call before audioStart()
   audioStart();
 }
 
@@ -45,7 +46,7 @@ void loop() {
 
   if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
       pitchTime += pitchDelta;
-    float pitch = round(rand(36) + 24);
+    float pitch = round(rand(24) + 24);
     osc1.setPitch(pitch);
     Serial.println(pitch);
   }

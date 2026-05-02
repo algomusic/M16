@@ -29,11 +29,13 @@ void setup() {
   // Set up carrier with sine wave
   carrier.sinGen();
   carrier.setFreq(carrierFreq);
+  carrier.setCMRatio(modRatio);  // anti-aliasing depth cap: depth_max = 9000 / (freq * ratio)
 
   // Set up modulator with sine wave
   modulator.sinGen();
   modulator.setFreq(carrierFreq * modRatio);
   // seti2sPins(38, 39, 40, 41);
+  // useInternalDAC();
   audioStart();
 
   Serial.println("Carrier: " + String(carrierFreq) + " Hz");

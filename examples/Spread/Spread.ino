@@ -20,6 +20,7 @@ void setup() {
   aOsc1.setPitch(69);
   filter.setFreq(5000);
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // useInternalDAC();
   audioStart();
 }
 

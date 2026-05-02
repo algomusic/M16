@@ -30,6 +30,7 @@ void setup() {
   ampEnvB.setRelease(2000);
   ampEnvC.setRelease(2000);
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // useInternalDAC();
   audioStart();
 }
 

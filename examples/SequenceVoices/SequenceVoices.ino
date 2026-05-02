@@ -51,6 +51,7 @@ void setup() {
   effect1.setReverbLength(0.25);
   effect1.setReverbMix(0.2);
   // seti2sPins(25, 27, 12, 21); // or similar if required
+  // useInternalDAC();
   audioStart();
 }
 

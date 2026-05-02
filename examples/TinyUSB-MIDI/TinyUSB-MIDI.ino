@@ -80,6 +80,7 @@ void setup() {
   delay1.setLevel(0.8); // 0.0 - 1.0
   delay1.setFeedback(true); // bool
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // useInternalDAC();
   audioStart();
   // midi
   MIDI.begin(MIDI_CHANNEL_OMNI);

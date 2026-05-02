@@ -22,6 +22,7 @@ void setup() {
   lfo.triGen(); // fill the sawTable
   lfo.setFreq(lfoRate);
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // useInternalDAC();
   audioStart();
 }
 

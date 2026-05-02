@@ -14,6 +14,7 @@ void setup() {
   aOsc1.sinGen(); // initialise the osc's built-in wavetable with a sine waveform
   aOsc1.setPitch(69); // MIDI pitch
   // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change ESP32 defaults
+  // useInternalDAC();
   audioStart();
 }
 

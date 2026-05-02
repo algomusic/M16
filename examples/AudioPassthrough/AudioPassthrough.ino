@@ -11,6 +11,7 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // useInternalDAC();
   audioStart();
 }
 

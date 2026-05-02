@@ -22,6 +22,7 @@ void setup() {
   shOsc.setSandH(true);
   shOsc.setFreq(shRate);
   seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // useInternalDAC();
   audioStart();
 }
 

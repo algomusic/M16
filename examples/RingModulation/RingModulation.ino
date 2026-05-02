@@ -13,6 +13,7 @@ void setup() {
   osc1.sqrGen(); // fill osc wavtetable
   osc2.triGen(); // fill
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // useInternalDAC();
   audioStart();
 }
 

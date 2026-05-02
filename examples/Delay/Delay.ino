@@ -24,6 +24,7 @@ void setup() {
   osc1.setPitch(60);
   ampEnv1.setAttack(10);
   // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change ESP32 defaults
+  useInternalDAC(); // enable internal DAC output, call before audioStart()
   audioStart();
 }
 

@@ -36,6 +36,7 @@ void setup() {
   generateTransferFunction();
   effect1.setShapeTable(waveShapeTable, TABLE_SIZE); // install the shaping wavetable
   // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
+  // useInternalDAC();
   audioStart();
 }
 

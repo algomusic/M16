@@ -15,7 +15,9 @@ void setup() {
   Osc::sinGen(sineTable); // fill wavetable
   aOsc1.setTable(sineTable); // assign wave to osc1
   aOsc2.setTable(sineTable); // assign wave to osc2
-  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // useInternalDAC();
+  // setIsDualCore(false);
   audioStart();
 }
 
@@ -29,6 +31,7 @@ void loop() {
     float ratio = rand(8) * 0.25 + 0.25;  // set carrier to modulator freq ratio
     Serial.print("Ratio: ");Serial.print(ratio);
     aOsc2.setFreq(mtof(pitch) * ratio);
+    aOsc1.setCMRatio(ratio);  // anti-aliasing depth cap: depth_max = 9000 / (freq * ratio)
     modIndex = rand(50) * 0.1;  // set the modulation index (depth)
     Serial.print(" Mod Index: ");Serial.println(modIndex);
   }

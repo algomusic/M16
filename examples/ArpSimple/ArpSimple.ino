@@ -21,6 +21,7 @@ void setup() {
   // arp1.setDirection(ARP_UP);
   // arp1.setRange(1);
   //seti2sPins(25, 27, 12, 16); // bck, ws, data_out, data_in // change defaults
+  // useInternalDAC();
   audioStart();
 }
 

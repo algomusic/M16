@@ -37,6 +37,7 @@ void setup() {
   reverb.setReverbMix(0.6);     // 0.0-1.0, wet/dry balance
   // reverb.setDampening(0.4); // 0.0 - 1.0, high frequency dampening
   // seti2sPins(7, 8, 9, 41); // bck, ws, data_out, data_in // change ESP32 defaults
+  useInternalDAC(); // enable internal DAC output, call before audioStart()
   audioStart();
 }
 
@@ -65,7 +66,8 @@ void audioUpdate() {
 
   // Apply Freeverb-style reverb (stereo output)
   int32_t leftVal, rightVal;
-  reverb.reverbStereo(sample, sample, leftVal, rightVal);
+  // reverb.reverbStereo(sample, sample, leftVal, rightVal);
 
-  i2s_write_samples(leftVal, rightVal);
+  // i2s_write_samples(leftVal, rightVal);
+  i2s_write_samples(sample, sample);
 }

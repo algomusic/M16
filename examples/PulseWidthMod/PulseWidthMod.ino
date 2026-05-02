@@ -27,6 +27,7 @@ void setup() {
   LFO1.setFreq(0.1); 
   aOsc1.setPulseWidth(0.25);
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // useInternalDAC();
   audioStart();
 }
 

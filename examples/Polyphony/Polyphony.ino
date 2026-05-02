@@ -6,7 +6,7 @@
 #include "FX.h"
 
 int16_t * wavetable; // empty array pointer
-const int poly = 8; // change polyphony as desired, each MCU type will handle particular amounts
+const int poly = 23; // change polyphony as desired, each MCU type will handle particular amounts
 Osc osc[poly]; // an array of oscillators
 Env env[poly];
 SVF filter[poly];
@@ -37,16 +37,14 @@ void setup() {
     effect1.setReverbLength(0.6); // 0-1 feedback level
     effect1.setReverbMix(0.7); // 0-1 balance between dry and wet signals
   #endif
-  // seti2sPins(7,8,9,41);
+  seti2sPins(38,39,40,41);
+  // useInternalDAC(); // enable internal DAC output, call before audioStart()
   noteTime = millis(); // schedule first note
   envTime = millis();
   audioStart();
 }
 
 void loop() {
-  #if IS_RP2040()
-    audioLoop();  // Process audio on Core 0 in dual-core mode
-  #endif
 
   msNow = millis();
 
@@ -74,7 +72,7 @@ void audioUpdate() {
   int32_t mix = 0;
   for (int i=0; i<poly; i++) {
     mix += filter[i].nextLPF((osc[i].next() * env[i].getValue())>>16);
-    mix = (mix * 550) >> 10; // amplitude compensation for polyphony
+    mix = (mix * 950) >> 10; // amplitude compensation for polyphony
   }
   // stereo
   int32_t leftVal = mix; 
