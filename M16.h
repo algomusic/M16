@@ -122,6 +122,23 @@ float SAMPLE_RATE_INV = 1.0f / SAMPLE_RATE;
 const float MAX_16_INV = 0.00003052;
 bool isDualCore = true; // assume dual-core unless changed in setup()
 
+// Sample reorder buffer (ESP32 dual-core external I2S only)
+// When dual-core audio production writes to a shared I2S DMA, the order in which
+// the two cores reach i2s_channel_write is non-deterministic — adjacent samples
+// can be swapped, producing audible discontinuities under high-modulation FM.
+// This flag inserts an MPSC ring buffer + single drainer task that restores
+// deterministic sample order at the DAC. Only active when isDualCore=true and
+// external I2S is in use; all other paths (ESP8266, RP2040, internal DAC,
+// single-core mode) are unaffected. Costs ~220 B BSS, ~680 B flash on ESP32.
+// Override with `#define M16_REORDER_BUFFER_ENABLE 0` BEFORE `#include "M16.h"`.
+#ifndef M16_REORDER_BUFFER_ENABLE
+  #define M16_REORDER_BUFFER_ENABLE 1
+#endif
+#ifndef M16_REORDER_RING_SIZE
+  #define M16_REORDER_RING_SIZE 16   // power-of-2; absorbs cross-core skew
+#endif
+#define M16_REORDER_RING_MASK (M16_REORDER_RING_SIZE - 1)
+
 /** Specify the use of one or two cores for audio processing
 * @dualCore True to use both cores (ESP32/PiPico2), false for single-core mode
 * Call this function before audioStart() in setUp() to set the desired number of cores used for audio.
@@ -420,6 +437,63 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
   static int32_t _prevOutL = 0;
   static int32_t _prevOutR = 0;
 
+#if M16_REORDER_BUFFER_ENABLE
+  // ---- Sample reorder buffer (MPSC) ----
+  // Producers (audio tasks on cores 0 & 1) deposit completed samples into ring
+  // slots indexed by a monotonically-increasing seq#. A single drainer task
+  // reads slots in seq order and feeds i2s_channel_write(). The seq# is also
+  // the per-slot ready flag: 0 = empty/consumed, non-zero = filled with that
+  // seq#. uint32_t is used because Xtensa LX6/LX7 lack native lock-free 64-bit
+  // atomics — counter wraps after 2^32 ≈ 13.5 hours at 88 kHz claim rate;
+  // acceptable for testing, address with separate ready flag in a follow-up if
+  // long-run stability requires it.
+  struct ReorderSlot {
+    int16_t l;
+    int16_t r;
+    std::atomic<uint32_t> ready;  // 0 = empty/consumed; otherwise = seq#
+  };
+
+  static ReorderSlot _reorderRing[M16_REORDER_RING_SIZE];
+  static std::atomic<uint32_t> _reorderNextSlotToProduce{1};  // 1-indexed
+  static uint32_t _reorderNextSlotToConsume = 1;              // drainer-only
+  static TaskHandle_t _reorderDrainerHandle = NULL;
+  static volatile bool _reorderActive = false;                // gates runtime branch
+  static SemaphoreHandle_t _reorderSlotSem = NULL;            // counting sem; tokens = free ring slots
+
+  // Drainer task: reads ring in seq order, writes one stereo frame per
+  // i2s_channel_write call. The blocking write paces the loop at SAMPLE_RATE.
+  static void reorderDrainerTask(void* /*unused*/) {
+    for (;;) {
+      uint32_t idx = (_reorderNextSlotToConsume & M16_REORDER_RING_MASK);
+
+      // Wait for the next-expected slot to be marked ready.
+      // Acquire pairs with producer's release-store of seq#.
+      uint32_t spin = 0;
+      while (_reorderRing[idx].ready.load(std::memory_order_acquire) != _reorderNextSlotToConsume) {
+        if ((++spin & 0x3F) == 0) taskYIELD();
+      }
+
+      int16_t l = _reorderRing[idx].l;
+      int16_t r = _reorderRing[idx].r;
+
+      // Mark consumed. Release pairs with producer's acquire on next wraparound.
+      _reorderRing[idx].ready.store(0, std::memory_order_release);
+      _reorderNextSlotToConsume++;
+      xSemaphoreGive(_reorderSlotSem);  // signal free slot — unblocks waiting producer
+
+      // One stereo frame to I2S DMA — blocks if DMA full (natural pacing).
+      // Byte order matches legacy i2s_write_samples external-I2S path.
+      uint8_t buf[4];
+      buf[0] = r & 0xFF;
+      buf[1] = (r >> 8) & 0xFF;
+      buf[2] = l & 0xFF;
+      buf[3] = (l >> 8) & 0xFF;
+      size_t bytesWritten = 0;
+      i2s_channel_write(tx_handle, buf, 4, &bytesWritten, portMAX_DELAY);
+    }
+  }
+#endif // M16_REORDER_BUFFER_ENABLE
+
   bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
     #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
       if (_useInternalDAC) {
@@ -445,6 +519,27 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
     #endif
 
       // External I2S DAC path (16-bit)
+#if M16_REORDER_BUFFER_ENABLE
+      // When the drainer is active (dual-core external I2S path), enqueue to
+      // the ring instead of writing direct. The drainer feeds DMA in seq order.
+      if (_reorderActive) {
+        // Take BEFORE fetch_add — keeps in_flight ≤ RING_SIZE, guaranteeing
+        // the slot we claim (seq & MASK) cannot still hold unexpired data.
+        // Genuine block allows IDLE0 to run, preventing WDT starvation on CPU 0.
+        xSemaphoreTake(_reorderSlotSem, portMAX_DELAY);
+
+        uint32_t mySeq = _reorderNextSlotToProduce.fetch_add(1, std::memory_order_relaxed);
+        uint32_t idx = (mySeq & M16_REORDER_RING_MASK);
+
+        _reorderRing[idx].l = leftSample;
+        _reorderRing[idx].r = rightSample;
+
+        // Publish: data writes happen-before the seq# becomes visible.
+        _reorderRing[idx].ready.store(mySeq, std::memory_order_release);
+        return true;
+      }
+#endif
+
       uint8_t sampleBuffer[4];
       sampleBuffer[0] = rightSample & 0xFF;
       sampleBuffer[1] = (rightSample >> 8) & 0xFF;
@@ -534,6 +629,39 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
             1
         );
       }
+
+#if M16_REORDER_BUFFER_ENABLE
+      // Reorder buffer only useful when both cores produce frames into shared DMA.
+      // Single-core external I2S has no ordering issue, so skip the drainer.
+      if (isDualCore) {
+        for (int i = 0; i < M16_REORDER_RING_SIZE; i++) {
+          _reorderRing[i].ready.store(0, std::memory_order_relaxed);
+        }
+        _reorderNextSlotToProduce.store(1, std::memory_order_relaxed);
+        _reorderNextSlotToConsume = 1;
+        _reorderSlotSem = xSemaphoreCreateCounting(M16_REORDER_RING_SIZE, M16_REORDER_RING_SIZE);
+        // Spawn drainer FIRST so it's ready to consume the moment producers
+        // begin enqueuing. Only flip _reorderActive if creation succeeds —
+        // otherwise producers stay on the legacy direct-write path and we
+        // log the failure rather than silently freezing on a full ring.
+        BaseType_t drainerOk = xTaskCreatePinnedToCore(
+            reorderDrainerTask,
+            "M16Drainer",
+            8192,
+            NULL,
+            configMAX_PRIORITIES - 1,
+            &_reorderDrainerHandle,
+            0
+        );
+        if (drainerOk == pdPASS) {
+          _reorderActive = true;  // producers now route through the ring
+          Serial.println("M16 reorder buffer active (dual-core deterministic ordering)");
+        } else {
+          Serial.println("M16 WARNING: reorder buffer drainer task creation FAILED — falling back to legacy direct-write path");
+        }
+      }
+#endif
+
       Serial.println("M16 is running (dual-core mode)");
   }
 
