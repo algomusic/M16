@@ -139,6 +139,14 @@ bool isDualCore = true; // assume dual-core unless changed in setup()
 #endif
 #define M16_REORDER_RING_MASK (M16_REORDER_RING_SIZE - 1)
 
+// Number of samples per dual-core block. Both cores fill their partial buffers
+// independently; Core 0 combines and writes to DMA once per block.
+// Synchronisation overhead: 2 FreeRTOS events / block = 1.4 % CPU at N=32.
+// Define before #include "M16.h" to override. Power-of-2 recommended.
+#ifndef M16_BLOCK_SIZE
+  #define M16_BLOCK_SIZE 32
+#endif
+
 /** Specify the use of one or two cores for audio processing
 * @dualCore True to use both cores (ESP32/PiPico2), false for single-core mode
 * Call this function before audioStart() in setUp() to set the desired number of cores used for audio.
@@ -293,6 +301,10 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
   return (int16_t*)psramAllocSafe(count * sizeof(int16_t), description);
 }
 
+// Forward declaration — clip16 is defined at global scope after the platform blocks.
+// Needed so platform-specific functions (e.g. audioBlockWrite) can call it.
+int32_t clip16(int input);
+
 // ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)
 // ESP8266 I2S interface (D1 mini pins) BCLK->BCK (D8 GPIO15), I2SO->DOUT (RX GPIO3), and LRCLK(WS)->LCK (D4 GPIO2) [SCK to GND on some boards]
 
@@ -334,6 +346,16 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
 
   /** No-op on ESP8266 - included for API compatibility with Pico dual-core mode */
   inline void audioLoop() {}
+
+  // Block-split API stubs — ESP8266 is always single-core.
+  // Sketches using audioPartitionOffset/Stride/audioBlockWrite compile unchanged.
+  inline int  audioPartitionOffset()  { return 0; }
+  inline int  audioPartitionStride()  { return 1; }
+  inline bool audioIsFinalizerCore()  { return true; }
+  inline bool audioBlockWrite(int32_t L, int32_t R) {
+    i2s_write_samples((int16_t)clip16(L), (int16_t)clip16(R));
+    return true;
+  }
 #elif IS_ESP32()
   // i2s
   #include <driver/i2s_std.h>
@@ -421,8 +443,12 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
   }
 
   void audioUpdate(); // forward
+  static volatile bool _audioTasksRunning = false;
 
   void audioCallback(void* param) {
+      while (!_audioTasksRunning) {
+          vTaskDelay(1);
+      }
       for (;;) {
           audioUpdate();
           // No yield() here — i2s_channel_write() and dac_continuous_write()
@@ -458,19 +484,25 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
   static uint32_t _reorderNextSlotToConsume = 1;              // drainer-only
   static TaskHandle_t _reorderDrainerHandle = NULL;
   static volatile bool _reorderActive = false;                // gates runtime branch
-  static SemaphoreHandle_t _reorderSlotSem = NULL;            // counting sem; tokens = free ring slots
+  static SemaphoreHandle_t _reorderSlotSem    = NULL;  // counting sem; tokens = free ring slots
+  static SemaphoreHandle_t _reorderSlotFilled = NULL;  // counting sem; tokens = slots awaiting drain
 
   // Drainer task: reads ring in seq order, writes one stereo frame per
   // i2s_channel_write call. The blocking write paces the loop at SAMPLE_RATE.
   static void reorderDrainerTask(void* /*unused*/) {
     for (;;) {
+      // Block until a producer signals a filled slot — allows IDLE0 to run,
+      // preventing WDT starvation on CPU 0 when the ring is empty.
+      xSemaphoreTake(_reorderSlotFilled, portMAX_DELAY);
+
       uint32_t idx = (_reorderNextSlotToConsume & M16_REORDER_RING_MASK);
 
       // Wait for the next-expected slot to be marked ready.
       // Acquire pairs with producer's release-store of seq#.
-      uint32_t spin = 0;
+      // In split-core mode this spin is bounded: the semaphore was already given,
+      // so the store is imminent. In practice this loop body runs 0–1 times.
       while (_reorderRing[idx].ready.load(std::memory_order_acquire) != _reorderNextSlotToConsume) {
-        if ((++spin & 0x3F) == 0) taskYIELD();
+        taskYIELD();
       }
 
       int16_t l = _reorderRing[idx].l;
@@ -493,6 +525,28 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
     }
   }
 #endif // M16_REORDER_BUFFER_ENABLE
+
+  bool _i2s_write_samples_direct_external(int16_t leftSample, int16_t rightSample) {
+    uint8_t sampleBuffer[4];
+    sampleBuffer[0] = rightSample & 0xFF;
+    sampleBuffer[1] = (rightSample >> 8) & 0xFF;
+    sampleBuffer[2] = leftSample & 0xFF;
+    sampleBuffer[3] = (leftSample >> 8) & 0xFF;
+
+    size_t bytesWritten = 0;
+    esp_err_t err = i2s_channel_write(tx_handle, sampleBuffer, 4, &bytesWritten, portMAX_DELAY);
+    yield();
+    return (err == ESP_OK && bytesWritten == 4);
+  }
+
+  // ---- Block-based dual-core voice partitioning ----
+  // Core 0 owns even-indexed voices, Core 1 owns odd-indexed voices.
+  // Each core accumulates N=M16_BLOCK_SIZE samples into its partial buffer;
+  // Core 0 combines both and writes one DMA burst per block.
+  static volatile bool _blockSplitActive = false;
+  static int32_t _blockPartialL[2][M16_BLOCK_SIZE] __attribute__((aligned(32)));
+  static int32_t _blockPartialR[2][M16_BLOCK_SIZE] __attribute__((aligned(32)));
+  static int _blockPos[2];
 
   bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
     #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
@@ -536,25 +590,100 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
 
         // Publish: data writes happen-before the seq# becomes visible.
         _reorderRing[idx].ready.store(mySeq, std::memory_order_release);
+        xSemaphoreGive(_reorderSlotFilled);  // wake drainer
         return true;
       }
 #endif
 
-      uint8_t sampleBuffer[4];
-      sampleBuffer[0] = rightSample & 0xFF;
-      sampleBuffer[1] = (rightSample >> 8) & 0xFF;
-      sampleBuffer[2] = leftSample & 0xFF;
-      sampleBuffer[3] = (leftSample >> 8) & 0xFF;
-
-      size_t bytesWritten = 0;
-      esp_err_t err = i2s_channel_write(tx_handle, sampleBuffer, 4, &bytesWritten, portMAX_DELAY);
-      yield();
-      return (err == ESP_OK && bytesWritten == 4);
+      return _i2s_write_samples_direct_external(leftSample, rightSample);
   }
 
   // These handles can now be used for vTask things
-  TaskHandle_t audioCallback1Handle = NULL;
-  TaskHandle_t audioCallback2Handle = NULL;
+  TaskHandle_t audioCallback1Handle = NULL;  // Core 0 audio task
+  TaskHandle_t audioCallback2Handle = NULL;  // Core 1 audio task
+
+  // ---- Block-based dual-core voice partitioning helpers ----
+
+  // Starting index for this core's voice partition.
+  //   Block-split active → core 0: 0 (even voices), core 1: 1 (odd voices).
+  //   Single-core or inactive → 0 (full range, step 1 = all voices).
+  inline int audioPartitionOffset() {
+    if (!_blockSplitActive) return 0;
+    return xPortGetCoreID();
+  }
+
+  // Loop step for iterating this core's voices.
+  //   Block-split active → 2 (interleaved even/odd).
+  //   Single-core or inactive → 1 (contiguous, all voices).
+  inline int audioPartitionStride() {
+    return _blockSplitActive ? 2 : 1;
+  }
+
+  // Returns true only on Core 0 (the finaliser) in block-split mode, or always
+  // in single-core mode. Use to guard shared-state effects (reverb, global
+  // filters) that should run once per sample. In block-split mode these effects
+  // process only Core 0's voice partition; full-mix post-processing is handled
+  // inside audioBlockWrite after combining.
+  inline bool audioIsFinalizerCore() {
+    if (!_blockSplitActive) return true;
+    return xPortGetCoreID() == 0;
+  }
+
+  // Block-based dual-core write.
+  // Accumulates samples into a per-core partial buffer of M16_BLOCK_SIZE entries.
+  // When the buffer is full:
+  //   Core 1 signals Core 0 and blocks until Core 0 finishes the DMA write.
+  //   Core 0 waits for Core 1, combines both partial buffers, writes one DMA
+  //   burst of M16_BLOCK_SIZE frames, then unblocks Core 1.
+  // In single-core mode falls through to i2s_write_samples() per sample.
+  bool audioBlockWrite(int32_t leftSample, int32_t rightSample) {
+    if (!_blockSplitActive) {
+      return i2s_write_samples(clip16(leftSample), clip16(rightSample));
+    }
+
+    int coreId = xPortGetCoreID();
+    int pos = _blockPos[coreId];
+    _blockPartialL[coreId][pos] = leftSample;
+    _blockPartialR[coreId][pos] = rightSample;
+    pos++;
+    _blockPos[coreId] = pos;
+
+    if (pos < M16_BLOCK_SIZE) {
+      return true;
+    }
+
+    // Block full — synchronise with partner core.
+    _blockPos[coreId] = 0;
+
+    if (coreId == 1) {
+      // Deposit ready: wake Core 0, then block until DMA write is done.
+      // Blocking here lets IDLE1 and loopTask run while Core 0 writes.
+      xTaskNotifyGive(audioCallback1Handle);
+      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+      return true;
+    }
+
+    // Core 0: wait for Core 1's block, combine, write N frames to DMA,
+    // then release Core 1 for the next block.
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    // N * 4 bytes: R-low, R-high, L-low, L-high — same byte order as
+    // _i2s_write_samples_direct_external.
+    static uint8_t _blockBuf[M16_BLOCK_SIZE * 4];
+    for (int i = 0; i < M16_BLOCK_SIZE; i++) {
+      int16_t outL = clip16(_blockPartialL[0][i] + _blockPartialL[1][i]);
+      int16_t outR = clip16(_blockPartialR[0][i] + _blockPartialR[1][i]);
+      _blockBuf[i*4 + 0] = (uint8_t)(outR & 0xFF);
+      _blockBuf[i*4 + 1] = (uint8_t)((outR >> 8) & 0xFF);
+      _blockBuf[i*4 + 2] = (uint8_t)(outL & 0xFF);
+      _blockBuf[i*4 + 3] = (uint8_t)((outL >> 8) & 0xFF);
+    }
+    size_t bytesWritten = 0;
+    bool result = (i2s_channel_write(tx_handle, _blockBuf, sizeof(_blockBuf),
+                                     &bytesWritten, portMAX_DELAY) == ESP_OK);
+    xTaskNotifyGive(audioCallback2Handle);
+    return result;
+  }
 
   // Mutex for thread-safe initialization (not static - needs external linkage for FX.h)
   SemaphoreHandle_t audioInitMutex = NULL;
@@ -586,6 +715,7 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
           // Single task only — dual tasks cause buffer interleaving discontinuities.
           xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 8192, NULL,
               configMAX_PRIORITIES - 1, &audioCallback1Handle, 0);
+          _audioTasksRunning = true;
           Serial.println("M16 is running (internal DAC, 8-bit output, core 0)");
         } else {
           // Single-core (ESP32-S2): audio task at moderate priority.
@@ -595,6 +725,7 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
           // priority but loop() runs during every DMA write block (~3ms per buffer).
           xTaskCreatePinnedToCore(audioCallback, "FillAudioBuffer0", 8192, NULL,
               2, &audioCallback1Handle, 0);
+          _audioTasksRunning = true;
           Serial.println("M16 is running (internal DAC, 8-bit output, single-core)");
         }
         return;
@@ -608,7 +739,12 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
       i2s_channel_enable(tx_handle);
       i2s_channel_enable(rx_handle);
 
-      // Dual-core audio tasks with increased stack size for complex DSP
+      _audioTasksRunning = false;
+      _blockSplitActive  = false;
+      _blockPos[0] = 0;
+      _blockPos[1] = 0;
+
+      // Core 0 audio task — always started.
       xTaskCreatePinnedToCore(
           audioCallback,
           "FillAudioBuffer0",
@@ -618,7 +754,9 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
           &audioCallback1Handle,
           0
       );
-      if (isDualCore) {
+
+      bool dualTasksActive = false;
+      if (isDualCore && ESP.getChipCores() > 1) {
         xTaskCreatePinnedToCore(
             audioCallback,
             "FillAudioBuffer1",
@@ -628,22 +766,22 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
             &audioCallback2Handle,
             1
         );
+        dualTasksActive = (audioCallback2Handle != NULL);
       }
 
 #if M16_REORDER_BUFFER_ENABLE
-      // Reorder buffer only useful when both cores produce frames into shared DMA.
-      // Single-core external I2S has no ordering issue, so skip the drainer.
-      if (isDualCore) {
+      // Legacy reorder buffer: ensures deterministic sample order for sketches
+      // that call i2s_write_samples() from both cores (e.g. Beat Machine).
+      // audioBlockWrite() sketches bypass the ring entirely — the drainer
+      // stays idle (blocking on _reorderSlotFilled) and does not interfere.
+      if (dualTasksActive) {
         for (int i = 0; i < M16_REORDER_RING_SIZE; i++) {
           _reorderRing[i].ready.store(0, std::memory_order_relaxed);
         }
         _reorderNextSlotToProduce.store(1, std::memory_order_relaxed);
         _reorderNextSlotToConsume = 1;
-        _reorderSlotSem = xSemaphoreCreateCounting(M16_REORDER_RING_SIZE, M16_REORDER_RING_SIZE);
-        // Spawn drainer FIRST so it's ready to consume the moment producers
-        // begin enqueuing. Only flip _reorderActive if creation succeeds —
-        // otherwise producers stay on the legacy direct-write path and we
-        // log the failure rather than silently freezing on a full ring.
+        _reorderSlotSem    = xSemaphoreCreateCounting(M16_REORDER_RING_SIZE, M16_REORDER_RING_SIZE);
+        _reorderSlotFilled = xSemaphoreCreateCounting(M16_REORDER_RING_SIZE, 0);
         BaseType_t drainerOk = xTaskCreatePinnedToCore(
             reorderDrainerTask,
             "M16Drainer",
@@ -654,15 +792,22 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
             0
         );
         if (drainerOk == pdPASS) {
-          _reorderActive = true;  // producers now route through the ring
-          Serial.println("M16 reorder buffer active (dual-core deterministic ordering)");
+          _reorderActive = true;
+          Serial.println("M16 reorder buffer active (legacy dual-core i2s_write_samples ordering)");
         } else {
-          Serial.println("M16 WARNING: reorder buffer drainer task creation FAILED — falling back to legacy direct-write path");
+          Serial.println("M16 WARNING: reorder buffer drainer task creation FAILED — direct-write fallback");
         }
       }
 #endif
 
-      Serial.println("M16 is running (dual-core mode)");
+      if (dualTasksActive) {
+        _blockSplitActive = true;
+        _audioTasksRunning = true;
+        Serial.println("M16 is running (dual-core, block-split N=" + String(M16_BLOCK_SIZE) + ")");
+      } else {
+        _audioTasksRunning = true;
+        Serial.println("M16 is running (single-core audio task mode)");
+      }
   }
 
   /** No-op on ESP32 — FreeRTOS tasks handle audio for both external I2S
@@ -848,6 +993,15 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
     } else {
       i2sOut.write(sample32);
     }
+  }
+
+  // Block-split API stubs — RP2040 uses cooperative single-core audio scheduling.
+  inline int  audioPartitionOffset()  { return 0; }
+  inline int  audioPartitionStride()  { return 1; }
+  inline bool audioIsFinalizerCore()  { return true; }
+  inline bool audioBlockWrite(int32_t L, int32_t R) {
+    i2s_write_samples((int16_t)clip16(L), (int16_t)clip16(R));
+    return true;
   }
 
   /** Core 1 audio callback */
