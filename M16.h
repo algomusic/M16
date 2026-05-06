@@ -629,59 +629,70 @@ int32_t clip16(int input);
     return xPortGetCoreID() == 0;
   }
 
-  // Block-based dual-core write.
+  // Block-based audio write.
   // Accumulates samples into a per-core partial buffer of M16_BLOCK_SIZE entries.
-  // When the buffer is full:
-  //   Core 1 signals Core 0 and blocks until Core 0 finishes the DMA write.
-  //   Core 0 waits for Core 1, combines both partial buffers, writes one DMA
-  //   burst of M16_BLOCK_SIZE frames, then unblocks Core 1.
-  // In single-core mode falls through to i2s_write_samples() per sample.
+  // This creates "breathing room" for the OS and prevents watchdog resets.
   bool audioBlockWrite(int32_t leftSample, int32_t rightSample) {
-    if (!_blockSplitActive) {
-      return i2s_write_samples(clip16(leftSample), clip16(rightSample));
+    int coreId = xPortGetCoreID();
+    
+    // Safety: if we are in dual-core block-split mode but running on Core 1,
+    // we use the existing partition sync logic.
+    if (_blockSplitActive && coreId == 1) {
+      int pos = _blockPos[1];
+      _blockPartialL[1][pos] = leftSample;
+      _blockPartialR[1][pos] = rightSample;
+      pos++;
+      _blockPos[1] = pos;
+      if (pos < M16_BLOCK_SIZE) return true;
+      _blockPos[1] = 0;
+      xTaskNotifyGive(audioCallback1Handle); // Wake Core 0
+      ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // Wait for DMA
+      return true;
     }
 
-    int coreId = xPortGetCoreID();
-    int pos = _blockPos[coreId];
-    _blockPartialL[coreId][pos] = leftSample;
-    _blockPartialR[coreId][pos] = rightSample;
+    // Standard buffering path (Single-core OR Core 0 in dual-core)
+    int pos = _blockPos[0];
+    _blockPartialL[0][pos] = leftSample;
+    _blockPartialR[0][pos] = rightSample;
     pos++;
-    _blockPos[coreId] = pos;
+    _blockPos[0] = pos;
 
     if (pos < M16_BLOCK_SIZE) {
       return true;
     }
 
-    // Block full — synchronise with partner core.
-    _blockPos[coreId] = 0;
+    // Block is full — Process/Write
+    _blockPos[0] = 0;
 
-    if (coreId == 1) {
-      // Deposit ready: wake Core 0, then block until DMA write is done.
-      // Blocking here lets IDLE1 and loopTask run while Core 0 writes.
-      xTaskNotifyGive(audioCallback1Handle);
+    if (_blockSplitActive) {
+      // Core 0: Wait for Core 1 then combine
       ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-      return true;
     }
 
-    // Core 0: wait for Core 1's block, combine, write N frames to DMA,
-    // then release Core 1 for the next block.
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-    // N * 4 bytes: R-low, R-high, L-low, L-high — same byte order as
-    // _i2s_write_samples_direct_external.
+    // Combine and/or Format for DMA
     static uint8_t _blockBuf[M16_BLOCK_SIZE * 4];
     for (int i = 0; i < M16_BLOCK_SIZE; i++) {
-      int16_t outL = clip16(_blockPartialL[0][i] + _blockPartialL[1][i]);
-      int16_t outR = clip16(_blockPartialR[0][i] + _blockPartialR[1][i]);
+      int16_t outL, outR;
+      if (_blockSplitActive) {
+        outL = clip16(_blockPartialL[0][i] + _blockPartialL[1][i]);
+        outR = clip16(_blockPartialR[0][i] + _blockPartialR[1][i]);
+      } else {
+        outL = clip16(_blockPartialL[0][i]);
+        outR = clip16(_blockPartialR[0][i]);
+      }
       _blockBuf[i*4 + 0] = (uint8_t)(outR & 0xFF);
       _blockBuf[i*4 + 1] = (uint8_t)((outR >> 8) & 0xFF);
       _blockBuf[i*4 + 2] = (uint8_t)(outL & 0xFF);
       _blockBuf[i*4 + 3] = (uint8_t)((outL >> 8) & 0xFF);
     }
+
     size_t bytesWritten = 0;
     bool result = (i2s_channel_write(tx_handle, _blockBuf, sizeof(_blockBuf),
                                      &bytesWritten, portMAX_DELAY) == ESP_OK);
-    xTaskNotifyGive(audioCallback2Handle);
+    
+    if (_blockSplitActive) {
+      xTaskNotifyGive(audioCallback2Handle); // Release Core 1
+    }
     return result;
   }
 

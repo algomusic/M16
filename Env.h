@@ -15,6 +15,10 @@
 #ifndef ENV_H_
 #define ENV_H_
 
+#if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+#include <atomic>
+#endif
+
 class Env {
 
   public:
@@ -87,10 +91,18 @@ class Env {
     inline
     void start() {
       peaked = false;
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      envState.store(1, std::memory_order_relaxed); // attack
+      #else
       envState = 1; // attack
+      #endif
       // Reset envelope value to 0 if enabled (useful for consistent drum attacks)
       if (resetOnStart) {
+        #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+        envVal.store(0, std::memory_order_relaxed);
+        #else
         envVal = 0;
+        #endif
       }
       // JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (rand(MAX_ENV_LEVEL * 0.05));
       JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (audioRand(MAX_ENV_LEVEL * 0.05));
@@ -129,12 +141,23 @@ class Env {
     */
     inline
     void startRelease() {
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      int currState = envState.load(std::memory_order_relaxed);
+      if (currState > 0 && currState < 5) {
+        uint16_t currVal = envVal.load(std::memory_order_relaxed);
+        releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - currVal;
+        releaseStartlevel = currVal;
+        releaseStartTime = micros();
+        envState.store(5, std::memory_order_relaxed); // release
+      }
+      #else
       if (envState > 0 && envState < 5) {
         releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
         releaseStartlevel = envVal;
         releaseStartTime = micros();
         envState = 5; // release
       }
+      #endif
     }
 
     /** Set the envelope's status 
@@ -142,13 +165,21 @@ class Env {
     */
     inline
     void setEnvState(int newState) {
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      envState.store(newState, std::memory_order_relaxed);
+      #else
       envState = newState;
+      #endif
     }
 
     /** Return the envelope's AHDSR status */
     inline
     int getEnvState() {
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      return envState.load(std::memory_order_relaxed);
+      #else
       return envState;
+      #endif
     }
 
     int prevEnvState = 0;
@@ -156,119 +187,141 @@ class Env {
     /** Compute and return the next envelope value */
     inline
     uint16_t next() {
-      if (envState > 0 && envState != prevEnvState) {
-        prevEnvState = envState;
-        // Serial.println("env next " + String(envState));
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      int currState = envState.load(std::memory_order_relaxed);
+      uint16_t currVal = envVal.load(std::memory_order_relaxed);
+      #else
+      int currState = envState;
+      uint16_t currVal = envVal;
+      #endif
+
+      if (currState > 0 && currState != prevEnvState) {
+        prevEnvState = currState;
       }
 
       unsigned long microsTime = micros();
       unsigned long elapsedTime = (unsigned long)(microsTime - envStartTime);
 
-      if (envState == 0) {
+      if (currState == 0) {
         // env complete
-        envVal = 0;
+        currVal = 0;
       }
-      else if (envState == 1) {
+      else if (currState == 1) {
         // attack
         if (jitEnvAttack == 0) {
-          envVal = JIT_MAX_ENV_LEVEL;
-          envState = 2; // go to hold
+          currVal = JIT_MAX_ENV_LEVEL;
+          currState = 2; // go to hold
         } 
         else if (elapsedTime <= jitEnvAttack) {
           double attackPortion = elapsedTime / (double)jitEnvAttack;
-          envVal = max(envVal, min(JIT_MAX_ENV_LEVEL,
+          currVal = max(currVal, min(JIT_MAX_ENV_LEVEL,
                     (uint16_t)(JIT_MAX_ENV_LEVEL * attackPortion)));
         } 
         else {
-          envVal = JIT_MAX_ENV_LEVEL;
-          envState = 2; // go to hold
+          currVal = JIT_MAX_ENV_LEVEL;
+          currState = 2; // go to hold
         }
       }
-      else if (envState == 2) {
+      else if (currState == 2) {
         // hold
         if (envHold > 0 && (unsigned long)(elapsedTime) <= (jitEnvAttack + envHold)) {
           // still holding - maintain peak level
-          envVal = JIT_MAX_ENV_LEVEL;
+          currVal = JIT_MAX_ENV_LEVEL;
         }
         else {
           // If decay=0, skip decay phase entirely
           if (jitEnvDecay == 0) {
             if (sustainLevel == 0) {
               // AR envelope: skip directly to release
-              releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
-              releaseStartlevel = envVal;
+              releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - currVal;
+              releaseStartlevel = currVal;
               releaseStartTime = microsTime;
-              envState = 5; // skip to release
+              currState = 5; // skip to release
             } else {
               // ASR envelope: skip to sustain
-              envState = 4; // skip to sustain
+              currState = 4; // skip to sustain
             }
           } else {
-            decayStartLevel = envVal;
+            decayStartLevel = currVal;
             decayStartTime = microsTime;
             decayStartLevelDiff = decayStartLevel - sustainTriggerLevel;
-            envState = 3; // go to decay
+            currState = 3; // go to decay
           }
         }
       }
-      else if (envState == 3) {
+      else if (currState == 3) {
         // decay
         unsigned long decayElapsed = (unsigned long)(microsTime - decayStartTime);
-        if (jitEnvDecay > 0 && envVal > sustainLevel) {
+        if (jitEnvDecay > 0 && currVal > sustainLevel) {
           float dPercent = fmaxf(0.0f, 1.0f - decayElapsed * invJitEnvDecay);
           dPercent = dPercent * dPercent * dPercent * dPercent; // fast exp
-          envVal = decayStartLevel * dPercent;
+          currVal = decayStartLevel * dPercent;
         } 
         else {
           if (currDecayRepeats > 0) {
             currDecayRepeats -= 1;
             decayStartTime += jitEnvDecay; // safe because unsigned long wraps
-            envVal = JIT_MAX_ENV_LEVEL;
+            currVal = JIT_MAX_ENV_LEVEL;
           } 
           else {
-            envState = 4; // go to sustain
+            currState = 4; // go to sustain
           }
         }
       }
-      else if (envState == 4) {
+      else if (currState == 4) {
         // sustain
         if (sustainLevel > 0) {
-          envVal = sustainLevel; 
+          currVal = sustainLevel; 
         } 
         else {
-          releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - envVal;
-          if (decayRepeats > 0) envVal = JIT_MAX_ENV_LEVEL;
-          releaseStartlevel = envVal;
+          releaseStartLevelDiff = JIT_MAX_ENV_LEVEL - currVal;
+          if (decayRepeats > 0) currVal = JIT_MAX_ENV_LEVEL;
+          releaseStartlevel = currVal;
           releaseStartTime = microsTime;
-          envState = 5; // go to release
+          currState = 5; // go to release
         }
       }
-      else if (envState == 5) {
+      else if (currState == 5) {
         // release
         unsigned long releaseElapsed = (unsigned long)(microsTime - releaseStartTime);
-        if (envVal > 10) {
+        if (currVal > 10) {
           float rPercent = fmaxf(0.0f, 1.0f - releaseElapsed / (float)jitEnvRelease);
           rPercent = rPercent * rPercent * rPercent; // fast exp
-          envVal = releaseStartlevel * rPercent;
+          currVal = releaseStartlevel * rPercent;
         } 
         else {
-          envState = 0; // go to complete
-          envVal = 0;
+          currState = 0; // go to complete
+          currVal = 0;
         }
       }
 
-      return envVal;
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      envState.store(currState, std::memory_order_relaxed);
+      envVal.store(currVal, std::memory_order_relaxed);
+      #else
+      envState = currState;
+      envVal = currVal;
+      #endif
+      return currVal;
     }
 
     /** Set the current envelope value - from 0 to MAX_16 */
     void setValue(uint16_t val) {
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      envVal.store(val, std::memory_order_relaxed);
+      #else
       envVal = val;
+      #endif
     }
 
     /** Return the current envelope value - from 0 to MAX_16 */
     inline
     uint16_t getValue() {
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      return envVal.load(std::memory_order_relaxed);
+      #else
       return envVal;
+      #endif
     }
 
     /** Set the maximum envelope value
@@ -280,7 +333,6 @@ class Env {
       MAX_ENV_LEVEL = (MAX_16 * 2 - 1) * fmaxf(0.0f,level);
       JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
       sustainLevel = envSustain * MAX_ENV_LEVEL;
-      // Serial.println("setting sus level to " + String(sustainLevel));
     }
 
     /** Return the current maximum envelope value
@@ -296,7 +348,11 @@ class Env {
     uint16_t MAX_ENV_LEVEL = MAX_16 * 2 - 1;
     uint16_t JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL;
     uint16_t sustainLevel = 0, sustainTriggerLevel = 0;
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    std::atomic<uint16_t> envVal{0};
+    #else
     uint16_t envVal = 0;
+    #endif
     uint16_t releaseStartLevelDiff = MAX_ENV_LEVEL;
     uint16_t decayStartLevel = 0, decayStartLevelDiff = 0, releaseStartlevel = 0;
     // Timing values (microseconds - can be millions)
@@ -310,7 +366,11 @@ class Env {
     int decayRepeats = 0;
     int currDecayRepeats = 0;
 
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    std::atomic<int> envState{0}; // complete = 0, attack = 1, hold = 2, decay = 3, sustain = 4, release = 5
+    #else
     int envState = 0; // complete = 0, attack = 1, hold = 2, decay = 3, sustain = 4, release = 5
+    #endif
     bool resetOnStart = false; // If true, reset envVal to 0 on start() for consistent drum attacks
 
 };

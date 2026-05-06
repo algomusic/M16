@@ -218,8 +218,8 @@ public:
    * @return Delayed output sample
    */
   inline int16_t next(int32_t inValue) {
-    bool handled = false;
-    M16_ATOMIC_GUARD(_bbdLock, {
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    M16_ATOMIC_GUARD_BLOCKING(_bbdLock, {
       // Accumulate inputs for anti-aliasing at low scan rates
       inputAccum += inValue;
       inputCount++;
@@ -277,8 +277,66 @@ public:
       // One-pole lowpass with rate-proportional smoothing (more at longer delays)
       smoothedOut += ((holdValue - smoothedOut) * smoothCoeff) >> 15;
       lastResult = (int16_t)smoothedOut;
-      handled = true;
     });
+    #else
+    // Accumulate inputs for anti-aliasing at low scan rates
+    inputAccum += inValue;
+    inputCount++;
+    uint32_t prevPhase = phase;
+    phase += scanRate;
+    // Calculate how many buffer positions we advanced (supports rate > 1.0)
+    uint16_t prevPos = prevPhase >> 16;
+    uint16_t currPos = phase >> 16;
+    // Handle wrap-around
+    if (phase >= (BUFFER_SIZE << 16)) {
+      phase -= (BUFFER_SIZE << 16);
+      currPos = (currPos >= BUFFER_SIZE) ? currPos - BUFFER_SIZE : currPos;
+    }
+    // Calculate steps (handling wrap-around)
+    int16_t steps = currPos - prevPos;
+    if (steps < 0) steps += BUFFER_SIZE;  // Wrapped around
+    if (steps > 0) {
+      // Read from buffer
+      int32_t outValue = delayBuffer[bufferIndex];
+      // Output low-pass filtering
+      if (filtered > 0) {
+        if (filtered == 1) {
+          outValue = (outValue * 3 + prevOutValue) >> 2;
+        } else if (filtered == 2) {
+          outValue = (outValue + prevOutValue) >> 1;
+        } else if (filtered == 3) {
+          outValue = (outValue + prevOutValue * 3) >> 2;
+        } else {
+          outValue = (outValue + prevOutValue * 7) >> 3;
+        }
+        prevOutValue = outValue;
+      }
+      holdValue = (outValue * delayLevel) >> 10;
+      // Average accumulated inputs
+      int32_t writeValue;
+      if (inputCount > 0) {
+        writeValue = inputAccum / inputCount;
+        inputAccum = 0;
+        inputCount = 0;
+      } else {
+        writeValue = inValue;
+      }
+      // Apply feedback with slight gain reduction
+      if (delayFeedback) {
+        writeValue = writeValue + ((holdValue * feedbackLevel) >> 10);
+        writeValue = (writeValue * 251) >> 8;
+      }
+      // Soft saturation and write to buffer
+      writeValue = softSaturate(writeValue);
+      delayBuffer[bufferIndex] = writeValue;
+      // Advance buffer by number of steps (enables shorter delays at rate > 1.0)
+      bufferIndex = (bufferIndex + steps) & BUFFER_MASK;
+    }
+    // Smooth output every sample to reduce staircase buzz
+    // One-pole lowpass with rate-proportional smoothing (more at longer delays)
+    smoothedOut += ((holdValue - smoothedOut) * smoothCoeff) >> 15;
+    lastResult = (int16_t)smoothedOut;
+    #endif
     return lastResult;
   }
 

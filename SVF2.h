@@ -18,6 +18,10 @@
 #ifndef SVF2_H_
 #define SVF2_H_
 
+#if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+#include <atomic>
+#endif
+
 // ESP8266 warning: SVF2 uses 64-bit math which is slow without hardware support
 #if IS_ESP8266()
   #warning "SVF2.h uses 64-bit math and will be slow on ESP8266. Consider using SVF.h instead."
@@ -116,8 +120,16 @@ public:
    */
   inline int16_t nextLPF(int32_t input) {
     input = clip16(input);
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    M16_ATOMIC_GUARD_BLOCKING(_svfLock, {
+      calcFilter(input);
+      prevOutput_ = clip16(low);
+    });
+    #else
     calcFilter(input);
-    return clip16(low);
+    prevOutput_ = clip16(low);
+    #endif
+    return prevOutput_;
   }
 
   /** Calculate next filter sample (alias for nextLPF)
@@ -139,8 +151,16 @@ public:
    */
   inline int16_t nextHPF(int32_t input) {
     input = clip16(input);
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    M16_ATOMIC_GUARD_BLOCKING(_svfLock, {
+      calcFilter(input);
+      prevOutput_ = clip16(high);
+    });
+    #else
     calcFilter(input);
-    return clip16(high);
+    prevOutput_ = clip16(high);
+    #endif
+    return prevOutput_;
   }
 
   /** @return Current highpass output without advancing filter */
@@ -154,8 +174,16 @@ public:
    */
   inline int16_t nextBPF(int32_t input) {
     input = clip16(input);
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    M16_ATOMIC_GUARD_BLOCKING(_svfLock, {
+      calcFilter(input);
+      prevOutput_ = clip16(band);
+    });
+    #else
     calcFilter(input);
-    return clip16(band);
+    prevOutput_ = clip16(band);
+    #endif
+    return prevOutput_;
   }
 
   /** @return Current bandpass output without advancing filter */
@@ -170,6 +198,34 @@ public:
    */
   inline int16_t nextFiltMix(int32_t input, float mix) {
     input = clip16(input);
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    M16_ATOMIC_GUARD_BLOCKING(_svfLock, {
+      calcFilter(input);
+
+      int32_t lpfAmnt = 0;
+      int32_t bpfAmnt = 0;
+      int32_t hpfAmnt = 0;
+
+      if (mix < 0.5f) {
+        // LPF to BPF transition
+        float lpfMix = 1.0f - mix * 2.0f;
+        float bpfMix = mix * 2.0f;
+        lpfAmnt = (int32_t)(low * lpfMix);
+        bpfAmnt = (int32_t)(band * bpfMix);
+      } else {
+        // BPF to HPF transition
+        float bpfMix = 1.0f - (mix - 0.5f) * 2.0f;
+        float hpfMix = (mix - 0.5f) * 2.0f;
+        bpfAmnt = (int32_t)(band * bpfMix);
+        hpfAmnt = (int32_t)(high * hpfMix);
+      }
+
+      int32_t sum = lpfAmnt + bpfAmnt + hpfAmnt;
+      if (sum > MAX_16) prevOutput_ = MAX_16;
+      else if (sum < -MAX_16) prevOutput_ = -MAX_16;
+      else prevOutput_ = (int16_t)sum;
+    });
+    #else
     calcFilter(input);
 
     int32_t lpfAmnt = 0;
@@ -191,9 +247,11 @@ public:
     }
 
     int32_t sum = lpfAmnt + bpfAmnt + hpfAmnt;
-    if (sum > MAX_16) return MAX_16;
-    if (sum < -MAX_16) return -MAX_16;
-    return (int16_t)sum;
+    if (sum > MAX_16) prevOutput_ = MAX_16;
+    else if (sum < -MAX_16) prevOutput_ = -MAX_16;
+    else prevOutput_ = (int16_t)sum;
+    #endif
+    return prevOutput_;
   }
 
   /** Calculate next allpass sample with DC blocking
@@ -224,12 +282,26 @@ public:
    */
   inline int16_t nextNotch(int32_t input) {
     input = clip16(input);
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    M16_ATOMIC_GUARD_BLOCKING(_svfLock, {
+      calcFilter(input);
+      int32_t n = notch;
+      prevOutput_ = max(-MAX_16, (int)min((int32_t)MAX_16, n));
+    });
+    #else
     calcFilter(input);
     int32_t n = notch;
-    return max(-MAX_16, (int)min((int32_t)MAX_16, n));
+    prevOutput_ = max(-MAX_16, (int)min((int32_t)MAX_16, n));
+    #endif
+    return prevOutput_;
   }
 
 private:
+  #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+  std::atomic<bool> _svfLock{false};
+  #endif
+  int16_t prevOutput_ = 0;  // Last output for lock-miss fallback
+
   // volatile: ensure cross-core visibility on dual-core ESP32 (no CPU overhead)
   volatile int32_t low = 0;
   volatile int32_t band = 0;
@@ -256,6 +328,7 @@ private:
   // DC blocker state (15-bit fixed-point)
   int32_t dcPrev = 0;
   int32_t dcOut = 0;
+
 
   /** Update feedback coefficient when f or q changes */
   inline void updateFeedback() {
