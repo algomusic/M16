@@ -22,6 +22,6 @@ M16 prioritises audio processing and may not play well with other libraries wher
 
 Designed for use with the Arduino IDE. If working with the ESP32, use V3 of ESP32 Arduino Core by Espressif.
 
-M16 is inspired by the 8-bit Mozzi audio library by Tim Barrass 2012
+M16 was inspired by the 8-bit Mozzi audio library by Tim Barrass 2012
 
 It is licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License.
