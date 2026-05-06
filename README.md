@@ -2,7 +2,7 @@
 Arduino Audio and Music Library for ESP8266, ESP32, and Raspberry Pi Pico 2. 
 Tested on ESP8266, original ESP32, ESP32-S2, ESP32-S3 and Pi Pico 2.
 
-M16 is a 16-bit audio synthesis library for ESP microprocessors and I2S audio DACs/ADCs. It also supports internal DACs on processor variants that have them.
+M16 is a 16-bit audio synthesis library for selected microcontrollers and I2S audio DACs/ADCs. It also supports internal DACs on processor variants that have them.
 
 The default I2S DAC board connections are:
 
