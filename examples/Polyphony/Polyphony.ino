@@ -6,7 +6,7 @@
 #include "FX.h"
 
 int16_t * wavetable; // empty array pointer
-const int poly = 23; // change polyphony as desired, each MCU type will handle particular amounts
+const int poly = 16; // change polyphony as desired, each MCU type will handle particular amounts
 Osc osc[poly]; // an array of oscillators
 Env env[poly];
 SVF filter[poly];
@@ -33,11 +33,12 @@ void setup() {
   }
   // reverb setup
   #if IS_CAPABLE() //8266 can't manage reverb as well
-    effect1.setReverbSize(16); // quality, decay and memory >= 1
+    effect1.setReverbSize(4); // quality, decay and memory >= 1
     effect1.setReverbLength(0.6); // 0-1 feedback level
     effect1.setReverbMix(0.7); // 0-1 balance between dry and wet signals
+    effect1.initReverbSafe();
   #endif
-  seti2sPins(38,39,40,41);
+  // seti2sPins(38,39,40,41);
   // useInternalDAC(); // enable internal DAC output, call before audioStart()
   noteTime = millis(); // schedule first note
   envTime = millis();
@@ -68,17 +69,35 @@ void loop() {
   }
 }
 
+// Note: use audioPartitionOffset/Stride/audioBlockWrite whenever audioUpdate()
+// loops over arrays of per-voice stateful objects (Osc[], SVF[], Env[], etc.).
+// Both cores run the full loop otherwise, advancing every voice state twice per
+// sample — causing doubled frequency and filter corruption.
+// On dual-core ESP32, audioUpdate() runs simultaneously on both cores.
+// audioPartitionOffset() / audioPartitionStride() split the voice array so
+// Core 0 owns even voices (0, 2, …) and Core 1 owns odd voices (1, 3, …),
+// preventing both cores from advancing the same filter/oscillator state.
+// Each core accumulates its partial mix and calls audioBlockWrite(), which
+// buffers M16_BLOCK_SIZE samples before synchronising: Core 1 signals Core 0,
+// Core 0 combines both partials and writes one DMA burst, then releases Core 1.
+// audioIsFinalizerCore() is true only on Core 0, so shared stateful effects
+// (reverb) run once on the finaliser path rather than once per partial.
+// On single-core targets the partition helpers are no-ops and audioBlockWrite
+// behaves like i2s_write_samples().
 void audioUpdate() {
   int32_t mix = 0;
-  for (int i=0; i<poly; i++) {
-    mix += filter[i].nextLPF((osc[i].next() * env[i].getValue())>>16);
-    mix = (mix * 950) >> 10; // amplitude compensation for polyphony
+  for (int i = audioPartitionOffset(); i < poly; i += audioPartitionStride()) {
+    int32_t voice = filter[i].nextLPF((osc[i].next() * env[i].getValue()) >> 16);
+    voice *= 0.6; // compensate for poly mix
+    mix += voice;
   }
-  // stereo
-  int32_t leftVal = mix; 
-  int32_t rightVal = leftVal;
-  #if IS_CAPABLE() //8266 can't manage reverb as well
-    effect1.reverbStereo(mix, mix, leftVal, rightVal);
+  #if IS_CAPABLE()
+  if (audioIsFinalizerCore()) {
+    int32_t L = mix, R = mix;
+    effect1.reverbStereoInterp(mix, mix, L, R);
+    audioBlockWrite(L, R);
+    return;
+  }
   #endif
-  i2s_write_samples(clip16(leftVal), clip16(rightVal));
+  audioBlockWrite(mix, mix);
 }

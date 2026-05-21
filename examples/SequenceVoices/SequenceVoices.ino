@@ -80,14 +80,33 @@ void loop() {
   }
 }
 
+// Note: use audioPartitionOffset/Stride/audioBlockWrite whenever audioUpdate()
+// loops over arrays of per-voice stateful objects (Osc[], SVF[], Env[], etc.).
+// Both cores run the full loop otherwise, advancing every voice state twice per
+// sample — causing doubled frequency and filter corruption.
+// On dual-core ESP32, audioUpdate() runs simultaneously on both cores.
+// audioPartitionOffset() / audioPartitionStride() split the voice array so
+// Core 0 owns even voices (0, 2, …) and Core 1 owns odd voices (1, 3, …),
+// preventing both cores from advancing the same filter/oscillator state.
+// Each core accumulates its partial mix and calls audioBlockWrite(), which
+// buffers M16_BLOCK_SIZE samples before synchronising: Core 1 signals Core 0,
+// Core 0 combines both partials and writes one DMA burst, then releases Core 1.
+// audioIsFinalizerCore() is true only on Core 0, so shared stateful effects
+// (reverb) run once on the finaliser path rather than once per partial.
+// On single-core targets the partition helpers are no-ops and audioBlockWrite
+// behaves like i2s_write_samples().
 void audioUpdate() {
-  int32_t leftVal = 0;
-  int32_t leftOut, rightOut;
-  for (int i=0; i<voices; i++) {
-    leftVal += (filters[i].nextLPF(oscillators[i].next()) * ampEnvs[i].getValue())>>15; // 16
-    if (voices > 1) leftVal *= 0.9;
+  int32_t mix = 0;
+  for (int i = audioPartitionOffset(); i < voices; i += audioPartitionStride()) {
+    mix += ((filters[i].nextLPF(oscillators[i].next()) * ampEnvs[i].getValue()) >> 15) * 0.6;
   }
-  leftVal = clip16(leftVal);
-  effect1.reverbStereo(leftVal, leftVal, leftOut, rightOut); // bypass for ESP8266
-  i2s_write_samples(leftOut, rightOut);
+  #if IS_CAPABLE() // bypass reverb on ESP8266
+  if (audioIsFinalizerCore()) {
+    int32_t leftOut, rightOut;
+    effect1.reverbStereo(clip16(mix), clip16(mix), leftOut, rightOut);
+    audioBlockWrite(leftOut, rightOut);
+    return;
+  }
+  #endif
+  audioBlockWrite(mix, mix);
 }
