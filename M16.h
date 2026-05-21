@@ -147,6 +147,13 @@ bool isDualCore = true; // assume dual-core unless changed in setup()
   #define M16_BLOCK_SIZE 32
 #endif
 
+// Original ESP32 internal DAC is only 8-bit. TPDF dither can make quiet
+// delay/reverb tails less steppy, but it adds a fixed one-DAC-LSB noise floor
+// after all gain/effects, which can read as crackle on low-level repeats.
+#ifndef M16_INTERNAL_DAC_DITHER_ENABLE
+  #define M16_INTERNAL_DAC_DITHER_ENABLE 0
+#endif
+
 /** Specify the use of one or two cores for audio processing
 * @dualCore True to use both cores (ESP32/PiPico2), false for single-core mode
 * Call this function before audioStart() in setUp() to set the desired number of cores used for audio.
@@ -402,6 +409,7 @@ int32_t clip16(int input);
     #define DAC_DESC_NUM 8        // DMA descriptors (8 × 256 = ~23ms buffer at 44.1kHz)
     static uint8_t _dacAccum[DAC_ACCUM_SIZE];
     static size_t _dacAccumPos = 0;
+    static uint32_t _ditherState = 22695477UL;  // LCG state for TPDF dither
   #endif
 
   // Configuration macros/constants
@@ -551,9 +559,25 @@ int32_t clip16(int input);
   bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
     #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
       if (_useInternalDAC) {
-        // Convert 16-bit signed to 8-bit unsigned for internal DAC
-        _dacAccum[_dacAccumPos++] = (uint8_t)((leftSample + 32768) >> 8);
-        _dacAccum[_dacAccumPos++] = (uint8_t)((rightSample + 32768) >> 8);
+        // Convert 16-bit signed to 8-bit unsigned for internal DAC.
+        // Apply TPDF dithering to any non-trivial signal so delay/reverb tails fade smoothly
+        // rather than hard-clipping to silence at the ±1 LSB boundary (which causes rhythmic clicks).
+        // Gate only at ±32 (1/8 DAC step) — below that the signal is truly inaudible.
+        if (M16_INTERNAL_DAC_DITHER_ENABLE &&
+            (leftSample > 32 || leftSample < -32 || rightSample > 32 || rightSample < -32)) {
+          _ditherState = _ditherState * 1664525UL + 1013904223UL;
+          int32_t dL = (int32_t)((int8_t)(_ditherState >> 24)) + (int32_t)((int8_t)(_ditherState >> 16));
+          int32_t dR = (int32_t)((int8_t)(_ditherState >> 8))  + (int32_t)((int8_t)(_ditherState >> 0));
+          int32_t valL = (int32_t)leftSample  + 32768 + dL;
+          int32_t valR = (int32_t)rightSample + 32768 + dR;
+          if (valL < 0) valL = 0; else if (valL > 65535) valL = 65535;
+          if (valR < 0) valR = 0; else if (valR > 65535) valR = 65535;
+          _dacAccum[_dacAccumPos++] = (uint8_t)(valL >> 8);
+          _dacAccum[_dacAccumPos++] = (uint8_t)(valR >> 8);
+        } else {
+          _dacAccum[_dacAccumPos++] = (uint8_t)((leftSample  + 32768) >> 8);
+          _dacAccum[_dacAccumPos++] = (uint8_t)((rightSample + 32768) >> 8);
+        }
 
         // Flush when buffer is full
         if (_dacAccumPos >= DAC_ACCUM_SIZE) {
@@ -712,7 +736,7 @@ int32_t clip16(int input);
             .chan_mask = DAC_CHANNEL_MASK_ALL,
             .desc_num = DAC_DESC_NUM,
             .buf_size = DAC_ACCUM_SIZE,
-            .freq_hz = (uint32_t)SAMPLE_RATE,
+            .freq_hz = (uint32_t)SAMPLE_RATE * 2,
             .offset = 0,
             .clk_src = DAC_DIGI_CLK_SRC_APLL,
             .chan_mode = DAC_CHANNEL_MODE_ALTER,
