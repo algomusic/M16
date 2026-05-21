@@ -68,6 +68,18 @@ public:
    */
   bool initSD(SdFs& sdObject, uint8_t csPin, uint8_t sckPin, uint8_t misoPin, uint8_t mosiPin, uint8_t spiSpeed = 16) {
     sd = &sdObject;
+    // On classic ESP32 (WROOM/WROVER), GPIO 6-11 are the Flash SPI bus.
+    // Reassigning them crashes the device immediately via interrupt watchdog.
+    #if defined(ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && \
+        !defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(CONFIG_IDF_TARGET_ESP32C3)
+    {
+      auto isFlashPin = [](uint8_t p) { return p >= 6 && p <= 11; };
+      if (isFlashPin(csPin) || isFlashPin(sckPin) || isFlashPin(misoPin) || isFlashPin(mosiPin)) {
+        Serial.println("Wav: ERROR - SD pin conflicts with ESP32 Flash SPI (GPIO 6-11). Use VSPI (18/19/23/5) or HSPI (14/12/13/15) pins.");
+        return false;
+      }
+    }
+    #endif
     // Initialize SPI with custom pins (platform-specific)
     #if defined(ARDUINO_ARCH_RP2040)
       SPI.setRX(misoPin);
@@ -97,89 +109,15 @@ public:
    * @return true if successful
    */
   bool load(const char* filename) {
-    // Check if SD is initialized
     if (sd == nullptr) {
       Serial.println("Wav: SD card not initialized. Call initSD() first.");
       return false;
     }
-    // Free previous buffer if exists (only if not using external buffer)
     if (audioBuffer != nullptr && !usingExternalBuffer) {
       free(audioBuffer);
       audioBuffer = nullptr;
     }
-    FsFile wavFile;
-    if (!wavFile.open(filename, O_RDONLY)) {
-      Serial.println("Wav: Error opening file.");
-      return false;
-    }
-    // Read first 512 bytes to find RIFF/WAVE and chunks
-    const int HEADER_SCAN_SIZE = 512;
-    uint8_t header[HEADER_SCAN_SIZE];
-    size_t bytesRead = wavFile.read(header, HEADER_SCAN_SIZE);
-    if (bytesRead < 44) {
-      Serial.println("Wav: Invalid WAV header.");
-      wavFile.close();
-      return false;
-    }
-    // Find RIFF/WAVE
-    int riffPos = findChunkStart(header, bytesRead, "RIFF", 0);
-    if (riffPos == -1 || !checkWaveFormat(header, riffPos)) {
-      Serial.println("Wav: RIFF/WAVE not found.");
-      wavFile.close();
-      return false;
-    }
-    // Find fmt chunk
-    int fmtChunkPos = findChunkStart(header, bytesRead, "fmt ", riffPos + 12);
-    if (fmtChunkPos == -1) {
-      Serial.println("Wav: fmt chunk not found.");
-      wavFile.close();
-      return false;
-    }
-    // Parse format chunk (fmtChunkPos points to "fmt " chunk start)
-    // +8: audio format, +10: num channels, +12: sample rate, +22: bits per sample
-    uint16_t audioFormat = header[fmtChunkPos + 8] | (header[fmtChunkPos + 9] << 8);
-    numChannels = header[fmtChunkPos + 10] | (header[fmtChunkPos + 11] << 8);
-    wavSampleRate = header[fmtChunkPos + 12] | (header[fmtChunkPos + 13] << 8) |
-                 (header[fmtChunkPos + 14] << 16) | (header[fmtChunkPos + 15] << 24);
-    bitsPerSample = header[fmtChunkPos + 22] | (header[fmtChunkPos + 23] << 8);
-    // Validate audio format (1 = PCM integer, 3 = IEEE float)
-    if (audioFormat != 1 && audioFormat != 3) {
-      Serial.printf("Wav: Unsupported audio format %d (only PCM and IEEE float supported)\n", audioFormat);
-      wavFile.close();
-      return false;
-    }
-    // Store format for use in readAudioData
-    wavAudioFormat = audioFormat;
-    // Find data chunk
-    int dataChunkPos = findChunkStart(header, bytesRead, "data", fmtChunkPos + 24);
-    if (dataChunkPos == -1) {
-      Serial.println("Wav: data chunk not found.");
-      wavFile.close();
-      return false;
-    }
-    uint32_t dataSize = header[dataChunkPos + 4] | (header[dataChunkPos + 5] << 8) |
-                        (header[dataChunkPos + 6] << 16) | (header[dataChunkPos + 7] << 24);
-    // Print WAV info
-    Serial.println("---- WAV Info ----");
-    Serial.printf("File: %s\n", filename);
-    Serial.printf("Channels: %d\n", numChannels);
-    Serial.printf("Sample Rate: %d Hz\n", wavSampleRate);
-    Serial.printf("Bits: %d\n", bitsPerSample);
-    Serial.printf("Data Size: %d bytes\n", dataSize);
-    Serial.println("------------------");
-    // Validate bit depth (8, 16, 24, or 32-bit supported)
-    if (bitsPerSample != 8 && bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) {
-      Serial.printf("Wav: Unsupported bit depth %d (only 8, 16, 24, 32-bit supported)\n", bitsPerSample);
-      wavFile.close();
-      return false;
-    }
-    // Calculate buffer size
-    // totalSamples is number of frames (mono sample or L/R pair)
-    size_t bytesPerSample = bitsPerSample / 8;
-    bytesPerFrame = numChannels * bytesPerSample;
-    totalSamples = dataSize / bytesPerFrame;
-    fileTotalSamples = totalSamples;
-    dataStart = dataChunkPos + 8;
+    if (!parseWavHeader(filename)) return false;
     // Always store as 16-bit (conversion happens during load)
     size_t bufferSize = totalSamples * numChannels * sizeof(int16_t);
 
@@ -226,27 +164,30 @@ public:
           Serial.printf("Wav: Allocated %d bytes in RAM\n", bufferSize);
         } else {
           Serial.println("Wav: Memory allocation failed!");
-          wavFile.close();
           return false;
         }
       }
     }  // end dynamic allocation branch
 
+    // Re-open file to read audio data (parseWavHeader closed it)
+    FsFile wavFile;
+    if (!wavFile.open(currentFilename, O_RDONLY)) {
+      Serial.println("Wav: Error reopening file for data.");
+      if (!usingExternalBuffer) { free(audioBuffer); }
+      audioBuffer = nullptr;
+      return false;
+    }
     // Seek to audio data
     if (!wavFile.seekSet(dataStart)) {
       Serial.println("Wav: Failed to seek to audio data.");
-      if (!usingExternalBuffer) {
-        free(audioBuffer);
-      }
+      if (!usingExternalBuffer) { free(audioBuffer); }
       audioBuffer = nullptr;
       wavFile.close();
       return false;
     }
     // Read audio data in chunks
     if (!readAudioData(wavFile)) {
-      if (!usingExternalBuffer) {
-        free(audioBuffer);
-      }
+      if (!usingExternalBuffer) { free(audioBuffer); }
       audioBuffer = nullptr;
       wavFile.close();
       return false;
@@ -450,6 +391,68 @@ public:
     // All files failed, restore original index
     currentFileIndex = startIndex;
     Serial.println("Wav: No valid WAV files found.");
+    return false;
+  }
+
+  /** Parse WAV header only — no audio data loaded into RAM.
+   * Use with readFramesFast() / openForStreaming() to stream from SD.
+   * @param filename Path to WAV file (e.g. "/audio.wav")
+   * @return true if header is valid
+   */
+  bool loadHeaderOnly(const char* filename) {
+    if (sd == nullptr) {
+      Serial.println("Wav: SD card not initialized. Call initSD() first.");
+      return false;
+    }
+    return parseWavHeader(filename);
+  }
+
+  /** Find the first valid WAV file on the SD card and parse its header only.
+   * No audio data is loaded into RAM — use with openForStreaming() to stream.
+   * @return true if a valid WAV file was found
+   */
+  bool loadHeaderFirst() {
+    countWavFiles(true);
+    if (wavFileCount == 0) {
+      Serial.println("Wav: No WAV files found on SD card.");
+      return false;
+    }
+    for (int i = 0; i < wavFileCount; i++) {
+      if (loadHeaderByIndex(i)) {
+        currentFileIndex = i;
+        return true;
+      }
+    }
+    Serial.println("Wav: No valid WAV files found.");
+    currentFileIndex = -1;
+    return false;
+  }
+
+  /** Find WAV file by index and parse header only (no audio data loaded).
+   * @param index 0-based file index
+   * @return true if successful
+   */
+  bool loadHeaderByIndex(int index) {
+    if (sd == nullptr || index < 0) return false;
+    FsFile root, file;
+    int count = 0;
+    if (!root.open("/")) return false;
+    while (file.openNext(&root, O_RDONLY)) {
+      char fname[64];
+      file.getName(fname, sizeof(fname));
+      if (!file.isDir() && isValidFile(fname)) {
+        if (count == index) {
+          char fullPath[128];
+          snprintf(fullPath, sizeof(fullPath), "/%s", fname);
+          file.close(); root.close();
+          currentFileIndex = index;
+          return loadHeaderOnly(fullPath);
+        }
+        count++;
+      }
+      file.close();
+    }
+    root.close();
     return false;
   }
 
@@ -867,6 +870,69 @@ private:
   bool usingExternalBuffer;   // True if using external buffer instead of allocating
   FsFile streamFile;          // Persistent file handle for streaming reads
   bool streamFileOpen;        // True if streamFile is open
+
+  /** Parse WAV header without loading audio data.
+   * Sets dataStart, fileTotalSamples, numChannels, wavSampleRate, etc.
+   * @param filename Full path to WAV file
+   * @return true if header is valid
+   */
+  bool parseWavHeader(const char* filename) {
+    FsFile wavFile;
+    if (!wavFile.open(filename, O_RDONLY)) {
+      Serial.println("Wav: Error opening file.");
+      return false;
+    }
+    const int HEADER_SCAN_SIZE = 512;
+    uint8_t header[HEADER_SCAN_SIZE];
+    size_t bytesRead = wavFile.read(header, HEADER_SCAN_SIZE);
+    if (bytesRead < 44) {
+      Serial.println("Wav: Invalid WAV header.");
+      wavFile.close(); return false;
+    }
+    int riffPos = findChunkStart(header, bytesRead, "RIFF", 0);
+    if (riffPos == -1 || !checkWaveFormat(header, riffPos)) {
+      Serial.println("Wav: RIFF/WAVE not found.");
+      wavFile.close(); return false;
+    }
+    int fmtPos = findChunkStart(header, bytesRead, "fmt ", riffPos + 12);
+    if (fmtPos == -1) {
+      Serial.println("Wav: fmt chunk not found.");
+      wavFile.close(); return false;
+    }
+    uint16_t audioFormat = header[fmtPos + 8] | (header[fmtPos + 9] << 8);
+    numChannels   = header[fmtPos + 10] | (header[fmtPos + 11] << 8);
+    wavSampleRate = header[fmtPos + 12] | (header[fmtPos + 13] << 8) |
+                   (header[fmtPos + 14] << 16) | (header[fmtPos + 15] << 24);
+    bitsPerSample = header[fmtPos + 22] | (header[fmtPos + 23] << 8);
+    if (audioFormat != 1 && audioFormat != 3) {
+      Serial.printf("Wav: Unsupported audio format %d\n", audioFormat);
+      wavFile.close(); return false;
+    }
+    if (bitsPerSample != 8 && bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) {
+      Serial.printf("Wav: Unsupported bit depth %d\n", bitsPerSample);
+      wavFile.close(); return false;
+    }
+    wavAudioFormat = audioFormat;
+    int dataPos = findChunkStart(header, bytesRead, "data", fmtPos + 24);
+    if (dataPos == -1) {
+      Serial.println("Wav: data chunk not found.");
+      wavFile.close(); return false;
+    }
+    uint32_t dataSize = header[dataPos + 4] | (header[dataPos + 5] << 8) |
+                        (header[dataPos + 6] << 16) | (header[dataPos + 7] << 24);
+    bytesPerFrame    = numChannels * (bitsPerSample / 8);
+    totalSamples     = dataSize / bytesPerFrame;
+    fileTotalSamples = totalSamples;
+    dataStart        = dataPos + 8;
+    snprintf(currentFilename, sizeof(currentFilename), "%s", filename);
+    wavFile.close();
+    Serial.println("---- WAV Info ----");
+    Serial.printf("File: %s\n", currentFilename);
+    Serial.printf("Channels: %d, Rate: %lu Hz, Bits: %d\n", numChannels, wavSampleRate, bitsPerSample);
+    Serial.printf("Frames: %lu\n", fileTotalSamples);
+    Serial.println("------------------");
+    return true;
+  }
 
   /** Load WAV file by index (0-based)
    * @param index Index of file to load

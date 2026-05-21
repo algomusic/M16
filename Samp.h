@@ -242,6 +242,8 @@ public:
     envStartPhase = envPhaseOffset;  // Remember start position to detect full cycle completion
 
     // Calculate envelope increment for segment duration
+    // Note: On dual-core, both phase and envelope advance at 2x rate,
+    // maintaining their ratio — no dual-core compensation needed here
     uint32_t segmentFrames = (uint32_t)((endpos_fractional - startpos_fractional) >> 32);
     if (segmentFrames > 0 && sharedEnvInitialized && sharedEnvSize > 0) {
       uint64_t numerator = (uint64_t)sharedEnvSize * phase_increment_fractional;
@@ -364,6 +366,7 @@ public:
 
     uint32_t sampleIndex = phase_fractional >> 32;
     if (sampleIndex >= buffer_size) {
+      playing = false;  // end grain so next() can re-trigger; without this the voice stalls
       SAMP_UNLOCK();
       return 0;
     }
@@ -389,18 +392,20 @@ public:
       } else {
         // Wrap envelope index to table size (supports phase offset)
         uint32_t envIndex = (envPhase >> 16) % sharedEnvSize;
-        out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
+        out = (int16_t)(((int32_t)out * (int32_t)(sharedEnvTable[envIndex] * 257)) >> 16);
         uint32_t newEnvPhase = envPhase + envPhaseIncrement;
-        if (newEnvPhase >= envPhase) {
-          envPhase = newEnvPhase;
-          // Check for full cycle completion after wrap
-          if (envHasWrapped && envPhase >= envStartPhase) {
-            envComplete = true;
-          }
-        } else {
-          // Phase wrapped around - mark wrapped but don't complete yet
+        if (newEnvPhase < envPhase) {
+          // Phase wrapped around uint32_t
           envPhase = newEnvPhase;
           envHasWrapped = true;
+        } else {
+          envPhase = newEnvPhase;
+          // Direct table-size check (consistent with stereo path)
+          if ((newEnvPhase >> 16) >= (uint32_t)sharedEnvSize) {
+            envComplete = true;
+          } else if (envHasWrapped && envPhase >= envStartPhase) {
+            envComplete = true;
+          }
         }
       }
     }
@@ -469,6 +474,7 @@ public:
 
     // Bounds check
     if (sampleIndex >= buffer_size) {
+      playing = false;  // end grain so nextStereo() can re-trigger; without this the voice stalls
       SAMP_UNLOCK();
       outLeft = 0;
       outRight = 0;
@@ -478,7 +484,7 @@ public:
     // Advance phase now (while we have the lock)
     // Pre-computed 64-bit increment avoids shift in hot path
     if (reverse) {
-      phase_fractional -= phaseInc64;
+      decrementPhase();
     } else {
       phase_fractional += phaseInc64;
     }
@@ -486,7 +492,9 @@ public:
     // Cache envelope state
     uint32_t localEnvPhase = envPhase;
     uint32_t localEnvInc = envPhaseIncrement;
-    bool localEnvOn = envelopeOn && sharedEnvInitialized && !envComplete;
+    bool localEnvEnabled = envelopeOn && sharedEnvInitialized;
+    bool localEnvComplete = envComplete;
+    bool localEnvOn = localEnvEnabled && !localEnvComplete;
 
     // Update envelope phase
     if (localEnvOn) {
@@ -533,12 +541,18 @@ public:
     }
 
     // Apply envelope (using cached local values)
-    if (localEnvOn && sharedEnvTable) {
-      // Wrap envelope index to table size (supports phase offset)
-      uint32_t envIndex = (localEnvPhase >> 16) % sharedEnvSize;
-      uint32_t envVal = sharedEnvTable[envIndex];  // 0-255
-      outLeft = (int16_t)(((int32_t)outLeft * envVal) >> 8);
-      outRight = (int16_t)(((int32_t)outRight * envVal) >> 8);
+    if (localEnvEnabled) {
+      if (localEnvComplete) {
+        // Envelope completed — zero output to prevent click (matches mono path)
+        outLeft = 0;
+        outRight = 0;
+      } else if (sharedEnvTable) {
+        // Wrap envelope index to table size (supports phase offset)
+        uint32_t envIndex = (localEnvPhase >> 16) % sharedEnvSize;
+        int32_t envVal16 = sharedEnvTable[envIndex] * 257;  // Scale 0-255 → 0-65535 for 16-bit precision
+        outLeft  = (int16_t)(((int32_t)outLeft  * envVal16) >> 16);
+        outRight = (int16_t)(((int32_t)outRight * envVal16) >> 16);
+      }
     }
 
     // Apply edge fade (fade in at start, fade out at end) - only if enabled
@@ -605,7 +619,7 @@ public:
       } else {
         // Wrap envelope index to table size (supports phase offset)
         uint32_t envIndex = (envPhase >> 16) % sharedEnvSize;
-        out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
+        out = (int16_t)(((int32_t)out * (int32_t)(sharedEnvTable[envIndex] * 257)) >> 16);
       }
     }
 
@@ -665,18 +679,20 @@ public:
       } else {
         // Wrap envelope index to table size (supports phase offset)
         uint32_t envIndex = (envPhase >> 16) % sharedEnvSize;
-        out = (int16_t)(((int32_t)out * sharedEnvTable[envIndex]) >> 8);
+        out = (int16_t)(((int32_t)out * (int32_t)(sharedEnvTable[envIndex] * 257)) >> 16);
         uint32_t newEnvPhase = envPhase + envPhaseIncrement;
-        if (newEnvPhase >= envPhase) {
-          envPhase = newEnvPhase;
-          // Check for full cycle completion after wrap
-          if (envHasWrapped && envPhase >= envStartPhase) {
-            envComplete = true;
-          }
-        } else {
-          // Phase wrapped around - mark wrapped but don't complete yet
+        if (newEnvPhase < envPhase) {
+          // Phase wrapped around uint32_t
           envPhase = newEnvPhase;
           envHasWrapped = true;
+        } else {
+          envPhase = newEnvPhase;
+          // Direct table-size check (consistent with stereo path)
+          if ((newEnvPhase >> 16) >= (uint32_t)sharedEnvSize) {
+            envComplete = true;
+          } else if (envHasWrapped && envPhase >= envStartPhase) {
+            envComplete = true;
+          }
         }
       }
     }
@@ -721,8 +737,12 @@ public:
    * @param frequency Target pitch in Hz
    */
   inline void setFreq(float frequency) {
-    phase_increment_fractional = (unsigned long)(((uint64_t)buffer_sample_rate << 16) * frequency / (SAMPLE_RATE * base_pitch));
-    phaseInc64 = (uint64_t)phase_increment_fractional << 16;  // Pre-compute for hot path
+    unsigned long newInc = (unsigned long)(((uint64_t)buffer_sample_rate << 16) * frequency / (SAMPLE_RATE * base_pitch));
+    uint64_t newInc64 = (uint64_t)newInc << 16;
+    SAMP_LOCK();
+    phase_increment_fractional = newInc;
+    phaseInc64 = newInc64;
+    SAMP_UNLOCK();
   }
 
   /** Get sample at specific buffer index
@@ -739,13 +759,22 @@ public:
    */
   inline void setSpeed(float speed) {
     if (speed <= 0) speed = 1.0f;
-    phase_increment_fractional = (unsigned long)(((uint64_t)buffer_sample_rate << 16) * speed / SAMPLE_RATE);
-    phaseInc64 = (uint64_t)phase_increment_fractional << 16;  // Pre-compute for hot path
+    unsigned long newInc = (unsigned long)(((uint64_t)buffer_sample_rate << 16) * speed / SAMPLE_RATE);
+    uint64_t newInc64 = (uint64_t)newInc << 16;
+    SAMP_LOCK();
+    phase_increment_fractional = newInc;
+    phaseInc64 = newInc64;
+    SAMP_UNLOCK();
   }
 
   /** @return Current playback speed multiplier */
   inline float getSpeed() {
     return (float)phase_increment_fractional * SAMPLE_RATE / ((float)buffer_sample_rate * 65536.0f);
+  }
+
+  /** @return Size of the sample buffer in frames (includes extension if allocated) */
+  inline unsigned long getBufferSize() const {
+    return buffer_size;
   }
 
   /** @return Current phase position as frame index */

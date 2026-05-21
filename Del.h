@@ -18,7 +18,10 @@
 class Del {
 
 private:
-  int16_t * delayBuffer = nullptr; 
+  #if IS_ESP32() || IS_RP2040()
+  std::atomic<bool> _delLock{false};
+  #endif
+  int16_t * delayBuffer = nullptr;
   unsigned int writePos = 0;
   float delayTime_ms = 0.0f;
   unsigned int delayTime_samples = 0;
@@ -76,11 +79,12 @@ public:
       // Try PSRAM allocation with size checking (silent for delay buffers)
       delayBuffer = psramAllocInt16(delayBufferSize_samples, nullptr);
       if (!delayBuffer) {
-        // Fallback to regular RAM
-        delayBuffer = new int16_t[delayBufferSize_samples];
+        // Fallback to regular RAM — use nothrow so a failed alloc returns nullptr
+        // instead of calling abort() and triggering SW_CPU_RESET on low-heap boards
+        delayBuffer = new(std::nothrow) int16_t[delayBufferSize_samples];
       }
     #else
-      delayBuffer = new int16_t[delayBufferSize_samples];
+      delayBuffer = new(std::nothrow) int16_t[delayBufferSize_samples];
     #endif
 
     if (!delayBuffer) {
@@ -129,8 +133,8 @@ public:
       unsigned int newMaxTime = (unsigned int)(msDur * 1.1f) + 1;
       setMaxDelayTime(newMaxTime);
     }
-    delayTime_ms = min(maxDelayTime_ms - 1.0f, msDur);
-    delayTime_samples = (unsigned int)(msDur * SAMPLE_RATE * 0.001f);
+    delayTime_ms = max(0.0f, min(maxDelayTime_ms > 0 ? maxDelayTime_ms - 1.0f : 0.0f, msDur));
+    delayTime_samples = (unsigned int)(delayTime_ms * SAMPLE_RATE * 0.001f);
   }
 
   /** Return the delay duration in milliseconds */
@@ -191,6 +195,8 @@ public:
     for(int i=0; i<delayBufferSize_samples; i++) {
       delayBuffer[i] = 0; // zero out the buffer
     }
+    writePos = 0;
+    prevOutValue = 0;
   }
 
   /** Input a value to the delay and retrieve the signal delayed by delayTime milliseconds.
@@ -198,19 +204,23 @@ public:
 	*/
 	inline
 	int16_t next(int32_t inValue) {
-    int32_t outValue = 0;
-    if (delayTime_samples > 0) {
-      outValue = read();
-      if (outValue > MAX_16) outValue = MAX_16;
-      if (outValue < MIN_16) outValue = MIN_16;
-    }
-    if (delayFeedback) {
-      inValue = (inValue + ((outValue * feedbackLevel)>>10)) * 0.98f; // prevent runaway
-    }
-    if (inValue > MAX_16) inValue =  MAX_16;
-    if (inValue < MIN_16) inValue = MIN_16;
-    write(inValue);
-    return outValue;
+    int16_t result = 0;
+    M16_ATOMIC_GUARD_BLOCKING(_delLock, {
+      int32_t outValue = 0;
+      if (delayTime_samples > 0) {
+        outValue = read();
+        if (outValue > MAX_16) outValue = MAX_16;
+        if (outValue < MIN_16) outValue = MIN_16;
+      }
+      if (delayFeedback) {
+        inValue = inValue + ((outValue * feedbackLevel + 512)>>10);
+      }
+      if (inValue > MAX_16) inValue =  MAX_16;
+      if (inValue < MIN_16) inValue = MIN_16;
+      write(inValue);
+      result = outValue;
+    });
+    return result;
   }
 
   /** Read the buffer at the delayTime without incrementing read/write index */
