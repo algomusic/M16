@@ -1,9 +1,9 @@
 /*
  * MIDI16.h by Andrew R. Brown 2023
  *
- * Lightweight MIDI send/receive for M16. ESP32: supports beginClockTask()
- * which captures incoming clock timestamps in a high-priority FreeRTOS task,
- * independent of loop() scheduling jitter.
+ * Lightweight MIDI send/receive for M16. Supports ESP32, ESP8266, and RP2040.
+ * ESP32: supports beginClockTask() which captures incoming clock timestamps in
+ * a high-priority FreeRTOS task, independent of loop() scheduling jitter.
  *
  * M16 is inspired by the 8-bit Mozzi audio library by Tim Barrass 2012.
  * Licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0.
@@ -46,6 +46,11 @@ public:
     #endif
     #if IS_ESP8266()
     Serial.begin(31250);
+    #endif
+    #if IS_RP2040()
+    Serial2.setRX(rx);
+    Serial2.setTX(tx);
+    Serial2.begin(31250);
     #endif
   }
 
