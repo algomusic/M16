@@ -5,21 +5,16 @@
 #include "M16.h" 
 #include "MIDI16.h"
 
-MIDI16 midi(45, 46); // MIDI in and out GPIO pins
+MIDI16 midi(16, 17); // MIDI in and out GPIO pins
 unsigned long msNow = millis();
-unsigned long midiTime = msNow;
 unsigned long onTime = msNow;
 unsigned long offTime = msNow;
-unsigned long microsNow = micros(); 
-unsigned long clockTime = microsNow;
-int midiDelta = 8; // 8 is enough for note messages, 1 required for clock
-int onDelta = 1000;
-int tempoDelta = 20833; // 120 BPM
+unsigned long tempoTime = msNow;
+int onDelta = 1000; // time between note on messages
 bool sounding = false;
 uint8_t midiPitch = 0;
 uint8_t chan = 0;
-int BPM = 120;
-int prevBPM = 120;
+int prevBPM = 0;
 
 #include <Adafruit_NeoPixel.h>
 #define PIN 47
@@ -28,8 +23,6 @@ Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_RGB + NEO_KHZ800);
 
 void handleNoteOn(byte channel, byte pitch, byte velocity) {
   Serial.println("Receive NoteOn: " + String(pitch) + " " + String(velocity) + " " + String(channel));
-  // leds[0] = CRGB::Green;
-  // FastLED.show();
   pixels.setPixelColor(0, pixels.Color(0, 255, 0));
   pixels.show(); 
 }
@@ -52,10 +45,10 @@ void handlePitchBend(byte channel, byte data1, byte data2) {
 }
 
 void handleMidiClock() {
-  BPM = midi.clockToBpm();
-  if (BPM != prevBPM) {
-    prevBPM = BPM;
-    Serial.println("Incomming BPM = " + String(BPM));
+  int bpm = midi.clockToBpm();
+  if (bpm != prevBPM) {
+    prevBPM = bpm;
+    Serial.println("Incomming BPM = " + String(bpm));
   }
 }
 
@@ -71,24 +64,22 @@ void handleMidiStop() {
   Serial.println("* Stop *");
 }
 
-void setup() { 
+void setup() {
     Serial.begin(115200);
+    // midi.setClockSendBpm(100);  // start clock task and send 140 BPM clock
     pixels.begin();
     pixels.setBrightness(40);
     pixels.setPixelColor(0, pixels.Color(0, 0, 0));
     pixels.show(); 
     Serial.println("MIDI16-test");
-    tempoDelta = midi.calcTempoDelta(140); // in micros
-    Serial.println("tempoDelta " + String(tempoDelta));
 }
 
 void loop() { 
   msNow = millis();
 
-  // receive MIDI data 
-  if ((unsigned long)(msNow - midiTime) >= midiDelta) {
-    midiTime += midiDelta;
-    uint8_t status = midi.read();
+  // receive MIDI data - drain all available messages each loop iteration
+  uint8_t status;
+  while ((status = midi.read()) != 0) {
     if (status == MIDI16::noteOn) {
       handleNoteOn(midi.getChannel(), midi.getData1(), midi.getData2());
     } else if (status == MIDI16::noteOff) {
@@ -136,12 +127,12 @@ void loop() {
     midi.sendNoteOff(chan, midiPitch, 0);
   }
 
-  // send MIDI clock tempo
-  // microsecond timing required for 24 PPQN accuracy
-  microsNow = micros(); 
-
-  if ((unsigned long)(microsNow - clockTime) >= tempoDelta) {
-      clockTime += tempoDelta;
-    midi.sendClock();
+  // MIDI clock send is handled by the clock task via setClockSendBpm()
+  // Call midi.setClockSendBpm(bpm) at any time to change tempo
+  //  tempo change 
+  if ((unsigned long)(msNow - tempoTime) >= 5000) {
+      tempoTime += 5000;
+      midi.setClockSendBpm(random(100) + 60);
+      Serial.println("Tempo is " + String(midi.getBpm()));
   }
 }
