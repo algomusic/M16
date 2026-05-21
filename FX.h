@@ -1050,10 +1050,10 @@ class FX {
       #endif
 
       // Fallback to regular RAM if PSRAM not available or allocation failed
-      if (!revBuf1) { revBuf1 = new int16_t[REV_BUF_SIZE](); Serial.println("Reverb buffers in regular RAM"); }
-      if (!revBuf2) revBuf2 = new int16_t[REV_BUF_SIZE]();
-      if (!revBuf3) revBuf3 = new int16_t[REV_BUF_SIZE]();
-      if (!revBuf4) revBuf4 = new int16_t[REV_BUF_SIZE]();
+      if (!revBuf1) { revBuf1 = new(std::nothrow) int16_t[REV_BUF_SIZE](); Serial.println("Reverb buffers in regular RAM"); }
+      if (!revBuf2) revBuf2 = new(std::nothrow) int16_t[REV_BUF_SIZE]();
+      if (!revBuf3) revBuf3 = new(std::nothrow) int16_t[REV_BUF_SIZE]();
+      if (!revBuf4) revBuf4 = new(std::nothrow) int16_t[REV_BUF_SIZE]();
 
       revWritePos = 0;
     }
@@ -1102,6 +1102,7 @@ class FX {
 
     /** Compute reverb - optimized version with inlined buffer operations */
     inline void processReverb(int16_t audioInLeft, int16_t audioInRight) {
+      if (!revBuf1 || !revBuf2 || !revBuf3 || !revBuf4) return;
       if (useOptimizedReverb) {
         // Fast path: inlined circular buffer operations with bitwise AND wrap
         uint16_t wp = revWritePos;
