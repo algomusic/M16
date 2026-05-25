@@ -44,16 +44,22 @@ Samp samp;
 uint32_t lastTrigger = 0;
 
 void setup() {
-    //setI2sPins(38, 39, 40, 41);
-    useInternalDAC(); // for ESP32s that have it
+    Serial.begin();
+    seti2sPins(38, 39, 40, 41);
+    // useInternalDAC(); // for ESP32s that have it
+    // samp.setNearZeroSmooth(true);  // default threshold 1024, useful to smooth some clicks in internalDAC
     audioStart();
     samp.loadFromFlash(wav, SNARE_DATA, SNARE_DATA_SIZE);
+    samp.setBasePitch(69);
     // generateHeader(); // uncomment, run once with SD card to generate snare_adpcm.h, then re-comment
 }
 
 void loop() {
     if (millis() - lastTrigger >= 2000) {
         lastTrigger = millis();
+        float nextPitch = 69 + (gaussRand3(11) - 6) * 0.1f;
+        Serial.println(nextPitch);
+        samp.setPitch(nextPitch);
         samp.start();
     }
 }
