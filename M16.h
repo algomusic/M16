@@ -494,6 +494,9 @@ int32_t clip16(int input);
   static volatile bool _reorderActive = false;                // gates runtime branch
   static SemaphoreHandle_t _reorderSlotSem    = NULL;  // counting sem; tokens = free ring slots
   static SemaphoreHandle_t _reorderSlotFilled = NULL;  // counting sem; tokens = slots awaiting drain
+  // Per-core pre-claimed seq# (0 = none). Set inside Samp spinlock to atomically
+  // tie phase order to reorder sequence, eliminating the lock-release/seq-claim race.
+  static uint32_t _preClaimedSeq[2];
 
   // Drainer task: reads ring in seq order, writes one stereo frame per
   // i2s_channel_write call. The blocking write paces the loop at SAMPLE_RATE.
@@ -531,6 +534,18 @@ int32_t clip16(int input);
       size_t bytesWritten = 0;
       i2s_channel_write(tx_handle, buf, 4, &bytesWritten, portMAX_DELAY);
     }
+  }
+  // Called from Samp::next()/nextStereo() while SAMP_LOCK is held.
+  // Pre-claims the next reorder sequence number so it is assigned in phase
+  // order (matching the just-advanced phase), not in the non-deterministic
+  // order in which cores reach i2s_write_samples() after releasing the lock.
+  // Must be followed by i2s_write_samples() on the same core; no other call
+  // to m16_claimReorderSeq() may intervene on this core before that write.
+  inline void m16_claimReorderSeq() {
+    if (!_reorderActive) return;
+    xSemaphoreTake(_reorderSlotSem, portMAX_DELAY);
+    _preClaimedSeq[xPortGetCoreID()] =
+        _reorderNextSlotToProduce.fetch_add(1, std::memory_order_relaxed);
   }
 #endif // M16_REORDER_BUFFER_ENABLE
 
@@ -601,12 +616,20 @@ int32_t clip16(int input);
       // When the drainer is active (dual-core external I2S path), enqueue to
       // the ring instead of writing direct. The drainer feeds DMA in seq order.
       if (_reorderActive) {
-        // Take BEFORE fetch_add — keeps in_flight ≤ RING_SIZE, guaranteeing
-        // the slot we claim (seq & MASK) cannot still hold unexpired data.
-        // Genuine block allows IDLE0 to run, preventing WDT starvation on CPU 0.
-        xSemaphoreTake(_reorderSlotSem, portMAX_DELAY);
-
-        uint32_t mySeq = _reorderNextSlotToProduce.fetch_add(1, std::memory_order_relaxed);
+        // If a seq# was pre-claimed inside Samp's spinlock, use it directly
+        // (semaphore already taken). Otherwise claim normally.
+        uint32_t mySeq;
+        int _core = xPortGetCoreID();
+        if (_preClaimedSeq[_core]) {
+          mySeq = _preClaimedSeq[_core];
+          _preClaimedSeq[_core] = 0;
+        } else {
+          // Take BEFORE fetch_add — keeps in_flight ≤ RING_SIZE, guaranteeing
+          // the slot we claim (seq & MASK) cannot still hold unexpired data.
+          // Genuine block allows IDLE0 to run, preventing WDT starvation on CPU 0.
+          xSemaphoreTake(_reorderSlotSem, portMAX_DELAY);
+          mySeq = _reorderNextSlotToProduce.fetch_add(1, std::memory_order_relaxed);
+        }
         uint32_t idx = (mySeq & M16_REORDER_RING_MASK);
 
         _reorderRing[idx].l = leftSample;
