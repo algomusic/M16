@@ -424,6 +424,12 @@ public:
       incrementPhase();
     }
 
+    if (nearZeroSmooth) {
+      if (abs((int32_t)out) < (int32_t)_nzsThreshold)
+        out = (int16_t)(((int32_t)out + (int32_t)_nzsState) >> 1);
+      _nzsState = out;
+    }
+
     // Claim reorder seq# while lock is held so phase order == output order.
     // Eliminates the race where the other core steals an earlier seq# after
     // this lock is released but before i2s_write_samples() is called.
@@ -574,6 +580,14 @@ public:
         outLeft = (int16_t)(outLeft * fadeGain);
         outRight = (int16_t)(outRight * fadeGain);
       }
+    }
+
+    if (nearZeroSmooth) {
+      int32_t thr = (int32_t)_nzsThreshold;
+      if (abs((int32_t)outLeft)  < thr) outLeft  = (int16_t)(((int32_t)outLeft  + (int32_t)_nzsState)  >> 1);
+      if (abs((int32_t)outRight) < thr) outRight = (int16_t)(((int32_t)outRight + (int32_t)_nzsStateR) >> 1);
+      _nzsState  = outLeft;
+      _nzsStateR = outRight;
     }
 
     return true;  // Still playing
@@ -736,25 +750,44 @@ public:
   /** Set base pitch (pitch at normal playback speed)
    * @param hz Frequency in Hz (default 440)
    */
-  inline void setBasePitch(float hz) {
-    if (hz > 0) base_pitch = hz;
+  inline void setBaseFreq(float hz) {
+    if (hz > 0) base_freq = hz;
   }
 
-  /** @return Current base pitch in Hz */
+   /** @return Current base pitch in Hz */
+  inline float getBaseFreq() {
+    return base_freq;
+  }
+
+  /** Set base pitch (pitch at normal playback speed)
+   * @param midiPitch MIDI note number (default 69 for A4=440Hz)
+   */
+  inline void setBasePitch(float midiPitch) {
+    if (midiPitch > 0 && midiPitch < 128) base_freq = mtof(midiPitch);
+  }
+
+  /** @return Current base pitch as a MIDI pitch */
   inline float getBasePitch() {
-    return base_pitch;
+    return ftom(base_freq);
   }
 
   /** Set playback pitch relative to base pitch
    * @param frequency Target pitch in Hz
    */
   inline void setFreq(float frequency) {
-    unsigned long newInc = (unsigned long)(((uint64_t)buffer_sample_rate << 16) * frequency / (SAMPLE_RATE * base_pitch));
+    unsigned long newInc = (unsigned long)(((uint64_t)buffer_sample_rate << 16) * frequency / (SAMPLE_RATE * base_freq));
     uint64_t newInc64 = (uint64_t)newInc << 16;
     SAMP_LOCK();
     phase_increment_fractional = newInc;
     phaseInc64 = newInc64;
     SAMP_UNLOCK();
+  }
+
+  /** Set playback pitch relative to base pitch
+   * @param frequency Target pitch in Hz
+   */
+  inline void setPitch(float pitch) {
+    setFreq(mtof(pitch));
   }
 
   /** Get sample at specific buffer index
@@ -955,6 +988,17 @@ public:
     return (float)edgeFadeSamples * 1000.0f / SAMPLE_RATE;
   }
 
+  /** Blend samples with their predecessor when amplitude is below threshold.
+   * Reduces spike artifacts at zero crossings (e.g. from 8-bit DAC quantisation noise).
+   * @param on        Enable/disable
+   * @param threshold Samples with abs value below this get averaged with the previous
+   *                  output (0–32767, default 1024 ≈ 3% of full scale)
+   */
+  inline void setNearZeroSmooth(bool on, int16_t threshold = 1024) {
+    nearZeroSmooth = on;
+    _nzsThreshold  = threshold;
+  }
+
   /** Find the next zero crossing forward from a given position
    * A zero crossing is where adjacent samples change from negative to non-negative.
    * Forward-only search ensures consistent grain boundaries for granular synthesis.
@@ -976,15 +1020,14 @@ public:
     // On dual-core ESP32/RP2040, both cores call next() per I2S sample, advancing
     // the phase twice per output sample. Halving buffer_sample_rate halves the
     // phase increment per core so the combined rate equals 1x.
-    // Half bufRate when next() is called twice per output sample:
-    //   - External I2S dual-core: _blockSplitActive is true; both cores advance
-    //     phase once each → two advances per output sample.
-    //   - Internal DAC: DAC driver configured at freq_hz = SAMPLE_RATE*2 in
-    //     alternating-channel mode; audioUpdate() is called at 2x SAMPLE_RATE,
-    //     so each call should advance by half a sample.
-    //   - External I2S single-core: neither condition; full rate is correct.
+    // Internal DAC only: its driver is configured at freq_hz = SAMPLE_RATE*2
+    // (alternating-channel mode), so audioUpdate() runs at 2× SAMPLE_RATE.
+    // Halving bufRate compensates so each call advances half a sample.
+    // External I2S (single or dual-core): SAMP_LOCK serialises all next()
+    // calls, giving exactly SAMPLE_RATE calls/sec total regardless of core
+    // count — full rate is always correct there.
 #if IS_ESP32()
-    bool dualActive = _blockSplitActive || _useInternalDAC;
+    bool dualActive = _useInternalDAC;
 #elif IS_RP2040()
     bool dualActive = isDualCore;
 #else
@@ -1059,7 +1102,7 @@ private:
   uint32_t buffer_size = 0;
   uint8_t num_channels = 0;
   uint32_t buffer_sample_rate = SAMPLE_RATE;
-  float base_pitch = 440.0f;
+  float base_freq = 440.0f;
 
   volatile bool envelopeOn = false;
   volatile uint32_t envPhase = 0;
@@ -1074,6 +1117,12 @@ private:
   // Edge fade settings (fade in at start, fade out at end)
   bool edgeFadeEnabled = false;
   uint32_t edgeFadeSamples = 441;  // Default 10ms at 44100Hz
+
+  // Near-zero smoothing — reduces spike artifacts at zero crossings
+  bool nearZeroSmooth = false;
+  int16_t _nzsThreshold = 1024;   // abs(sample) below this gets averaged with prev
+  int16_t _nzsState    = 0;       // mono / stereo-left filter state
+  int16_t _nzsStateR   = 0;       // stereo-right filter state
 
   /** Apply edge fade gain based on position relative to start/end
    * @param pos Current position in samples (integer part of phase)
