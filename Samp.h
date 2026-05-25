@@ -424,6 +424,13 @@ public:
       incrementPhase();
     }
 
+    // Claim reorder seq# while lock is held so phase order == output order.
+    // Eliminates the race where the other core steals an earlier seq# after
+    // this lock is released but before i2s_write_samples() is called.
+#if IS_ESP32() && M16_REORDER_BUFFER_ENABLE
+    m16_claimReorderSeq();
+#endif
+
     SAMP_UNLOCK();
     return out;
   }
@@ -510,6 +517,11 @@ public:
         envComplete = true;
       }
     }
+
+    // Claim reorder seq# while lock is held — same race fix as next().
+#if IS_ESP32() && M16_REORDER_BUFFER_ENABLE
+    m16_claimReorderSeq();
+#endif
 
     SAMP_UNLOCK();
     // === END LOCKED SECTION ===
@@ -950,6 +962,40 @@ public:
    * @param maxSearch Maximum frames to search forward (default 256)
    * @return Frame index of zero crossing, or original pos if none found within range
    */
+#ifdef WAV_H_
+  /** Decode a PROGMEM ADPCM array into PSRAM/RAM and set up for immediate playback.
+   * Requires: #include "Wav.h" BEFORE #include "Samp.h" in your sketch.
+   * Automatically compensates for dual-core mode (both cores advancing phase per sample).
+   * @param wav      Wav instance (SD not required — used for buffer management only)
+   * @param pgmData  PROGMEM byte array (e.g. SNARE_DATA from an exported header)
+   * @param dataSize Total bytes in array (e.g. SNARE_DATA_SIZE)
+   * @return true if decoded and ready for playback
+   */
+  bool loadFromFlash(Wav& wav, const uint8_t* pgmData, uint32_t dataSize) {
+    if (!wav.loadFromFlash(pgmData, dataSize)) return false;
+    // On dual-core ESP32/RP2040, both cores call next() per I2S sample, advancing
+    // the phase twice per output sample. Halving buffer_sample_rate halves the
+    // phase increment per core so the combined rate equals 1x.
+    // Half bufRate when next() is called twice per output sample:
+    //   - External I2S dual-core: _blockSplitActive is true; both cores advance
+    //     phase once each → two advances per output sample.
+    //   - Internal DAC: DAC driver configured at freq_hz = SAMPLE_RATE*2 in
+    //     alternating-channel mode; audioUpdate() is called at 2x SAMPLE_RATE,
+    //     so each call should advance by half a sample.
+    //   - External I2S single-core: neither condition; full rate is correct.
+#if IS_ESP32()
+    bool dualActive = _blockSplitActive || _useInternalDAC;
+#elif IS_RP2040()
+    bool dualActive = isDualCore;
+#else
+    bool dualActive = false;
+#endif
+    uint32_t bufRate = dualActive ? SAMPLE_RATE / 2 : SAMPLE_RATE;
+    setTable(wav.getBuffer(), wav.getFrameCount(), bufRate, wav.getChannels());
+    return true;
+  }
+#endif
+
   unsigned long findNearestZeroCrossing(unsigned long pos, unsigned long maxSearch = 256) {
     if (!buffer || buffer_size == 0) return pos;
     if (pos >= buffer_size - 1) return pos;  // Need at least 2 samples to check crossing
