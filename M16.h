@@ -1290,6 +1290,7 @@ int pitchQuantize(int pitch, int8_t * pitchClassSet, int key) {
   // Build quick lookup table of allowed pitch classes
   bool allowed[12] = {false};
   for (int i = 0; i < 12; i++) {
+    if (pitchClassSet[i] < 0) continue; // sentinel: unused slot
     int pc = (pitchClassSet[i] + key) % 12;
     if (pc < 0) pc += 12;  // keep in range
     allowed[pc] = true;
@@ -1308,15 +1309,16 @@ int pitchQuantize(int pitch, int8_t * pitchClassSet, int key) {
   return pitch; // just in case?
 }
 
-// overload to use int scale values
+// overload to use int scale values; size defaults to 12 for backward compat
 inline
-int pitchQuantize(int pitch, int * pitchClassSet, int key) {
-  int8_t pc [12]; // empty
-  for (int i=0; i<12; i++) {
-    pc[i] = pitchClassSet[i];
+int pitchQuantize(int pitch, int * pitchClassSet, int key, int size = 12) {
+  int8_t pc[12];
+  memset(pc, -1, sizeof(pc)); // -1 sentinel = unused slot
+  int n = size < 12 ? size : 12;
+  for (int i = 0; i < n; i++) {
+    pc[i] = (int8_t)pitchClassSet[i];
   }
-  int returnValue = pitchQuantize(pitch, pc, key);
-  return returnValue;
+  return pitchQuantize(pitch, pc, key);
 }
 
 /** Return freq a chromatic interval away from base
