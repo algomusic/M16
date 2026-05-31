@@ -23,6 +23,7 @@ void setup() {
   lfo.setFreq(lfoRate);
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
   // useInternalDAC();
+  effects.setChorusMix(1.0); 
   audioStart();
 }
 

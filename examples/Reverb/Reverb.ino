@@ -40,7 +40,7 @@ void setup() {
   effect1.setReverbMix(0.4); // 0.0 - 1.0
   // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
   // setSampleRate(22050);
-  useInternalDAC(); // enable internal DAC output, call before audioStart()
+  // useInternalDAC(); // enable internal DAC output, call before audioStart()
   audioStart();
 }
 

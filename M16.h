@@ -126,13 +126,15 @@ bool isDualCore = true; // assume dual-core unless changed in setup()
 // When dual-core audio production writes to a shared I2S DMA, the order in which
 // the two cores reach i2s_channel_write is non-deterministic — adjacent samples
 // can be swapped, producing audible discontinuities under high-modulation FM.
-// This flag inserts an MPSC ring buffer + single drainer task that restores
+// When enabled, inserts an MPSC ring buffer + single drainer task that restores
 // deterministic sample order at the DAC. Only active when isDualCore=true and
 // external I2S is in use; all other paths (ESP8266, RP2040, internal DAC,
 // single-core mode) are unaffected. Costs ~220 B BSS, ~680 B flash on ESP32.
-// Override with `#define M16_REORDER_BUFFER_ENABLE 0` BEFORE `#include "M16.h"`.
+// Disabled by default: M16_ATOMIC_GUARD + output caching handles ordering
+// correctly for shared-state FX, and the drainer task risks WDT starvation.
+// Enable with `#define M16_REORDER_BUFFER_ENABLE 1` BEFORE `#include "M16.h"`.
 #ifndef M16_REORDER_BUFFER_ENABLE
-  #define M16_REORDER_BUFFER_ENABLE 1
+  #define M16_REORDER_BUFFER_ENABLE 0
 #endif
 #ifndef M16_REORDER_RING_SIZE
   #define M16_REORDER_RING_SIZE 16   // power-of-2; absorbs cross-core skew
@@ -501,6 +503,13 @@ int32_t clip16(int input);
   // Drainer task: reads ring in seq order, writes one stereo frame per
   // i2s_channel_write call. The blocking write paces the loop at SAMPLE_RATE.
   static void reorderDrainerTask(void* /*unused*/) {
+    // Batch buffer: accumulate M16_BLOCK_SIZE frames before each DMA write.
+    // Per-sample writes (4 bytes) return instantly when DMA has space, so the
+    // drainer never blocks and IDLE0 is starved when audio renders faster than
+    // real-time (e.g. half-rate reverb). Batching makes each write large enough
+    // to reliably block on DMA-full, giving IDLE0 time to reset the watchdog.
+    static uint8_t batchBuf[M16_BLOCK_SIZE * 4];
+    static int batchPos = 0;
     for (;;) {
       // Block until a producer signals a filled slot — allows IDLE0 to run,
       // preventing WDT starvation on CPU 0 when the ring is empty.
@@ -524,15 +533,18 @@ int32_t clip16(int input);
       _reorderNextSlotToConsume++;
       xSemaphoreGive(_reorderSlotSem);  // signal free slot — unblocks waiting producer
 
-      // One stereo frame to I2S DMA — blocks if DMA full (natural pacing).
       // Byte order matches legacy i2s_write_samples external-I2S path.
-      uint8_t buf[4];
-      buf[0] = r & 0xFF;
-      buf[1] = (r >> 8) & 0xFF;
-      buf[2] = l & 0xFF;
-      buf[3] = (l >> 8) & 0xFF;
-      size_t bytesWritten = 0;
-      i2s_channel_write(tx_handle, buf, 4, &bytesWritten, portMAX_DELAY);
+      batchBuf[batchPos * 4 + 0] = r & 0xFF;
+      batchBuf[batchPos * 4 + 1] = (r >> 8) & 0xFF;
+      batchBuf[batchPos * 4 + 2] = l & 0xFF;
+      batchBuf[batchPos * 4 + 3] = (l >> 8) & 0xFF;
+      batchPos++;
+
+      if (batchPos >= M16_BLOCK_SIZE) {
+        batchPos = 0;
+        size_t bytesWritten = 0;
+        i2s_channel_write(tx_handle, batchBuf, sizeof(batchBuf), &bytesWritten, portMAX_DELAY);
+      }
     }
   }
   // Called from Samp::next()/nextStereo() while SAMP_LOCK is held.

@@ -571,15 +571,14 @@ class FX {
         #endif
       }
 
-      M16_ATOMIC_GUARD_BLOCKING(_fxLock, {
-        if (reverb2Initiated) {
-          processReverb((audioInLeft + allpassRevOut)>>1, clip16(audioInRight + allpassRevOut)>>1);
-        } else {
-          processReverb(clip16(audioInLeft), clip16(audioInRight));
-        }
-
+      audioOutLeft = reverbCacheL;
+      audioOutRight = reverbCacheR;
+      M16_ATOMIC_GUARD(_fxLock, {
+        processReverb(clip16(audioInLeft), clip16(audioInRight));
         audioOutLeft = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
         audioOutRight = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
+        reverbCacheL = audioOutLeft;
+        reverbCacheR = audioOutRight;
       });
     }
 
@@ -633,11 +632,7 @@ class FX {
 
         if (reverbInterpToggle) {
           // Process reverb this sample
-          if (reverb2Initiated) {
-            processReverb((audioInLeft + allpassRevOut)>>1, clip16(audioInRight + allpassRevOut)>>1);
-          } else {
-            processReverb(clip16(audioInLeft), clip16(audioInRight));
-          }
+          processReverb(clip16(audioInLeft), clip16(audioInRight));
           outL = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
           outR = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
           reverbInterpPrevL = outL;
@@ -679,12 +674,53 @@ class FX {
         allpass2.setFeedbackLevel(0.79);
         reverb2Initiated = true;
       }
-      // Allpass pre-processing under the FX lock (reverbStereo also acquires it,
-      // but M16_ATOMIC_GUARD_BLOCKING is non-reentrant so we do allpass outside)
-      // Note: allpass filters have their own Del locks for thread safety
-      int32_t summedMono = (audioInLeft + audioInRight) >> 1;
-      allpassRevOut = allpass2.next(allpass1.next(summedMono));
-      reverbStereo(audioInLeft , audioInRight, audioOutLeft, audioOutRight);
+      if (!reverbInitiated) {
+        #if IS_ESP32()
+          extern SemaphoreHandle_t audioInitMutex;
+          if (audioInitMutex != NULL && xSemaphoreTake(audioInitMutex, portMAX_DELAY)) {
+            if (!reverbInitiated) initReverb(reverbSize);
+            xSemaphoreGive(audioInitMutex);
+          } else {
+            initReverb(reverbSize);
+          }
+        #elif IS_RP2040()
+          extern mutex_t picoAudioInitMutex;
+          extern bool picoMutexInitialized;
+          if (picoMutexInitialized) {
+            mutex_enter_blocking(&picoAudioInitMutex);
+            if (!reverbInitiated) initReverb(reverbSize);
+            mutex_exit(&picoAudioInitMutex);
+          } else {
+            initReverb(reverbSize);
+          }
+        #else
+          initReverb(reverbSize);
+        #endif
+      }
+      // Allpass and reverb processing under single guard — protects both allpass
+      // state (All has no locking) and reverb state from dual-core data races.
+      audioOutLeft = reverb2SmoothL;
+      audioOutRight = reverb2SmoothR;
+      M16_ATOMIC_GUARD(_fxLock, {
+        reverb2Toggle = !reverb2Toggle;
+        int32_t outL; int32_t outR;
+        if (reverb2Toggle) {
+          int32_t summedMono = (audioInLeft + audioInRight) >> 1;
+          int32_t ap = allpass2.next(allpass1.next(summedMono));
+          processReverb((audioInLeft + ap) >> 1, clip16(audioInRight + ap) >> 1);
+          outL = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
+          outR = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
+          reverbCacheL = outL;
+          reverbCacheR = outR;
+        } else {
+          outL = reverbCacheL;
+          outR = reverbCacheR;
+        }
+        reverb2SmoothL += (outL - reverb2SmoothL) >> 2;
+        reverb2SmoothR += (outR - reverb2SmoothR) >> 2;
+        audioOutLeft = reverb2SmoothL;
+        audioOutRight = reverb2SmoothR;
+      });
     }
 
     /** Set the reverb length
@@ -819,9 +855,21 @@ class FX {
         // Normalize output to prevent clipping
         int32_t sumL = inVal + delVal;
         int32_t sumR = inVal2 + delVal2;
-        audioOutLeft = clip16((sumL * chorusMixNorm)>>10);
-        audioOutRight = clip16((sumR * chorusMixNorm)>>10);
+        int32_t wetL = clip16((sumL * chorusMixNorm)>>10);
+        int32_t wetR = clip16((sumR * chorusMixNorm)>>10);
+        // Dry/wet blend controlled by setChorusMix()
+        audioOutLeft  = ((audioInLeft  * (1024 - _chorusMixLevel)) >> 10) + ((wetL * _chorusMixLevel) >> 10);
+        audioOutRight = ((audioInRight * (1024 - _chorusMixLevel)) >> 10) + ((wetR * _chorusMixLevel) >> 10);
       });
+    }
+
+    /** Set the chorus dry/wet mix level.
+    * @mix 0.0 = dry only, 1.0 = wet only, 0.5 = equal blend (default)
+    */
+    inline
+    void setChorusMix(float mix) {
+      if (!chorusInitiated) initChorus();
+      _chorusMixLevel = (int)(constrain(mix, 0.0f, 1.0f) * 1024);
     }
 
     /** Set the chorus effect depth
@@ -829,6 +877,7 @@ class FX {
     */
     inline
     void setChorusDepth(float depth) {
+      if (!chorusInitiated) initChorus();
       depth = pow(depth, 0.8) * 0.5;
       chorusMixInput = panLeft(depth) * 1024;
       chorusMixDelay = panRight(depth) * 1024;
@@ -840,20 +889,24 @@ class FX {
     */
     inline
     void setChorusWidth(float depth) {
+      if (!chorusInitiated) initChorus();
       chorusLfoWidth = pow(max(0.0f, depth), 1.5) * 3.0d;
     }
 
     /** Set the chorus rate
-    * @rate pitch frequency of chorus LFO, in hertz. Typically 0.01 to 3.0 
+    * @rate pitch frequency of chorus LFO, in hertz. Typically 0.01 to 3.0
     */
     inline
     void setChorusRate(float rate) {
+      if (!chorusInitiated) initChorus();
       chorusLfoRate = rate;
       chorusLfo.setFreq(chorusLfoRate);
     }
 
     /** Set the chorus feedback level
-    * @val feedback level of the chorus delay line, from 0.0 to 1.0 
+    * @val feedback level of the chorus delay line, from 0.0 to 1.0
+    * Note: do not add an initChorus() trigger here — setChorusFeedback is
+    * called from within initChorus() and would cause infinite recursion.
     */
     inline
     void setChorusFeedback(float val) {
@@ -869,6 +922,7 @@ class FX {
     */
     inline
     void setChorusDelayTime(float time) {
+      if (!chorusInitiated) initChorus();
       chorusDelayTime = min(40.0f, max(0.0f, time));
       chorusDelayTime2 = min(40.0f, max(0.0f, time * 0.74f));
     }
@@ -970,6 +1024,7 @@ class FX {
     float waveShaperStepInc = MAX_16 * 2.0 * TABLE_SIZE_INV;
     float waveShaperStepIncInv;
     bool chorusInitiated = false;
+    int _chorusMixLevel = 512; // 0-1024, dry/wet blend for chorusStereo() and chorus()
     int chorusDelayTime = 38;
     int chorusDelayTime2 = 28;
     float chorusLfoRate = 0.65; // hz
@@ -983,11 +1038,13 @@ class FX {
     Del chorusDelay, chorusDelay2;
     All allpass1, allpass2;
     bool reverb2Initiated = false;
-    int32_t allpassRevOut = 0;
+    bool reverb2Toggle = false;
+    int32_t reverb2SmoothL = 0, reverb2SmoothR = 0;
     // Half-rate reverb interpolation state
     bool reverbInterpToggle = false;
     int32_t reverbInterpPrevL = 0, reverbInterpPrevR = 0;
     int32_t reverbInterpSmoothL = 0, reverbInterpSmoothR = 0;
+    int32_t reverbCacheL = 0, reverbCacheR = 0;
     int32_t prevSaturationOutput = 0;
     EMA aveFilter;
     int32_t prevSmoothValue = 0;
@@ -1102,8 +1159,8 @@ class FX {
 
     /** Compute reverb - optimized version with inlined buffer operations */
     inline void processReverb(int16_t audioInLeft, int16_t audioInRight) {
-      if (!revBuf1 || !revBuf2 || !revBuf3 || !revBuf4) return;
       if (useOptimizedReverb) {
+        if (!revBuf1 || !revBuf2 || !revBuf3 || !revBuf4) return;
         // Fast path: inlined circular buffer operations with bitwise AND wrap
         uint16_t wp = revWritePos;
 
