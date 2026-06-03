@@ -155,6 +155,20 @@ public:
 
       // Atomic fetch-and-add: each core gets a unique phase value
       uint32_t myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
+
+      // Apply deferred band change at a waveform zero crossing (same logic as phMod)
+      {
+        int16_t* pb = (int16_t*)__atomic_load_n((uintptr_t*)&_pendingBandPtr, __ATOMIC_RELAXED);
+        if (pb != nullptr) {
+          int rawIdx = (myPhase >> 16) & (TABLE_SIZE - 1);
+          if (abs(cachedBandPtr[rawIdx]) < (MAX_16 >> 3)) {
+            __atomic_store_n((uintptr_t*)&bandPtr, (uintptr_t)pb, __ATOMIC_RELAXED);
+            __atomic_store_n((uintptr_t*)&_pendingBandPtr, (uintptr_t)nullptr, __ATOMIC_RELAXED);
+            cachedBandPtr = pb;
+          }
+        }
+      }
+
       int idx = (myPhase >> 16) & (TABLE_SIZE - 1);
       sampVal = cachedBandPtr[idx];
 
@@ -617,6 +631,21 @@ public:
       if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
 
       uint32_t myPhase = __atomic_fetch_add(&phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
+
+      // Apply deferred band change at a zero crossing of the raw (unmodulated) phase.
+      // All band variants share the same zero crossings, so the switch is seamless:
+      // cachedBandPtr[rawIdx] ≈ 0 → modOffset ≈ 0 → no discontinuity in carrier output.
+      {
+        int16_t* pb = (int16_t*)__atomic_load_n((uintptr_t*)&_pendingBandPtr, __ATOMIC_RELAXED);
+        if (pb != nullptr) {
+          int rawIdx = (myPhase >> 16) & (TABLE_SIZE - 1);
+          if (abs(cachedBandPtr[rawIdx]) < (MAX_16 >> 3)) {
+            __atomic_store_n((uintptr_t*)&bandPtr, (uintptr_t)pb, __ATOMIC_RELAXED);
+            __atomic_store_n((uintptr_t*)&_pendingBandPtr, (uintptr_t)nullptr, __ATOMIC_RELAXED);
+            cachedBandPtr = pb;
+          }
+        }
+      }
 
       // Add modulation offset to this core's phase
       uint32_t p = myPhase + modOffset;
@@ -1207,13 +1236,26 @@ public:
         }
       }
 
-      // Seqlock write: mark odd (write in progress), store both, mark even (stable).
-      // next() reads the seqlock before and after loading the pair and retries if
-      // the count changed — guaranteeing it always sees a consistent bandPtr+increment.
+      // Seqlock write: mark odd (write in progress), store increment, mark even (stable).
+      // next()/phMod() read the seqlock before and after loading the pair and retry if
+      // the count changed — guaranteeing they always see a consistent increment.
+      // Band changes are deferred to the oscillator's next zero crossing (applied in
+      // next()/phMod()) to prevent waveform discontinuities in FM cascade chains.
       #if IS_ESP32() || IS_RP2040()
+        {
+          int16_t* currentBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+          if (newBandPtr != currentBandPtr) {
+            if (currentBandPtr == nullptr) {
+              // Initial setup before audio starts: apply immediately
+              __atomic_store_n((uintptr_t*)&bandPtr, (uintptr_t)newBandPtr, __ATOMIC_RELAXED);
+            } else {
+              // Runtime change: defer to next zero crossing to avoid click
+              __atomic_store_n((uintptr_t*)&_pendingBandPtr, (uintptr_t)newBandPtr, __ATOMIC_RELAXED);
+            }
+          }
+        }
         uint32_t _seq = _freqSeq.load(std::memory_order_relaxed);
         _freqSeq.store(_seq + 1, std::memory_order_release);  // odd = write in progress
-        __atomic_store_n((uintptr_t*)&bandPtr, (uintptr_t)newBandPtr, __ATOMIC_RELAXED);
         __atomic_store_n(&phase_increment_fractional, newIncrement, __ATOMIC_RELAXED);
         _freqSeq.store(_seq + 2, std::memory_order_release);  // even = stable
       #else
@@ -1695,6 +1737,7 @@ private:
   uint32_t phase_increment_fractional_s2 = 1228800;
   int16_t * waveTable = nullptr;
   int16_t * bandPtr = nullptr;  // Pre-computed pointer to current frequency band
+  int16_t * _pendingBandPtr = nullptr; // Deferred band change; applied at next zero crossing
   bool allocated = false;
   int32_t prevSampVal = 0;
   bool isNoise = false;
