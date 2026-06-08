@@ -1282,9 +1282,12 @@ public:
       // Anti-aliasing depth cap for phMod variants: depth_max = 9000 / (freq * cmRatio).
       // Each phMod clamps the caller's modIndex against this cap so FM sidebands stay
       // bounded as the carrier rises and/or the C:M ratio widens.
-      float dMax = 9000.0f / (freq * _cmRatio);
-      _cachedDepthMax = dMax;
-      _cachedDepthMaxScaled = (int32_t)(dMax * 2048.0f);
+      // Skipped when disableAntiAlias() has been called (feedback FM, intentional aliasing).
+      if (!_antiAliasDisabled) {
+        float dMax = 9000.0f / (freq * _cmRatio);
+        _cachedDepthMax = dMax;
+        _cachedDepthMaxScaled = (int32_t)(dMax * 2048.0f);
+      }
     }
 	}
 
@@ -1309,14 +1312,31 @@ public:
     if (ratio > 0.0f) {
       _cmRatio = ratio;
       _cmRatioSet = true;
-      float dMax = 9000.0f / (frequency * ratio);
-      _cachedDepthMax = dMax;
-      _cachedDepthMaxScaled = (int32_t)(dMax * 2048.0f);
+      if (!_antiAliasDisabled) {
+        float dMax = 9000.0f / (frequency * ratio);
+        _cachedDepthMax = dMax;
+        _cachedDepthMaxScaled = (int32_t)(dMax * 2048.0f);
+      }
     }
   }
 
   /** Return the currently configured C:M ratio (1.0 if never set). */
   inline float getCMRatio() const { return _cmRatio; }
+
+  /** Disable the anti-aliasing modIndex cap for this oscillator.
+   *
+   * By default, every phMod variant clamps modIndex to depth_max = 9000/(freq*cmRatio)
+   * to keep FM sidebands below Nyquist. Call this when that cap is undesirable:
+   * feedback FM (self-modulation for noise), intentional aliasing, or bit-crush effects.
+   *
+   * After calling this, setFreq() and setCMRatio() will no longer update the depth cap.
+   * The cap is set to 9999, effectively unlimited.
+   */
+  inline void disableAntiAlias() {
+    _antiAliasDisabled = true;
+    _cachedDepthMax = 9999.0f;
+    _cachedDepthMaxScaled = (int32_t)(9999.0f * 2048.0f);
+  }
 
 	/** Set the frequency via a MIDI pitch
   * @midiPitch The pitch, value 0 - 127
@@ -1755,8 +1775,10 @@ private:
   float cachedModIndexF = 1.0f; // Cached mod index for single-arg phMod
   // Anti-aliasing depth cap: depth_max = 9000 / (freq * cmRatio).
   // _cmRatioSet=false → Osc& overloads auto-derive ratio from modulator freq.
+  // _antiAliasDisabled=true → cap frozen at 9999; setFreq/setCMRatio won't touch it.
   float _cmRatio = 1.0f;
   bool _cmRatioSet = false;
+  bool _antiAliasDisabled = false;
   volatile float _cachedDepthMax = 9000.0f / 440.0f;          // for float modIndex (phMod, phMod2, phModMorph, phModWTrans)
   volatile int32_t _cachedDepthMaxScaled = (int32_t)((9000.0f / 440.0f) * 2048.0f); // for phModInt's pre-scaled int32
   float testVal = 1.3;
