@@ -35,12 +35,17 @@ private:
   int16_t delayBuffer[BUFFER_SIZE];
 
   uint32_t phase = 0;
-  uint32_t scanRate = 32768;  // Fixed-point 16.16: 65536 = 1.0, supports up to 3.0
+  uint32_t scanRate = 32768;        // Fixed-point 16.16: 65536 = 1.0, supports up to 3.0
+  uint32_t _targetScanRate = 32768; // Slew target set by setScanRate()/setTime()
+  static const uint32_t SCAN_RATE_SLEW = 32; // Fixed-point units/sample (~42ms full-range slew)
   uint16_t bufferIndex = 0;
 
   int16_t delayLevel = 1024;
+  int16_t _targetDelayLevel = 1024;
   int16_t feedbackLevel = 512;
+  int16_t _targetFeedbackLevel = 512;
   bool delayFeedback = false;
+  static const int16_t LEVEL_SLEW = 4; // Units/sample for level/feedback slew (~6ms full range)
 
   int16_t prevOutValue = 0;
   int16_t holdValue = 0;
@@ -58,7 +63,10 @@ private:
    * Applies gentle compression above threshold
    */
   inline int16_t softSaturate(int32_t x) {
-    const int32_t threshold = 24000;
+    // Threshold chosen so 4:1 compression above it keeps output below MAX_16
+    // for any realistic feedback+input sum (up to ~64000):
+    //   20000 + (64000-20000)/4 = 31000 < MAX_16 — hard guard never fires
+    const int32_t threshold = 20000;
     if (x > threshold) {
       x = threshold + ((x - threshold) >> 2);
     } else if (x < -threshold) {
@@ -84,6 +92,9 @@ public:
     if (requestedMs > BASE_DELAY_MS) {
       setTime(requestedMs * 0.5f);
     }
+    scanRate = _targetScanRate;
+    uint32_t rfs = scanRate < 65536U ? scanRate : 65536U;
+    smoothCoeff = (uint16_t)(2048U + ((rfs * 6144U) >> 16));
   }
 
   /** Constructor with full parameters
@@ -97,6 +108,11 @@ public:
     setTime(msDur);
     setLevel(level);
     setFeedback(feedback);
+    // Apply all targets immediately at construction (no audio playing yet)
+    scanRate = _targetScanRate;
+    delayLevel = _targetDelayLevel;
+    uint32_t rfs = scanRate < 65536U ? scanRate : 65536U;
+    smoothCoeff = (uint16_t)(2048U + ((rfs * 6144U) >> 16));
   }
 
   ~BBD() {}
@@ -129,10 +145,8 @@ public:
     msDur = max(minDelay, msDur);
     float rate = BASE_DELAY_MS / msDur;
     rate = max(0.01f, min(3.0f, rate));  // Allow up to 3x scan rate for short delays
-    scanRate = (uint32_t)(rate * 65536.0f);
-    if (scanRate < 655) scanRate = 655;
-    // Adjust output smoothing: more smoothing at lower scan rates (longer delays)
-    smoothCoeff = (uint16_t)(2048.0f + min(1.0f, rate) * 6144.0f);
+    _targetScanRate = (uint32_t)(rate * 65536.0f);
+    if (_targetScanRate < 655) _targetScanRate = 655;
   }
 
   /** @return Current delay time in milliseconds */
@@ -148,26 +162,23 @@ public:
    */
   void setScanRate(float rate) {
     rate = max(0.01f, min(3.0f, rate));  // Allow up to 3x for short delays
-    scanRate = (uint32_t)(rate * 65536.0f);
-    if (scanRate < 655) scanRate = 655;
-    // Adjust output smoothing: more smoothing at lower scan rates (longer delays)
-    // Lower coeff = heavier smoothing. At rate 1.0: ~8192, at rate 0.1: ~2048
-    smoothCoeff = (uint16_t)(2048.0f + min(1.0f, rate) * 6144.0f);
+    _targetScanRate = (uint32_t)(rate * 65536.0f);
+    if (_targetScanRate < 655) _targetScanRate = 655;
   }
 
   /** @return Current scan rate (0.01 to 1.0) */
   float getScanRate() {
-    return scanRate / 65536.0f;
+    return _targetScanRate / 65536.0f;
   }
 
   /** @param level Output level 0.0 to 1.0 */
   void setLevel(float level) {
-    delayLevel = min((int32_t)1024, max((int32_t)0, (int32_t)(pow(level, 0.8) * 1024.0f)));
+    _targetDelayLevel = min((int32_t)1024, max((int32_t)0, (int32_t)(pow(level, 0.8) * 1024.0f)));
   }
 
   /** @return Output level (0.0 to 1.0) */
   float getLevel() {
-    return delayLevel * 0.0009765625f;
+    return _targetDelayLevel * 0.0009765625f;
   }
 
   /** @param state true to enable feedback */
@@ -180,12 +191,12 @@ public:
    */
   void setFeedbackLevel(float level) {
     setFeedback(true);
-    feedbackLevel = min((int32_t)1024, max((int32_t)0, (int32_t)(pow(level, 0.8) * 1024.0f)));
+    _targetFeedbackLevel = min((int32_t)1024, max((int32_t)0, (int32_t)(pow(level, 0.8) * 1024.0f)));
   }
 
   /** @return Feedback level (0.0 to 1.0) */
   float getFeedbackLevel() {
-    return feedbackLevel * 0.0009765625f;
+    return _targetFeedbackLevel * 0.0009765625f;
   }
 
   /** @param newVal Filter amount 0=none, 4=darkest */
@@ -211,6 +222,11 @@ public:
     inputAccum = 0;
     inputCount = 0;
     lastResult = 0;
+    scanRate = _targetScanRate; // flush any pending slews
+    delayLevel = _targetDelayLevel;
+    feedbackLevel = _targetFeedbackLevel;
+    uint32_t rfs = scanRate < 65536U ? scanRate : 65536U;
+    smoothCoeff = (uint16_t)(2048U + ((rfs * 6144U) >> 16));
   }
 
   /** Process one sample through the BBD
@@ -220,6 +236,26 @@ public:
   inline int16_t next(int32_t inValue) {
     #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
     M16_ATOMIC_GUARD_BLOCKING(_bbdLock, {
+      // Slew all hot parameters to avoid buffer-seam clicks on adjustment
+      if (scanRate != _targetScanRate) {
+        if (_targetScanRate > scanRate) {
+          uint32_t d = _targetScanRate - scanRate;
+          scanRate += (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
+        } else {
+          uint32_t d = scanRate - _targetScanRate;
+          scanRate -= (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
+        }
+        uint32_t rfs = scanRate < 65536U ? scanRate : 65536U;
+        smoothCoeff = (uint16_t)(2048U + ((rfs * 6144U) >> 16));
+      }
+      if (delayLevel != _targetDelayLevel) {
+        int16_t d = _targetDelayLevel - delayLevel;
+        delayLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
+      }
+      if (feedbackLevel != _targetFeedbackLevel) {
+        int16_t d = _targetFeedbackLevel - feedbackLevel;
+        feedbackLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
+      }
       // Accumulate inputs for anti-aliasing at low scan rates
       inputAccum += inValue;
       inputCount++;
@@ -279,6 +315,26 @@ public:
       lastResult = (int16_t)smoothedOut;
     });
     #else
+    // Slew all hot parameters to avoid buffer-seam clicks on adjustment
+    if (scanRate != _targetScanRate) {
+      if (_targetScanRate > scanRate) {
+        uint32_t d = _targetScanRate - scanRate;
+        scanRate += (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
+      } else {
+        uint32_t d = scanRate - _targetScanRate;
+        scanRate -= (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
+      }
+      uint32_t rfs = scanRate < 65536U ? scanRate : 65536U;
+      smoothCoeff = (uint16_t)(2048U + ((rfs * 6144U) >> 16));
+    }
+    if (delayLevel != _targetDelayLevel) {
+      int16_t d = _targetDelayLevel - delayLevel;
+      delayLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
+    }
+    if (feedbackLevel != _targetFeedbackLevel) {
+      int16_t d = _targetFeedbackLevel - feedbackLevel;
+      feedbackLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
+    }
     // Accumulate inputs for anti-aliasing at low scan rates
     inputAccum += inValue;
     inputCount++;
