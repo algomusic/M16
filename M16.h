@@ -164,6 +164,14 @@ bool isDualCore = true; // assume dual-core unless changed in setup()
   #define M16_INTERNAL_DAC_SIMUL 1
 #endif
 
+// Noise gate threshold for internal DAC output (16-bit scale, 0 = disabled).
+// Asymmetric envelope follower silences the output when the signal drops to this
+// level, preventing 8-bit quantisation noise from becoming audible in quiet tails.
+// Default 3000 (~2.5 DAC LSBs). Override before #include "M16.h" to tune or disable.
+#ifndef M16_INTERNAL_DAC_GATE_THRESHOLD
+  #define M16_INTERNAL_DAC_GATE_THRESHOLD 6000
+#endif
+
 /** Specify the use of one or two cores for audio processing
 * @dualCore True to use both cores (ESP32/PiPico2), false for single-core mode
 * Call this function before audioStart() in setUp() to set the desired number of cores used for audio.
@@ -420,11 +428,22 @@ int32_t clip16(int input);
     static uint8_t _dacAccum[DAC_ACCUM_SIZE];
     static size_t _dacAccumPos = 0;
     static uint32_t _ditherState = 22695477UL;  // LCG state for TPDF dither
+    static int32_t  _gateLevel   = 0;           // envelope follower for noise gate
   #endif
 
   // Configuration macros/constants
-  #define DMA_BUFFERS         4
-  #define DMA_BUFFER_LENGTH   512
+  // DMA_BUFFERS × DMA_BUFFER_LENGTH frames at SAMPLE_RATE sets total ring depth.
+  // Default 6 × 512 = 70 ms ring (~58 ms guaranteed underrun protection) — covers
+  // a worst-case NVS sector erase (~30-40 ms) on the host with margin, at the
+  // cost of ~23 ms added control-to-audio latency vs. the prior 4-descriptor
+  // config. Sketches needing tighter latency (percussive/Beat Machine style) can
+  // override before #include "M16.h".
+  #ifndef DMA_BUFFERS
+    #define DMA_BUFFERS       6
+  #endif
+  #ifndef DMA_BUFFER_LENGTH
+    #define DMA_BUFFER_LENGTH 512
+  #endif
 
   // Channel (I2S port) config
   i2s_chan_config_t chan_cfg = {
@@ -594,6 +613,17 @@ int32_t clip16(int input);
   bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
     #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
       if (_useInternalDAC) {
+#if M16_INTERNAL_DAC_GATE_THRESHOLD > 0
+        {
+          // Asymmetric envelope follower: fast attack (>> 4 ≈ 0.4ms) opens on transients,
+          // slow release (>> 12 ≈ 93ms) holds through brief gaps. Gates output to zero
+          // when level drops below the quantisation noise floor of the 8-bit DAC.
+          int32_t absVal = abs((int32_t)leftSample);
+          _gateLevel += absVal > _gateLevel ? (absVal - _gateLevel) >> 4
+                                            : (absVal - _gateLevel) >> 12;
+          if (_gateLevel < M16_INTERNAL_DAC_GATE_THRESHOLD) { leftSample = 0; rightSample = 0; }
+        }
+#endif
         // Convert 16-bit signed to 8-bit unsigned for internal DAC.
         // Apply TPDF dithering to any non-trivial signal so delay/reverb tails fade smoothly
         // rather than hard-clipping to silence at the ±1 LSB boundary (which causes rhythmic clicks).
