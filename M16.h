@@ -1429,14 +1429,38 @@ float floatMap(float x, float in_min, float in_max, float out_min, float out_max
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-/** Return sigmond distributed value for value between 0.0-1.0 */
+/** Return sigmoid distributed value for value between 0.0-1.0 */
 inline
-float sigmoid(float inVal) { // 0.0 to 1.0
-  if (inVal > 0.5) {
-    return 0.5 + pow((inVal - 0.5)* 2, 4) * 0.5f;
-  } else {
-    return max(0.0, pow(inVal * 2, 0.25) * 0.5f);
+float sigmoid(float x) {
+  return 1.0 / (1.0 + exp(-12.0 * (x - 0.5)));
+}
+
+/** Return the invoice sigmoid distributed value for value between 0.0-1.0 
+ * Useful for flattening the centre of linear distributions/values.
+*/
+float inverseSigmoid(float x) { // 0.0 to 1.0
+  return 0.5 - log(1.0 / x - 1.0) / 12.0;
+}
+
+/** Integer version of invoice sigmoid for pot values between 0-1024 
+ *  Call inverse_sigmoid_init() once at startup.
+*/
+static int inv_sig_lut[1025];
+
+void inverse_sigmoid_init(void) {
+  inv_sig_lut[0]    = 0;
+  inv_sig_lut[1024] = 1024;
+  for (int i = 1; i < 1024; i++) {
+    double fx = i / 1024.0;
+    double fy = 0.5 - log(1.0 / fx - 1.0) / 12.0;
+    inv_sig_lut[i] = (int)round(fy * 1024.0);
   }
+}
+
+int inverseSigmoidInt(int x) {
+  if (x <= 0)    return 0;
+  if (x >= 1024) return 1024;
+  return inv_sig_lut[x];
 }
 
 /** Return cosine value based on step between -1.0 to 1.0 */
