@@ -1432,14 +1432,14 @@ float floatMap(float x, float in_min, float in_max, float out_min, float out_max
 /** Return sigmoid distributed value for value between 0.0-1.0 */
 inline
 float sigmoid(float x) {
-  return 1.0 / (1.0 + exp(-12.0 * (x - 0.5)));
+  return 1.0 / (1.0 + exp(-10.0 * (x - 0.5)));
 }
 
 /** Return the invoice sigmoid distributed value for value between 0.0-1.0 
  * Useful for flattening the centre of linear distributions/values.
 */
 float inverseSigmoid(float x) { // 0.0 to 1.0
-  return 0.5 - log(1.0 / x - 1.0) / 12.0;
+  return 0.5 - log(1.0 / x - 1.0) / 10.0;
 }
 
 /** Integer version of invoice sigmoid for pot values between 0-1024 
@@ -1452,7 +1452,7 @@ void inverse_sigmoid_init(void) {
   inv_sig_lut[1024] = 1024;
   for (int i = 1; i < 1024; i++) {
     double fx = i / 1024.0;
-    double fy = 0.5 - log(1.0 / fx - 1.0) / 12.0;
+    double fy = 0.5 - log(1.0 / fx - 1.0) / 10.0;
     inv_sig_lut[i] = (int)round(fy * 1024.0);
   }
 }
