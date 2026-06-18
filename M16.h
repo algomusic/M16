@@ -122,6 +122,27 @@ float SAMPLE_RATE_INV = 1.0f / SAMPLE_RATE;
 const float MAX_16_INV = 0.00003052;
 bool isDualCore = true; // assume dual-core unless changed in setup()
 
+// ---- Global audio-frame clock --------------------------------------------
+// Monotonic counter incremented once per output frame produced (advanced inside
+// the per-frame write paths below: i2s_write_samples and the audioBlockWrite
+// finaliser). Unlike micros(), it does NOT freeze while the audio task fills the
+// DMA ring in a burst; unlike a per-next()-call counter it makes no assumption
+// about how often a generator is ticked — it tracks real audio output. Time-based
+// generators (e.g. Env) read it via audioFrameCount() so their slopes are smooth
+// at audio rate and correctly timed whether advanced at control rate (loop()) or
+// per sample (audioUpdate()). Wraps after ~27 h at 44.1 kHz; consumers must use
+// unsigned deltas. On dual-core external I2S both cores advance the shared atomic
+// for alternate frames, so the combined rate equals the output frame rate.
+#if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+std::atomic<uint32_t> _m16AudioFrameCount{0};
+inline uint32_t audioFrameCount() { return _m16AudioFrameCount.load(std::memory_order_relaxed); }
+inline void m16AdvanceAudioFrame() { _m16AudioFrameCount.fetch_add(1, std::memory_order_relaxed); }
+#else
+volatile uint32_t _m16AudioFrameCount = 0;
+inline uint32_t audioFrameCount() { return _m16AudioFrameCount; }
+inline void m16AdvanceAudioFrame() { _m16AudioFrameCount++; }
+#endif
+
 // Sample reorder buffer (ESP32 dual-core external I2S only)
 // When dual-core audio production writes to a shared I2S DMA, the order in which
 // the two cores reach i2s_channel_write is non-deterministic — adjacent samples
@@ -363,6 +384,7 @@ int32_t clip16(int input);
     leftAudioOuputValue = leftSample;
     rightAudioOuputValue = rightSample;
     i2s_write_lr(leftSample, rightSample);
+    m16AdvanceAudioFrame(); // one output frame produced
   }
 
   void seti2sPins(int bck, int ws, int dout, int din) {
@@ -611,6 +633,10 @@ int32_t clip16(int input);
   static int _blockPos[2];
 
   bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+    // One output frame produced per call on every path below (external direct,
+    // internal DAC, reorder-enqueue). On dual-core external both cores call this
+    // for alternate frames, so the shared atomic advances at the frame rate.
+    m16AdvanceAudioFrame();
     #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
       if (_useInternalDAC) {
 #if M16_INTERNAL_DAC_GATE_THRESHOLD > 0
@@ -762,7 +788,12 @@ int32_t clip16(int input);
       return true;
     }
 
-    // Standard buffering path (Single-core OR Core 0 in dual-core)
+    // Standard buffering path (Single-core OR Core 0 in dual-core).
+    // One output frame per call here. The Core 1 block-split branch above does
+    // NOT advance the clock — it produces the same frames Core 0 finalises, so
+    // counting it too would double the rate. audioBlockWrite never falls through
+    // to i2s_write_samples on ESP32, so the two advance sites never overlap.
+    m16AdvanceAudioFrame();
     int pos = _blockPos[0];
     _blockPartialL[0][pos] = leftSample;
     _blockPartialR[0][pos] = rightSample;
@@ -855,12 +886,16 @@ int32_t clip16(int input);
       }
     #endif
 
-      // External I2S DAC initialization
-      i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle);
+      // External I2S DAC initialization.
+      // Only allocate RX channel when an input pin is actually wired (-1 means no input).
+      bool useRx = (i2sPinsOut[3] != -1);
+      i2s_new_channel(&chan_cfg, &tx_handle, useRx ? &rx_handle : NULL);
       i2s_channel_init_std_mode(tx_handle, &std_cfg);
-      i2s_channel_init_std_mode(rx_handle, &std_cfg);
+      if (useRx) {
+        i2s_channel_init_std_mode(rx_handle, &std_cfg);
+        i2s_channel_enable(rx_handle);
+      }
       i2s_channel_enable(tx_handle);
-      i2s_channel_enable(rx_handle);
 
       _audioTasksRunning = false;
       _blockSplitActive  = false;
@@ -1116,6 +1151,7 @@ int32_t clip16(int input);
     } else {
       i2sOut.write(sample32);
     }
+    m16AdvanceAudioFrame(); // one output frame produced (both cores, serialized)
   }
 
   // Block-split API stubs — RP2040 uses cooperative single-core audio scheduling.

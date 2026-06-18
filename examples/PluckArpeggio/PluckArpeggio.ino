@@ -14,9 +14,7 @@ SVF filter;
 FX effect1;
 int bpm = 120;
 int stepDelta = 1000;
-int envDelta = 1;
-int32_t currEnvValue = 0;
-unsigned long msNow, stepTime, envTime;
+unsigned long msNow, stepTime;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 float feedback = 0.9;
 
@@ -36,7 +34,6 @@ void setup() {
   aOsc1.setPitch(arp1.next());
   filter.setFreq(10000);
   stepTime = millis();
-  envTime = millis();
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
@@ -55,19 +52,15 @@ void loop() {
     filter.setFreq(rand(3000) + 1000);
     ampEnv1.start();
   }
-
-  if ((unsigned long)(msNow - envTime) >= envDelta) {
-    envTime += envDelta; 
-    currEnvValue = ampEnv1.next();
-  }
 }
 
-/* The audioUpdate function is required in all M16 programs 
+/* The audioUpdate function is required in all M16 programs
 * to specify the audio sample values to be played.
 * Always finish with i2s_write_samples()
+* Read the envelope per audio sample with getValue() for a smooth pluck excitation.
 */
 void audioUpdate() {
-  int32_t leftVal = (filter.nextLPF(effect1.pluck((aOsc1.next() * currEnvValue) >> 16, aOsc1.getFreq(), feedback)) * vol)>>10;
+  int32_t leftVal = (filter.nextLPF(effect1.pluck((aOsc1.next() * ampEnv1.getValue()) >> 16, aOsc1.getFreq(), feedback)) * vol)>>10;
   int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

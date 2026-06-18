@@ -7,10 +7,7 @@ Osc osc1;
 Env ampEnv;
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
-unsigned long envTime = msNow;
 int pitchDelta = 1000;
-int envDelta = 1;
-int currEnvValue = 0;
 int8_t pitchClass [] = {0,2,4,7,9}; // major pentatonic
 
 void setup() {
@@ -20,7 +17,8 @@ void setup() {
   osc1.setPitch(69);
   ampEnv.setAttack(5);
   ampEnv.setRelease(500);
-  // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change ESP32 defaults
+  // seti2sPins(25, 26, 12, -1); // bck, ws, data_out, data_in // change ESP32 defaults
+  // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
   // useInternalDAC();
   audioStart();
 }
@@ -28,29 +26,23 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - envTime) >= envDelta) {
-    envTime += envDelta; 
-    currEnvValue = ampEnv.next();
-  }
-
   if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
     pitchTime += pitchDelta;
     int pitch = pitchQuantize(random(24) + 58, pitchClass, 0);
     Serial.println(pitch);
     osc1.setPitch(pitch);
     ampEnv.setAttack(rand(100));
-    ampEnv.setRelease(rand(1000));
-    // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
+    ampEnv.setRelease(rand(1000) + 100);
     ampEnv.start();
   }
 }
 
-/* The audioUpdate function is required in all M16 programs 
+/* The audioUpdate function is required in all M16 programs
 * to specify the audio sample values to be played.
 * Always finish with i2s_write_samples()
 */
 void audioUpdate() {
-  int32_t leftVal = (osc1.next() * currEnvValue)>>16;
+  int32_t leftVal = (osc1.next() * ampEnv.next()) >> 16;
   int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);
 }

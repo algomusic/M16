@@ -13,10 +13,8 @@ Env modEnv;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
-unsigned long envTime = msNow;
-float modVal, modIndex = 0.5;
+float modIndex = 0.5;
 int pitchDelta = 3000;
-int envDelta = 4;
 
 void setup() {
   Serial.begin(115200);
@@ -52,7 +50,6 @@ void loop() {
         aOsc1.setSpread(i1, i2);
       #endif
       modIndex = rand(20) * 0.1 + 0.2;
-      modVal = modIndex;
       Serial.print("Mod index ");Serial.print(modIndex);
     }
     int pitch = rand(48) + 36;
@@ -61,19 +58,15 @@ void loop() {
     modOsc.setPitch(pitch);
     modEnv.start();
   }
-
-  if ((unsigned long)(msNow - envTime) >= envDelta) {
-    envTime += envDelta; 
-    modEnv.next();
-    modVal = modIndex * modEnv.getValue() * MAX_16_INV;
-  }
 }
 
-/* The audioUpdate function is required in all M16 programs 
+/* The audioUpdate function is required in all M16 programs
 * to specify the audio sample values to be played.
 * Always finish with i2s_write_samples()
+* Read the modulation envelope per audio sample with getValue() for smooth FM depth.
 */
 void audioUpdate() {
+  float modVal = modIndex * modEnv.getValue() * MAX_16_INV;
   int32_t leftVal = (aOsc1.phMod(modOsc, modVal) * vol)>>10; // no filtering
   int32_t rightVal = leftVal;
   i2s_write_samples(leftVal, rightVal);

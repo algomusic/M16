@@ -15,13 +15,12 @@
 Sync audioSync(15, 33); // in and out GPIO pins
 Osc aOsc1;
 Env ampEnv;
-int envVal = 0;
 unsigned long pitchTime = millis();
 int readPulseDelta = 2;
 int writePulseDelta = 2;
 
 int prevVal = 0;
-unsigned long msNow, ampEnvTime, readPulseTime, writePulseTime;
+unsigned long msNow, readPulseTime, writePulseTime;
 float inputBPM;
 
 void playNote() {
@@ -68,20 +67,14 @@ void loop() {
       audioSync.endPulse();
     }
   }
-
-  if (msNow > ampEnvTime) {
-    ampEnvTime = msNow + 1;
-    ampEnv.next();
-    envVal = ampEnv.getValue();
-  }
-  
 }
 
-/* The audioUpdate function is required in all M16 programs 
+/* The audioUpdate function is required in all M16 programs
 * to specify the audio sample values to be played.
 * Always finish with i2s_write_samples()
+* Read the envelope per audio sample with getValue() for smooth, click-free slopes.
 */
 void audioUpdate() {
-  int16_t signal = (aOsc1.next() * envVal)>>16;
+  int16_t signal = (aOsc1.next() * ampEnv.getValue())>>16;
   i2s_write_samples(signal, signal);
 }
