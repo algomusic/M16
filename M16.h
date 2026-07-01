@@ -190,7 +190,7 @@ inline void m16AdvanceAudioFrame() { _m16AudioFrameCount++; }
 // level, preventing 8-bit quantisation noise from becoming audible in quiet tails.
 // Default 3000 (~2.5 DAC LSBs). Override before #include "M16.h" to tune or disable.
 #ifndef M16_INTERNAL_DAC_GATE_THRESHOLD
-  #define M16_INTERNAL_DAC_GATE_THRESHOLD 6000
+  #define M16_INTERNAL_DAC_GATE_THRESHOLD 3000
 #endif
 
 /** Specify the use of one or two cores for audio processing
@@ -461,7 +461,7 @@ int32_t clip16(int input);
   // config. Sketches needing tighter latency (percussive/Beat Machine style) can
   // override before #include "M16.h".
   #ifndef DMA_BUFFERS
-    #define DMA_BUFFERS       6
+    #define DMA_BUFFERS       4
   #endif
   #ifndef DMA_BUFFER_LENGTH
     #define DMA_BUFFER_LENGTH 512
@@ -646,7 +646,7 @@ int32_t clip16(int input);
           // when level drops below the quantisation noise floor of the 8-bit DAC.
           int32_t absVal = abs((int32_t)leftSample);
           _gateLevel += absVal > _gateLevel ? (absVal - _gateLevel) >> 4
-                                            : (absVal - _gateLevel) >> 12;
+                                            : (absVal - _gateLevel) >> 10; // 12
           if (_gateLevel < M16_INTERNAL_DAC_GATE_THRESHOLD) { leftSample = 0; rightSample = 0; }
         }
 #endif
