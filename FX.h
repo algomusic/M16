@@ -491,25 +491,69 @@ class FX {
     inline
     int16_t pluck(int16_t audioIn, float pluckFreq, float depth) {
       if (!pluckBufferEstablished) initPluckBuffer();
-      int16_t result = 0;
-      M16_ATOMIC_GUARD_BLOCKING(_fxLock, {
+      M16_ATOMIC_GUARD(_fxLock, {
         // read
-        //float read_index_fractional = SAMPLE_RATE / pluckFreq;
         int pluck_buffer_read_index = pluck_buffer_write_index - SAMPLE_RATE / pluckFreq + 1;
         if (pluck_buffer_read_index < 0) pluck_buffer_read_index += PLUCK_BUFFER_SIZE;
-        int bufferRead = pluckBuffer[pluck_buffer_read_index] * depth;
+        int bufferRead = clip16(pluckBuffer[pluck_buffer_read_index] * depth);
         // update buffer
-        int32_t output = audioIn + bufferRead;
-        pluckBuffer[(int)pluck_buffer_write_index] = output; // divide?
+        int32_t output = clip16(audioIn + bufferRead);
+        pluckBuffer[(int)pluck_buffer_write_index] = output;
         int32_t aveOut = (output + prevPluckOutput)>>1;
         prevPluckOutput = aveOut;
         // increment buffer phase
         pluck_buffer_write_index += 1;
-        if (pluck_buffer_write_index > PLUCK_BUFFER_SIZE) pluck_buffer_write_index -= PLUCK_BUFFER_SIZE;
+        if (pluck_buffer_write_index >= PLUCK_BUFFER_SIZE) pluck_buffer_write_index -= PLUCK_BUFFER_SIZE;
         // send output
-        result = aveOut;
+        pluckCached = clip16(aveOut);
       });
-      return result;
+      return pluckCached;
+    }
+
+    /** Digital Waveguide model
+    *  Two delay lines representing left-going and right-going traveling waves,
+    *  with phase inversion at each reflection point. Produces standing wave
+    *  resonances with a different character from Karplus-Strong.
+    *  @audioIn Excitation signal (noise burst, impulse, oscillator)
+    *  @pluckFreq Fundamental frequency in Hz. Determines delay line length.
+    *  @depth Feedback/damping level 0.0-1.0. Higher = longer decay.
+    */
+    inline
+    int16_t waveguide(int16_t audioIn, float pluckFreq, float depth) {
+      if (!wgBufferEstablished) initWgBuffers();
+      M16_ATOMIC_GUARD(_fxLock, {
+        int delayLen = SAMPLE_RATE / pluckFreq;
+        if (delayLen < 1) delayLen = 1;
+        if (delayLen >= WG_BUFFER_SIZE) delayLen = WG_BUFFER_SIZE - 1;
+
+        int readPos = (int)wgWriteIdx - delayLen;
+        if (readPos < 0) readPos += WG_BUFFER_SIZE;
+
+        int16_t rightTap = wgRight[readPos];
+        int16_t leftTap = wgLeft[readPos];
+
+        // Reflection with phase inversion and damping
+        // Right-going wave reflects off right end → enters left-going line (inverted)
+        // Left-going wave reflects off left end → enters right-going line (inverted) + input
+        int32_t nextRight = audioIn - (leftTap * depth);
+        int32_t nextLeft = -(rightTap * depth);
+
+        // KS-style averaging for high-frequency damping
+        nextRight = (nextRight + prevWgRight) >> 1;
+        nextLeft = (nextLeft + prevWgLeft) >> 1;
+        prevWgRight = nextRight;
+        prevWgLeft = nextLeft;
+
+        wgRight[(int)wgWriteIdx] = clip16(nextRight);
+        wgLeft[(int)wgWriteIdx] = clip16(nextLeft);
+
+        // Output = sum of both traveling waves at pickup point
+        wgCached = clip16((rightTap + leftTap) >> 1);
+
+        wgWriteIdx += 1.0f;
+        if (wgWriteIdx >= WG_BUFFER_SIZE) wgWriteIdx -= WG_BUFFER_SIZE;
+      });
+      return wgCached;
     }
 
     /** A simple reverb using recursive delay lines.
@@ -523,12 +567,11 @@ class FX {
       if (!reverbInitiated) {
         initReverb(reverbSize);
       }
-      int16_t result = 0;
-      M16_ATOMIC_GUARD_BLOCKING(_fxLock, {
+      M16_ATOMIC_GUARD(_fxLock, {
         processReverb(audioIn, audioIn);
-        result = clip16(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12) + ((revP2 * reverbMix)>>12));
+        reverbCached = clip16(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12) + ((revP2 * reverbMix)>>12));
       });
-      return result;
+      return reverbCached;
     }
 
     /** A simple 'spring' reverb using recursive delay lines.
@@ -989,6 +1032,16 @@ class FX {
     float pluck_buffer_write_index = 0;
     int prevPluckOutput = 0;
     bool pluckBufferEstablished = false;
+    int16_t pluckCached = 0;
+    int16_t wgCached = 0;
+    int16_t reverbCached = 0;
+    const static int16_t WG_BUFFER_SIZE = 1500; // same as pluck buffer
+    int16_t * wgRight;
+    int16_t * wgLeft;
+    float wgWriteIdx = 0;
+    int prevWgRight = 0;
+    int prevWgLeft = 0;
+    bool wgBufferEstablished = false;
     // Bit crusher sample-and-hold state
     int16_t crushHoldValue = 0;
     int16_t crushHoldCounter = 0;
@@ -1072,6 +1125,16 @@ class FX {
         pluckBuffer[i] = 0;
       }
       pluckBufferEstablished = true;
+    }
+
+    void initWgBuffers() {
+      wgRight = new int16_t[WG_BUFFER_SIZE];
+      wgLeft = new int16_t[WG_BUFFER_SIZE];
+      for (int i = 0; i < WG_BUFFER_SIZE; i++) {
+        wgRight[i] = 0;
+        wgLeft[i] = 0;
+      }
+      wgBufferEstablished = true;
     }
 
     /** Recalculate chorus normalization factor to prevent clipping */
