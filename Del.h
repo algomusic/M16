@@ -254,8 +254,19 @@ public:
     return (outValue * delayLevel)>>10;
   }
 
+  /** Write to the buffer at pos without incrementing the write index
+  * @param inValue The signal input (MIN_16 to MAX-16)
+  * @param pos The buffer write position in samples (0 - buffer size)
+  */
+  inline
+	void write(int inValue, int pos) {
+    if (!delayBuffer) return;  
+    if (delayBufferSize_samples == 0) return;  // Prevent divide by zero
+    delayBuffer[max(0, min((int)delayBufferSize_samples, pos))] = min(MAX_16, max(MIN_16, inValue));
+  }
+
   /** Write to the buffer and increment the write index
-  * @param inValue The signal input.
+  * @param inValue The signal input (MIN_16 to MAX-16)
   */
   inline
 	void write(int inValue) {
