@@ -200,6 +200,40 @@ class Env {
       #endif
     }
 
+    /** Re-enter the release phase from the current level, using the latest
+     *  attack/release/hold/decay parameters. Works even when already releasing
+     *  (startRelease() ignores calls in state 5). Snapshots the current output
+     *  level so the new release interpolates smoothly from here.
+     */
+    inline
+    void retriggerRelease() {
+      // Recompute per-note durations from current parameter values.
+      const float samplesPerMs = SAMPLE_RATE * 0.001f;
+      attackSamples  = envAttack  * samplesPerMs;
+      invAttackSamples = (attackSamples > 0.0f) ? (1.0f / attackSamples) : 0.0f;
+      holdSamples    = envHold    * samplesPerMs;
+      decaySamples   = envDecay   * samplesPerMs;
+      invDecaySamples = (decaySamples > 0.0f) ? (1.0f / decaySamples) : 0.0f;
+      float jitReleaseMs = envRelease + audioRand((int)(envRelease * 0.05f));
+      releaseSamples = jitReleaseMs * samplesPerMs;
+      invReleaseSamples = (releaseSamples > 0.0f) ? (1.0f / releaseSamples) : 0.0001f;
+      JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (audioRand(MAX_ENV_LEVEL * 0.05));
+      sustainLevel = envSustain * MAX_ENV_LEVEL;
+
+      // Snapshot current level and start release from here.
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      releaseStartLevel = envVal.load(std::memory_order_relaxed);
+      releaseStartFrame = audioFrameCount();
+      releaseTriggered.store(true, std::memory_order_release);
+      envState.store(5, std::memory_order_release);
+      #else
+      releaseStartLevel = envVal;
+      releaseStartFrame = audioFrameCount();
+      releaseTriggered = true;
+      envState = 5;
+      #endif
+    }
+
     /** Set the envelope's status
      * newState 0 = complete, 1 = attack, 2 = hold, 3 = decay, 4 = sustain, 5 = release
     */
