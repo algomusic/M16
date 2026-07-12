@@ -48,6 +48,7 @@ class All {
 
       if (!inputBuffer || !outputBuffer) return 0;
       if (bufferSize_samples == 0) return 0;
+      if (delayTime_samples == 0) return input;
 
       // Write input to delay buffer
       inputBuffer[bufferWriteIndex] = (int16_t)clip16(input);
@@ -88,6 +89,11 @@ class All {
     /** Get the feedback level of the allpass filter */
     float getFeedbackLevel() {
       return feedbackLevel * 0.0009765625f;
+    }
+
+    /** Get the maximum delay time of the allpass filter in milliseconds */
+    int16_t getMaxTime() {
+      return allpassSize;
     }
 
     /** Set the allpass filter maximum delay size
