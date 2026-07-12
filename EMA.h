@@ -38,7 +38,7 @@ public:
   }
 
   /** Set cutoff frequency in Hz
-   * @param freq_val Frequency 40-10000 Hz
+   * @param freqVal Frequency 40-10000 Hz
    */
   inline void setFreq(int32_t freq_val) {
     f = max((int32_t)40, min((int32_t)10000, freq_val));
@@ -52,7 +52,7 @@ public:
   }
 
   /** Set cutoff as normalized value
-   * @param cutoff_val 0.0-1.0 maps to approx 40-10000 Hz
+   * @param cutoffVal 0.0-1.0 maps to approx 40-10000 Hz
    */
   inline void setCutoff(float cutoff_val) {
     f = max(40.0f, min(10000.0f, cutoff_val * 10000));
