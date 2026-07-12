@@ -26,7 +26,6 @@
 // IS_CAPABLE() groups platforms with sufficient CPU/memory for complex DSP (filters, reverb, etc.)
 #define IS_CAPABLE() (IS_ESP32() || IS_RP2040())
 
-
 /* Thread-safety helpers for dual-core ESP32
 * On ESP32, audioUpdate() runs on BOTH cores simultaneously. Any shared state
 * modified in audioUpdate() needs protection to prevent race conditions.
@@ -113,6 +112,7 @@
   #define M16_ATOMIC_GUARD(lock, code) do { code; } while(0)
   #define M16_ATOMIC_GUARD_BLOCKING(lock, code) do { code; } while(0)
 #endif
+
 
 // globals
 int SAMPLE_RATE = 44100;
@@ -1338,12 +1338,11 @@ static const float _mtofTable[128] = {
 };
 
 /** Return freq from a MIDI pitch (fast lookup version)
-* @pitch The MIDI pitch to be converted (integer for fastest, float supported)
+* @pitch The MIDI pitch to be converted (in-range integer for fastest, out-of-range and float supported)
 */
 inline
 float mtof(float midival) {
-  if (midival <= 0.0f) return 0.0f;
-  if (midival >= 127.0f) return _mtofTable[127];
+  if (midival < 0.0f || midival > 127.0f) return 440.0 * pow(2.0, (midival - 69.0) / 12.0);
 
   int idx = (int)midival;
   float frac = midival - idx;
@@ -1468,6 +1467,8 @@ float floatMap(float x, float in_min, float in_max, float out_min, float out_max
 /** Return sigmoid distributed value for value between 0.0-1.0 */
 inline
 float sigmoid(float x) {
+  if (x <= 0.0) return 0.0;
+  if (x >= 1.0) return 1.0;
   return max(0.0, min(1.0, 1.0 / (1.0 + exp(-10.0 * (x - 0.5)))));
 }
 
@@ -1475,28 +1476,9 @@ float sigmoid(float x) {
  * Useful for flattening the centre of linear distributions/values.
 */
 float inverseSigmoid(float x) { // 0.0 to 1.0
+  if (x <= 0.0) return 0.0;
+  if (x >= 1.0) return 1.0;
   return max(0.0, min(1.0, 0.5 - log(1.0 / x - 1.0) / 10.0));
-}
-
-/** Integer version of invoice sigmoid for pot values between 0-1024 
- *  Call inverse_sigmoid_init() once at startup.
-*/
-static int inv_sig_lut[1025];
-
-void inverse_sigmoid_init(void) {
-  inv_sig_lut[0]    = 0;
-  inv_sig_lut[1024] = 1024;
-  for (int i = 1; i < 1024; i++) {
-    double fx = i / 1024.0;
-    double fy = 0.5 - log(1.0 / fx - 1.0) / 10.0;
-    inv_sig_lut[i] = (int)round(fy * 1024.0);
-  }
-}
-
-int inverseSigmoidInt(int x) {
-  if (x <= 0)    return 0;
-  if (x >= 1024) return 1024;
-  return inv_sig_lut[x];
 }
 
 /** Return cosine value based on step between -1.0 to 1.0 */
