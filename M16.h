@@ -628,9 +628,36 @@ int32_t clip16(int input);
   // Each core accumulates N=M16_BLOCK_SIZE samples into its partial buffer;
   // Core 0 combines both and writes one DMA burst per block.
   static volatile bool _blockSplitActive = false;
-  static int32_t _blockPartialL[2][M16_BLOCK_SIZE] __attribute__((aligned(32)));
-  static int32_t _blockPartialR[2][M16_BLOCK_SIZE] __attribute__((aligned(32)));
+  // Two slots let Core 1 render block N+1 while Core 0 combines, processes,
+  // and writes block N. Sequence tags prevent stale task notifications from
+  // being mistaken for the readiness of a reused slot.
+  static int32_t _blockPartialL[2][2][M16_BLOCK_SIZE] __attribute__((aligned(32)));
+  static int32_t _blockPartialR[2][2][M16_BLOCK_SIZE] __attribute__((aligned(32)));
   static int _blockPos[2];
+  static uint32_t _blockSequence[2] = {0, 0};
+  static std::atomic<uint32_t> _blockReadySequence[2]{{0}, {0}};
+  static std::atomic<uint32_t> _blockConsumedSequence[2]{{0}, {0}};
+  static volatile uint32_t _audioBlockSyncTimeouts = 0;
+  static volatile uint32_t _audioDmaWriteTimeouts = 0;
+
+  // Optional final processing stage for block-split audio. It runs on Core 0
+  // after the two voice partitions have been combined, immediately before the
+  // completed stereo frame is written to DMA. This is the safe place for
+  // stateful master effects that must see the full mix exactly once.
+  typedef void (*AudioPostProcessCallback)(int32_t& left, int32_t& right);
+  static AudioPostProcessCallback _audioPostProcessCallback = nullptr;
+
+  inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
+    _audioPostProcessCallback = callback;
+  }
+
+  inline uint32_t audioBlockSyncTimeoutCount() {
+    return _audioBlockSyncTimeouts;
+  }
+
+  inline uint32_t audioDmaWriteTimeoutCount() {
+    return _audioDmaWriteTimeouts;
+  }
 
   bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
     // One output frame produced per call on every path below (external direct,
@@ -776,15 +803,24 @@ int32_t clip16(int input);
     // Safety: if we are in dual-core block-split mode but running on Core 1,
     // we use the existing partition sync logic.
     if (_blockSplitActive && coreId == 1) {
+      uint32_t sequence = _blockSequence[1];
+      int slot = sequence & 1;
+      if (sequence >= 2) {
+        uint32_t expectedConsumed = sequence - 1;
+        while (_blockConsumedSequence[slot].load(std::memory_order_acquire) != expectedConsumed) {
+          ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        }
+      }
       int pos = _blockPos[1];
-      _blockPartialL[1][pos] = leftSample;
-      _blockPartialR[1][pos] = rightSample;
+      _blockPartialL[slot][1][pos] = leftSample;
+      _blockPartialR[slot][1][pos] = rightSample;
       pos++;
       _blockPos[1] = pos;
       if (pos < M16_BLOCK_SIZE) return true;
       _blockPos[1] = 0;
+      _blockReadySequence[slot].store(sequence + 1, std::memory_order_release);
+      _blockSequence[1] = sequence + 1;
       xTaskNotifyGive(audioCallback1Handle); // Wake Core 0
-      ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // Wait for DMA
       return true;
     }
 
@@ -794,9 +830,11 @@ int32_t clip16(int input);
     // counting it too would double the rate. audioBlockWrite never falls through
     // to i2s_write_samples on ESP32, so the two advance sites never overlap.
     m16AdvanceAudioFrame();
+    uint32_t sequence = _blockSequence[0];
+    int slot = sequence & 1;
     int pos = _blockPos[0];
-    _blockPartialL[0][pos] = leftSample;
-    _blockPartialR[0][pos] = rightSample;
+    _blockPartialL[slot][0][pos] = leftSample;
+    _blockPartialR[slot][0][pos] = rightSample;
     pos++;
     _blockPos[0] = pos;
 
@@ -807,22 +845,38 @@ int32_t clip16(int input);
     // Block is full — Process/Write
     _blockPos[0] = 0;
 
+    bool core1Ready = _blockSplitActive;
     if (_blockSplitActive) {
-      // Core 0: Wait for Core 1 then combine
-      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+      // Never let a failed/stalled producer permanently wedge the I2S stream.
+      // If Core 1 misses this generous deadline, emit Core 0's half-mix for one
+      // block. Sequence tags ensure a late notification cannot satisfy the
+      // rendezvous for a different block.
+      TickType_t waitStart = xTaskGetTickCount();
+      uint32_t expectedReady = sequence + 1;
+      while (_blockReadySequence[slot].load(std::memory_order_acquire) != expectedReady &&
+             (xTaskGetTickCount() - waitStart) < pdMS_TO_TICKS(100)) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
+      }
+      core1Ready = _blockReadySequence[slot].load(std::memory_order_acquire) == expectedReady;
+      if (!core1Ready) _audioBlockSyncTimeouts++;
     }
 
     // Combine and/or Format for DMA
     static uint8_t _blockBuf[M16_BLOCK_SIZE * 4];
     for (int i = 0; i < M16_BLOCK_SIZE; i++) {
-      int16_t outL, outR;
-      if (_blockSplitActive) {
-        outL = clip16(_blockPartialL[0][i] + _blockPartialL[1][i]);
-        outR = clip16(_blockPartialR[0][i] + _blockPartialR[1][i]);
+      int32_t outL, outR;
+      if (_blockSplitActive && core1Ready) {
+        outL = _blockPartialL[slot][0][i] + _blockPartialL[slot][1][i];
+        outR = _blockPartialR[slot][0][i] + _blockPartialR[slot][1][i];
       } else {
-        outL = clip16(_blockPartialL[0][i]);
-        outR = clip16(_blockPartialR[0][i]);
+        outL = _blockPartialL[slot][0][i];
+        outR = _blockPartialR[slot][0][i];
       }
+      if (_audioPostProcessCallback != nullptr) {
+        _audioPostProcessCallback(outL, outR);
+      }
+      outL = clip16(outL);
+      outR = clip16(outR);
       _blockBuf[i*4 + 0] = (uint8_t)(outR & 0xFF);
       _blockBuf[i*4 + 1] = (uint8_t)((outR >> 8) & 0xFF);
       _blockBuf[i*4 + 2] = (uint8_t)(outL & 0xFF);
@@ -830,11 +884,15 @@ int32_t clip16(int input);
     }
 
     size_t bytesWritten = 0;
-    bool result = (i2s_channel_write(tx_handle, _blockBuf, sizeof(_blockBuf),
-                                     &bytesWritten, portMAX_DELAY) == ESP_OK);
+    esp_err_t writeResult = i2s_channel_write(tx_handle, _blockBuf, sizeof(_blockBuf),
+                                              &bytesWritten, 100);
+    bool result = (writeResult == ESP_OK && bytesWritten == sizeof(_blockBuf));
+    if (!result) _audioDmaWriteTimeouts++;
     
     if (_blockSplitActive) {
-      xTaskNotifyGive(audioCallback2Handle); // Release Core 1
+      _blockConsumedSequence[slot].store(sequence + 1, std::memory_order_release);
+      _blockSequence[0] = sequence + 1;
+      xTaskNotifyGive(audioCallback2Handle); // Release this slot for reuse
     }
     return result;
   }
@@ -901,6 +959,12 @@ int32_t clip16(int input);
       _blockSplitActive  = false;
       _blockPos[0] = 0;
       _blockPos[1] = 0;
+      _blockSequence[0] = 0;
+      _blockSequence[1] = 0;
+      _blockReadySequence[0].store(0, std::memory_order_relaxed);
+      _blockReadySequence[1].store(0, std::memory_order_relaxed);
+      _blockConsumedSequence[0].store(0, std::memory_order_relaxed);
+      _blockConsumedSequence[1].store(0, std::memory_order_relaxed);
 
       // Core 0 audio task — always started.
       xTaskCreatePinnedToCore(

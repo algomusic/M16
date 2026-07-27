@@ -19,6 +19,15 @@ int noteDelta = 250;
 int envDelta = 4;
 int scale [] = {0, 2, 4, 0, 7, 9, 0, 0, 0, 0, 0};
 
+#if IS_ESP32()
+void audioPostProcess(int32_t &left, int32_t &right) {
+  int32_t outL, outR;
+  effect1.reverbStereoInterp(left, right, outL, outR);
+  left = outL;
+  right = outR;
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
   // tone
@@ -37,6 +46,10 @@ void setup() {
     effect1.setReverbLength(0.6); // 0-1 feedback level
     effect1.setReverbMix(0.7); // 0-1 balance between dry and wet signals
     effect1.initReverbSafe();
+  #endif
+  #if IS_ESP32()
+    // Run reverb after M16 combines the two per-core voice partitions.
+    setAudioPostProcessCallback(audioPostProcess);
   #endif
   // seti2sPins(38,39,40,41);
   // useInternalDAC(); // enable internal DAC output, call before audioStart()
@@ -77,11 +90,9 @@ void loop() {
 // audioPartitionOffset() / audioPartitionStride() split the voice array so
 // Core 0 owns even voices (0, 2, …) and Core 1 owns odd voices (1, 3, …),
 // preventing both cores from advancing the same filter/oscillator state.
-// Each core accumulates its partial mix and calls audioBlockWrite(), which
-// buffers M16_BLOCK_SIZE samples before synchronising: Core 1 signals Core 0,
-// Core 0 combines both partials and writes one DMA burst, then releases Core 1.
-// audioIsFinalizerCore() is true only on Core 0, so shared stateful effects
-// (reverb) run once on the finaliser path rather than once per partial.
+// Each core submits its partial mix through audioBlockWrite(). On ESP32, M16
+// combines both partitions and then invokes audioPostProcess() on the full mix,
+// so every voice feeds the shared reverb.
 // On single-core targets the partition helpers are no-ops and audioBlockWrite
 // behaves like i2s_write_samples().
 void audioUpdate() {
@@ -91,8 +102,8 @@ void audioUpdate() {
     voice *= 0.6; // compensate for poly mix
     mix += voice;
   }
-  #if IS_CAPABLE()
-  if (audioIsFinalizerCore()) {
+  #if IS_CAPABLE() && !IS_ESP32()
+  {
     int32_t L = mix, R = mix;
     effect1.reverbStereoInterp(mix, mix, L, R);
     audioBlockWrite(L, R);

@@ -24,6 +24,15 @@ SVF filters[voices];
 FX effect1;
 Seq sequences[voices];
 
+#if IS_ESP32()
+void audioPostProcess(int32_t &left, int32_t &right) {
+  int32_t outL, outR;
+  effect1.reverbStereo(clip16(left), clip16(right), outL, outR);
+  left = outL;
+  right = outR;
+}
+#endif
+
 void seqGen() {
   for (int i=0; i<voices; i++) {
     for (int j=0; j<16; j++) {
@@ -50,6 +59,11 @@ void setup() {
   effect1.setReverbSize(16);
   effect1.setReverbLength(0.25);
   effect1.setReverbMix(0.2);
+  effect1.initReverbSafe();
+  #if IS_ESP32()
+    // Run reverb after M16 combines the two per-core voice partitions.
+    setAudioPostProcessCallback(audioPostProcess);
+  #endif
   // seti2sPins(25, 27, 12, 21); // or similar if required
   // useInternalDAC();
   audioStart();
@@ -88,11 +102,9 @@ void loop() {
 // audioPartitionOffset() / audioPartitionStride() split the voice array so
 // Core 0 owns even voices (0, 2, …) and Core 1 owns odd voices (1, 3, …),
 // preventing both cores from advancing the same filter/oscillator state.
-// Each core accumulates its partial mix and calls audioBlockWrite(), which
-// buffers M16_BLOCK_SIZE samples before synchronising: Core 1 signals Core 0,
-// Core 0 combines both partials and writes one DMA burst, then releases Core 1.
-// audioIsFinalizerCore() is true only on Core 0, so shared stateful effects
-// (reverb) run once on the finaliser path rather than once per partial.
+// Each core submits its partial mix through audioBlockWrite(). On ESP32, M16
+// combines both partitions and then invokes audioPostProcess() on the full mix,
+// so every voice feeds the shared reverb.
 // On single-core targets the partition helpers are no-ops and audioBlockWrite
 // behaves like i2s_write_samples().
 void audioUpdate() {
@@ -100,8 +112,8 @@ void audioUpdate() {
   for (int i = audioPartitionOffset(); i < voices; i += audioPartitionStride()) {
     mix += ((filters[i].nextLPF(oscillators[i].next()) * ampEnvs[i].getValue()) >> 15) * 0.6;
   }
-  #if IS_CAPABLE() // bypass reverb on ESP8266
-  if (audioIsFinalizerCore()) {
+  #if IS_CAPABLE() && !IS_ESP32() // ESP32 reverb runs post-combine
+  {
     int32_t leftOut, rightOut;
     effect1.reverbStereo(clip16(mix), clip16(mix), leftOut, rightOut);
     audioBlockWrite(leftOut, rightOut);
