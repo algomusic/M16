@@ -67,6 +67,10 @@ public:
 	* Has no table specified - make sure to use setTable() after initialising
 	*/
   Osc() {
+    // Give every oscillator a distinct deterministic noise stream without
+    // consuming or locking the global audio PRNG. Users can override this via
+    // setNoiseSeed() when a reproducible stream is required.
+    noiseSalt = noiseHash((uint32_t)(uintptr_t)this ^ 0x9E3779B9u);
     #if IS_RP2040()
     registerForDualCore();
     #endif
@@ -118,8 +122,7 @@ public:
         uint32_t myPhase = storedPhase[coreNum];
         int idx;
         if (isNoise && !isCrackle) {
-          uint32_t scrambled = myPhase * 2654435761u;
-          idx = (scrambled >> 16) & (TABLE_SIZE - 1);
+          idx = noiseTableIndex(myPhase);
         } else {
           idx = (myPhase >> 16) & (TABLE_SIZE - 1);
         }
@@ -192,11 +195,9 @@ public:
         // Crackle: normal index, sparse impulses in table
         idx = (myPhase >> 16) & (TABLE_SIZE - 1);
       } else {
-        // Noise: scramble phase via multiplicative hash to avoid periodicity
-        // Replaces the non-atomic random-jump-on-wrap with a deterministic scatter
-        // that maps sequential phases to pseudo-random table positions
-        uint32_t scrambled = myPhase * 2654435761u; // Knuth multiplicative hash
-        idx = (scrambled >> 16) & (TABLE_SIZE - 1);
+        // Strong stateless avalanche hash: decorrelates adjacent phases while
+        // preserving the efficiency of one masked wavetable lookup.
+        idx = noiseTableIndex(myPhase);
       }
       sampVal = cachedBandPtr[idx];
 
@@ -208,7 +209,9 @@ public:
     #endif
 
     // Non-atomic fallback for pulse width mode (or single-core platforms)
-    int idx = phase_fractional >> 16;
+    int idx = (isNoise && !isCrackle)
+                ? noiseTableIndex(phase_fractional)
+                : (phase_fractional >> 16);
     sampVal = bandPtr[idx];
     incrementPhase();
     if (spreadActive) {
@@ -1369,9 +1372,17 @@ public:
   * @val Is true or false
   */
 	inline
-	void setNoise(bool val) {
-		isNoise = val;
-	}
+  void setNoise(bool val) {
+			isNoise = val;
+		}
+
+  /** Set the per-oscillator salt used by stateless noise indexing.
+   * Equal seeds produce equal lookup sequences; different seeds decorrelate
+   * oscillators that share the same noise wavetable.
+   */
+  inline void setNoiseSeed(uint32_t seed) {
+    noiseSalt = noiseHash(seed ? seed : 0x9E3779B9u);
+  }
 
   /** Set sample and hold mode.
   * When true, a random sample from the wavetable is selected once per period
@@ -1571,6 +1582,7 @@ public:
     for(int i=0; i<FULL_TABLE_SIZE; i++) {
       theTable[i] = audioRand(MAX_16 * 2) - MAX_16;
     }
+    removeNoiseMean(theTable);
   }
 
   /** Generate white noise in the local wavetable */
@@ -1580,6 +1592,7 @@ public:
     for(int i=0; i<FULL_TABLE_SIZE; i++) {
       waveTable [i] = audioRand(MAX_16 * 2) - MAX_16;
     }
+    removeNoiseMean(waveTable);
   }
 
   /** Generate grainly white noise, like a sample and hold wave
@@ -1594,6 +1607,7 @@ public:
       grainCnt++;
       if (grainCnt % grainSize == 0) randVal = audioRand(MAX_16 * 2) - MAX_16;
     }
+    removeNoiseMean(theTable);
   }
 
   /** Generate grainly white noise, like a sample and hold wave
@@ -1610,6 +1624,7 @@ public:
       grainCnt++;
       if (grainCnt % grainSize == 0) randVal = audioRand(MAX_16 * 2) - MAX_16;
     }
+    removeNoiseMean(waveTable);
   }
 
   /** Generate crackle noise
@@ -1727,6 +1742,34 @@ public:
   }
 
 private:
+  /** Fast 32-bit avalanche hash for stateless noise lookup. */
+  static inline uint32_t noiseHash(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7FEB352Du;
+    x ^= x >> 15;
+    x *= 0x846CA68Bu;
+    x ^= x >> 16;
+    return x;
+  }
+
+  inline uint32_t noiseTableIndex(uint32_t phase) const {
+    return noiseHash(phase + noiseSalt) & (TABLE_SIZE - 1);
+  }
+
+  /** Remove DC independently from all three wavetable bands. */
+  static void removeNoiseMean(int16_t* table) {
+    if (table == nullptr) return;
+    for (int segment = 0; segment < 3; segment++) {
+      int offset = segment * TABLE_SIZE;
+      int64_t sum = 0;
+      for (int i = 0; i < TABLE_SIZE; i++) sum += table[offset + i];
+      int32_t mean = (int32_t)(sum / TABLE_SIZE);
+      for (int i = 0; i < TABLE_SIZE; i++) {
+        table[offset + i] = (int16_t)clip16((int32_t)table[offset + i] - mean);
+      }
+    }
+  }
+
   // Spinlock for paired modulator+carrier advance (dual-core only).
   // Used by phModInt(Osc& modOsc, ...) to prevent cross-core phase mismatches.
   #if IS_ESP32() || IS_RP2040()
@@ -1761,6 +1804,7 @@ private:
   bool allocated = false;
   int32_t prevSampVal = 0;
   bool isNoise = false;
+  uint32_t noiseSalt = 0x9E3779B9u;
   bool isCrackle = false;
   bool isSandH = false;
   int16_t sandHValue = 0;
@@ -1881,22 +1925,19 @@ private:
           #endif
       }
 
-      // Fast path: normal wrapping using bitwise AND (TABLE_SIZE must be power of 2)
-      if (!isNoise && !isCrackle) {
+      // Noise uses stateless hashed lookup, so it can use the normal cheap
+      // phase wrap. Only crackle retains randomized wrap behavior.
+      if (!isCrackle) {
           phase_fractional &= TABLE_SIZE_FP_MASK; // Fast wrap: equivalent to modulo
           return;
       }
 
       // Noise / crackle modes (slower path, less common)
       if (phase_fractional >= TABLE_SIZE_FP_CONST) {
-          if (isNoise) {
+          if (audioRand(0x8000) > crackleAmnt) {
+              phase_fractional = 1 << 16;
+          } else {
               phase_fractional = audioRand(TABLE_SIZE) << 16;
-          } else { // crackle
-              if (audioRand(0x8000) > crackleAmnt) {
-                  phase_fractional = 1 << 16;
-              } else {
-                  phase_fractional = audioRand(TABLE_SIZE) << 16;
-              }
           }
       }
   }
