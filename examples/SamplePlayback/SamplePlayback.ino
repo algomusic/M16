@@ -117,6 +117,5 @@ void audioUpdate() {
     leftVal = (leftVal * panLevelL)>>10;
     rightVal = (rightVal * panLevelR)>>10;
     // Write samples to I2S DAC
-    i2s_write_samples(leftVal, rightVal);
+    audioBlockWrite(leftVal, rightVal);
 }
-

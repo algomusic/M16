@@ -42,5 +42,5 @@ void loop() {
 void audioUpdate() {
   shOsc.next(); // advance S&H phase
   int32_t sample = (triOsc.next() * vol) >> 10;
-  i2s_write_samples(sample, sample);
+  audioBlockWrite(sample, sample);
 }

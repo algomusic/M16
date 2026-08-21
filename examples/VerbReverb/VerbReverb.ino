@@ -69,5 +69,5 @@ void audioUpdate() {
   // reverb.reverbStereo(sample, sample, leftVal, rightVal);
 
   // i2s_write_samples(leftVal, rightVal);
-  i2s_write_samples(sample, sample);
+  audioBlockWrite(sample, sample);
 }

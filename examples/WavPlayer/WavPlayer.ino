@@ -91,5 +91,5 @@ void audioUpdate() {
     playHalf ^= 1;
     needFill  = true;
   }
-  i2s_write_samples(L, R);
+  audioBlockWrite(L, R);
 }

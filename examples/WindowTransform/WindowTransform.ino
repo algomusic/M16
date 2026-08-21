@@ -4,8 +4,7 @@
 #include "M16.h"
 #include "Osc.h"
 
-// int16_t sineWave[TABLE_SIZE]; // empty wavetable
-int16_t * sawtoothWave; // empty wavetable
+WaveTable sawtoothWave;
 Osc osc1; // experiment with different waveform combinations
 Osc lfo;
 
@@ -20,8 +19,7 @@ void setup() {
   osc1.sinGen(); // fill
   // osc1.sqrGen(); // try other waveshapes
   // osc1.triGen(); 
-  Osc::allocateWaveMemory(&sawtoothWave); // init
-  Osc::sawGen(sawtoothWave); // fill
+  sawtoothWave.sawGen(); // allocate and fill the shared wavetable
   osc1.setPitch(48);
   lfo.sinGen(); // fill
   lfo.setFreq(0.1); // Hertz
@@ -48,11 +46,11 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs 
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 */
 void audioUpdate() {
   // nextWTrans args: second wave, amount of second wave, duel window?, invert second wave?
   int32_t leftVal = osc1.nextWTrans(sawtoothWave, windowSize, false, false); 
   int32_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

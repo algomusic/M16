@@ -18,9 +18,9 @@
 #include "SVF.h"
 #include "Del.h"
 
-int16_t sineWave [TABLE_SIZE]; // empty wavetable
-int16_t sawtoothWave [TABLE_SIZE]; // empty wavetable
-Osc osc1(sineWave);
+WaveTable sineWave;
+WaveTable sawtoothWave;
+Osc osc1;
 Env ampEnv1;
 SVF filter1;
 Del delay1(500); // max delay time in ms
@@ -70,8 +70,9 @@ void handleCC(byte channel, byte controller, byte value) {
 void setup() {
   Serial.begin(115200);
   // audio
-  Osc::sinGen(sineWave); // fill
-  Osc::sawGen(sawtoothWave); // fill
+  sineWave.sinGen();
+  sawtoothWave.sawGen();
+  osc1.setTable(sineWave);
   osc1.setSpread(0.0001); // make more complex
   ampEnv1.setAttack(5);
   ampEnv1.setSustain(0.5);
@@ -131,7 +132,7 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs 
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 */
 void audioUpdate() {
   // nextWTrans args: second wave, amount of second wave, duel window?, invert second wave?
@@ -139,5 +140,5 @@ void audioUpdate() {
   leftVal = (leftVal + delay1.next(leftVal)) >> 1;
   leftVal = (leftVal * volume) >> 7;
   int32_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

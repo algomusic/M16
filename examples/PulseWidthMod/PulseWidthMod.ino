@@ -3,10 +3,7 @@
 #include "Osc.h"
 #include "SVF.h"
 
-// int16_t waveTable [TABLE_SIZE]; // empty wavetable
-// int16_t lfoTable  [TABLE_SIZE]; // empty wavetable
 Osc aOsc1, LFO1;
-// Osc LFO1(lfoTable); // use an oscillator as an LFO
 SVF filter;
 int16_t vol = 500; // 0 - 1024, 10 bit
 unsigned long msNow = millis();
@@ -18,8 +15,6 @@ float pVal = 0.5;
   
 void setup() {
   Serial.begin(115200);
-  // Osc::triGen(lfoTable); // fill wavetable
-  // Osc::sqrGen(waveTable); 
   aOsc1.sqrGen(); // fill wavetable, try other waves e.g. sinGen, sawGen, triGen
   LFO1.triGen();
   aOsc1.setPitch(57);
@@ -52,11 +47,11 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs 
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 */
 void audioUpdate() {
   int32_t leftVal = (filter.nextLPF(aOsc1.next()) * vol)>>10;
   // int32_t leftVal = (aOsc1.next() * vol)>>10;
   int32_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

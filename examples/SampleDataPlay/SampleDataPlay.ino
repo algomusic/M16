@@ -44,7 +44,7 @@ Samp samp;
 uint32_t lastTrigger = 0;
 
 void setup() {
-    Serial.begin();
+    Serial.begin(115200);
     seti2sPins(38, 39, 40, 41);
     // useInternalDAC(); // for ESP32s that have it
     // samp.setNearZeroSmooth(true);  // default threshold 1024, useful to smooth some clicks in internalDAC
@@ -66,7 +66,7 @@ void loop() {
 
 void audioUpdate() {
     int16_t s = samp.next();
-    i2s_write_samples(s, s);
+    audioBlockWrite(s, s);
 }
 
 // One-time header generation — uncomment the generateHeader() call in setup(),

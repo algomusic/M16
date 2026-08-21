@@ -71,10 +71,10 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 * Read the envelope per audio sample with getValue() for smooth, click-free slopes.
 */
 void audioUpdate() {
   int16_t signal = (aOsc1.next() * ampEnv.getValue())>>16;
-  i2s_write_samples(signal, signal);
+  audioBlockWrite(signal, signal);
 }

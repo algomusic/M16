@@ -6,7 +6,6 @@
 #include "Osc.h"
 #include "SVF.h"
 
-// int16_t waveTable [TABLE_SIZE]; // empty wavetable
 Osc aOsc1;
 SVF filter;
 int16_t vol = 1000; // 0 - 1024, 10 bit
@@ -47,10 +46,10 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs 
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 */
 void audioUpdate() {
   int32_t leftVal = (filter.nextLPF(aOsc1.next()) * vol)>>10;
   int32_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

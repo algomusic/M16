@@ -79,6 +79,6 @@ void audioUpdate() {
     // try reverbStereo2 is a smoother reverb that requires more processing power
     // effect1.reverbStereo2(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
   #endif
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
   // i2s_write_samples(oscVal, oscVal);
 }
