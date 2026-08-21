@@ -30,8 +30,7 @@ class All {
 
     /** Destructor */
     ~All() {
-      if (inputBuffer) { delete[] inputBuffer; inputBuffer = nullptr; }
-      if (outputBuffer) { delete[] outputBuffer; outputBuffer = nullptr; }
+      releaseBuffers();
     }
 
     /** Calculate the next Allpass filter sample, given an input signal.
@@ -202,6 +201,24 @@ class All {
     uint16_t bufferReadIndex = 0;
     bool usePSRAM = false;
 
+    void releaseBuffers() {
+      #if IS_ESP32()
+        if (usePSRAM) {
+          if (inputBuffer) free(inputBuffer);
+          if (outputBuffer) free(outputBuffer);
+        } else {
+          delete[] inputBuffer;
+          delete[] outputBuffer;
+        }
+      #else
+        delete[] inputBuffer;
+        delete[] outputBuffer;
+      #endif
+      inputBuffer = nullptr;
+      outputBuffer = nullptr;
+      usePSRAM = false;
+    }
+
     // Second-order allpass state
     int32_t so_x1 = 0;  // x[n-1]
     int32_t so_x2 = 0;  // x[n-2]
@@ -224,8 +241,7 @@ class All {
     /** Create both buffers with power-of-2 size */
     void createBuffers() {
       // Free existing buffers
-      if (inputBuffer) { delete[] inputBuffer; inputBuffer = nullptr; }
-      if (outputBuffer) { delete[] outputBuffer; outputBuffer = nullptr; }
+      releaseBuffers();
 
       // Calculate required size and round up to power of 2
       uint16_t requiredSize = (uint16_t)(allpassSize * 0.001f * SAMPLE_RATE);
@@ -239,7 +255,7 @@ class All {
       #if IS_ESP32()
         // Check if enough PSRAM for both buffers with headroom
         size_t totalSize = bufferSize_samples * sizeof(int16_t) * 2;
-        if (usePSRAM && isPSRAMAvailable() && getFreePSRAM() > totalSize + (totalSize / 10)) {
+        if (isPSRAMAvailable() && getFreePSRAM() > totalSize + (totalSize / 10)) {
           inputBuffer = psramAllocInt16(bufferSize_samples, nullptr);
           outputBuffer = psramAllocInt16(bufferSize_samples, nullptr);
           if (!inputBuffer || !outputBuffer) {
@@ -247,6 +263,8 @@ class All {
             if (inputBuffer) { free(inputBuffer); inputBuffer = nullptr; }
             if (outputBuffer) { free(outputBuffer); outputBuffer = nullptr; }
             usePSRAM = false;
+          } else {
+            usePSRAM = true;
           }
         }
         if (!inputBuffer) {
