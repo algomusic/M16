@@ -66,6 +66,42 @@ class FX {
       return softClipTube(sample_in, amount);
     }
 
+    /** Transparent threshold-based soft limiter.
+     * Samples below the threshold pass through unchanged. Above it, a quadratic
+     * knee starts with unity slope and gradually flattens to full scale, avoiding
+     * the continuous coloration of the saturation-oriented softClip methods.
+     * The knee reaches full scale at threshold + 2 * remaining headroom; larger
+     * overloads remain limited without foldback.
+     * @param sample_in Input sample; may exceed the 16-bit output range.
+     * @param threshold Linear-region limit from 0.0 to 1.0 (default 0.85).
+     */
+    inline
+    int16_t softLimit(int32_t sample_in, float threshold = 0.85f) {
+      threshold = max(0.0f, min(1.0f, threshold));
+      const float thresholdLevel = threshold * MAX_16;
+      const float magnitude = (sample_in >= 0)
+          ? (float)sample_in : -(float)sample_in;
+
+      if (magnitude <= thresholdLevel) return (int16_t)sample_in;
+      if (threshold >= 1.0f) return clip16(sample_in);
+
+      const float headroom = MAX_16 - thresholdLevel;
+      const float kneePosition = (magnitude - thresholdLevel) / headroom;
+      float limitedMagnitude;
+      if (kneePosition >= 2.0f) {
+        limitedMagnitude = MAX_16;
+      } else {
+        // y = x - x^2/4 has slope 1 at the knee entrance and slope 0
+        // where it reaches full scale (x=2).
+        const float shaped = kneePosition - 0.25f * kneePosition * kneePosition;
+        limitedMagnitude = thresholdLevel + headroom * shaped;
+      }
+
+      int32_t output = (int32_t)limitedMagnitude;
+      if (sample_in < 0) output = -output;
+      return (int16_t)output;
+    }
+
     /** Soft Clipping (atan)
     * Distort sound based on input level and depth amount
     * Pass in a signal and depth amount.
@@ -268,59 +304,43 @@ class FX {
       return clip16(clipOut * MAX_16);
     }
 
-    /** Set compression parameters (call when parameters change, not every sample)
+    /** Set transparent compression parameters (call when parameters change, not every sample)
     *  @param threshold is the threshold value between 0.0 and 1.0
     *  @param ratio is the ratio value, > 1.0, typically 2 to 4
-    *  @param attackMs is attack time in milliseconds (default 5ms for percussive)
-    *  @param releaseMs is release time in milliseconds (default 100ms for percussive)
+    *  @param attackMs detector attack time in milliseconds
+    *  @param releaseMs detector release time in milliseconds
+    *  @param makeupGain explicit output gain; defaults to transparent unity
     */
     inline
-    void setCompression(float threshold, float ratio, float attackMs = 5.0f, float releaseMs = 100.0f) {
-      compThreshold = threshold;
-      compRatio = ratio;
-      compThresh = (int16_t)(threshold * MAX_16);
-      compInvRatio = 1.0f / ratio;
-      compOneMinusInvRatio = 1.0f - compInvRatio;  // Pre-compute: eliminates 1 sub + 1 mul per sample
-      compGainCompensation = 1.0f + (1.0f - threshold * (1.0f + compInvRatio));
+    void setCompression(float threshold, float ratio, float attackMs = 5.0f,
+                        float releaseMs = 100.0f, float makeupGain = 1.0f) {
+      compThreshold = max(0.0f, min(1.0f, threshold));
+      compRatio = max(1.0f, ratio);
+      compThreshInt = (int32_t)(compThreshold * MAX_16 + 0.5f);
+      compInvRatioQ16 = (uint32_t)((1.0f / compRatio) * 65536.0f + 0.5f);
+      compMakeupGain = max(0.0f, min(4.0f, makeupGain));
+      compMakeupGainQ16 = (uint32_t)(compMakeupGain * 65536.0f + 0.5f);
       // Calculate envelope coefficients from time constants
       // coeff = exp(-1 / (time_seconds * sample_rate))
       float attackSamples = attackMs * 0.001f * SAMPLE_RATE;
       float releaseSamples = releaseMs * 0.001f * SAMPLE_RATE;
       compAttackCoeff = attackSamples > 0 ? fastExpNeg(1.0f / attackSamples) : 0.0f;
       compReleaseCoeff = releaseSamples > 0 ? fastExpNeg(1.0f / releaseSamples) : 0.0f;
-      // Pre-compute one-minus coefficients: eliminates 2 float subtractions per sample
       compOneMinusAttack = 1.0f - compAttackCoeff;
       compOneMinusRelease = 1.0f - compReleaseCoeff;
+      compAttackStepQ24 = (uint32_t)(compOneMinusAttack * 16777216.0f + 0.5f);
+      compReleaseStepQ24 = (uint32_t)(compOneMinusRelease * 16777216.0f + 0.5f);
     }
 
-    /** Compressor with gain compensation and attack/release envelope
+    /** Transparent mono peak compressor.
+    * Uses a smoothed peak detector, applies no automatic makeup gain, and
+    * returns int32_t without hard clipping so a limiter can safely follow it.
     *  @param sample is the input sample value
     *  Call setCompression() first to set threshold, ratio, attack and release times
     */
     inline
-    int16_t compression(int32_t sample) {
-      int16_t absSample = sample > 0 ? sample : -sample;
-
-      // Calculate target gain reduction
-      float targetGainReduction = 0.0f;
-      if (absSample > compThresh) {
-        // gain_reduction = excess * (1 - 1/ratio) / level
-        // compOneMinusInvRatio pre-computed in setCompression()
-        targetGainReduction = (float)(absSample - compThresh) * compOneMinusInvRatio / (float)absSample;
-      }
-      // Apply envelope with attack/release (one-minus coeffs pre-computed in setCompression)
-      if (targetGainReduction > compEnvelope) {
-        compEnvelope = compAttackCoeff * compEnvelope + compOneMinusAttack * targetGainReduction;
-      } else {
-        compEnvelope = compReleaseCoeff * compEnvelope + compOneMinusRelease * targetGainReduction;
-      }
-      // Apply gain reduction and makeup gain
-      float gain = (1.0f - compEnvelope) * compGainCompensation;
-      int32_t output = (int32_t)(sample * gain);
-      // Clip to prevent overflow
-      if (output > MAX_16) output = MAX_16;
-      if (output < MIN_16) output = MIN_16;
-      return (int16_t)output;
+    int32_t compression(int32_t sample) {
+      return processCompressionSample(sample, compEnvelopeQ8);
     }
 
     /** Left channel compressor with independent envelope state
@@ -328,22 +348,8 @@ class FX {
     *  Call setCompression() first to set threshold, ratio, attack and release times
     */
     inline
-    int16_t compressionL(int32_t sample) {
-      int32_t absSample = sample > 0 ? sample : -sample;
-      float targetGainReduction = 0.0f;
-      if (absSample > compThresh) {
-        targetGainReduction = (float)(absSample - compThresh) * compOneMinusInvRatio / (float)absSample;
-      }
-      if (targetGainReduction > compEnvelopeL) {
-        compEnvelopeL = compAttackCoeff * compEnvelopeL + compOneMinusAttack * targetGainReduction;
-      } else {
-        compEnvelopeL = compReleaseCoeff * compEnvelopeL + compOneMinusRelease * targetGainReduction;
-      }
-      float gain = (1.0f - compEnvelopeL) * compGainCompensation;
-      int32_t output = (int32_t)(sample * gain);
-      if (output > MAX_16) output = MAX_16;
-      if (output < MIN_16) output = MIN_16;
-      return (int16_t)output;
+    int32_t compressionL(int32_t sample) {
+      return processCompressionSample(sample, compEnvelopeLQ8);
     }
 
     /** Right channel compressor with independent envelope state
@@ -351,22 +357,23 @@ class FX {
     *  Call setCompression() first to set threshold, ratio, attack and release times
     */
     inline
-    int16_t compressionR(int32_t sample) {
-      int32_t absSample = sample > 0 ? sample : -sample;
-      float targetGainReduction = 0.0f;
-      if (absSample > compThresh) {
-        targetGainReduction = (float)(absSample - compThresh) * compOneMinusInvRatio / (float)absSample;
-      }
-      if (targetGainReduction > compEnvelopeR) {
-        compEnvelopeR = compAttackCoeff * compEnvelopeR + compOneMinusAttack * targetGainReduction;
-      } else {
-        compEnvelopeR = compReleaseCoeff * compEnvelopeR + compOneMinusRelease * targetGainReduction;
-      }
-      float gain = (1.0f - compEnvelopeR) * compGainCompensation;
-      int32_t output = (int32_t)(sample * gain);
-      if (output > MAX_16) output = MAX_16;
-      if (output < MIN_16) output = MIN_16;
-      return (int16_t)output;
+    int32_t compressionR(int32_t sample) {
+      return processCompressionSample(sample, compEnvelopeRQ8);
+    }
+
+    /** Stereo-linked transparent compressor. The louder channel drives one
+     * detector and the same gain is applied to both channels, preserving image.
+     */
+    inline
+    void compressionStereo(int32_t inputL, int32_t inputR,
+                           int32_t &outputL, int32_t &outputR) {
+      int32_t magnitudeL = compressionMagnitude(inputL);
+      int32_t magnitudeR = compressionMagnitude(inputR);
+      int32_t magnitude = max(magnitudeL, magnitudeR);
+      updateCompressionDetectorInt(magnitude, compEnvelopeStereoQ8);
+      uint32_t gainQ16 = compressionGainQ16(compEnvelopeStereoQ8);
+      outputL = safeCompressionScaleInt(inputL, gainQ16);
+      outputR = safeCompressionScaleInt(inputR, gainQ16);
     }
 
     /** Compressor with gain compensation (legacy version - parameters computed every sample)
@@ -494,7 +501,8 @@ class FX {
       }
       M16_ATOMIC_GUARD(_fxLock, {
         processReverb(audioIn, audioIn);
-        reverbCached = clip16(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>12) + ((revP2 * reverbMix)>>12));
+        // Each mono wet branch contributes half, so their sum has unity gain.
+        reverbCached = clip16(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11) + ((revP2 * reverbMix)>>11));
       });
       return reverbCached;
     }
@@ -543,8 +551,8 @@ class FX {
       audioOutRight = reverbCacheR;
       M16_ATOMIC_GUARD(_fxLock, {
         processReverb(clip16(audioInLeft), clip16(audioInRight));
-        audioOutLeft = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
-        audioOutRight = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
+        audioOutLeft = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>10));
+        audioOutRight = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>10));
         reverbCacheL = audioOutLeft;
         reverbCacheR = audioOutRight;
       });
@@ -601,8 +609,8 @@ class FX {
         if (reverbInterpToggle) {
           // Process reverb this sample
           processReverb(clip16(audioInLeft), clip16(audioInRight));
-          outL = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
-          outR = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
+          outL = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>10));
+          outR = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>10));
           reverbInterpPrevL = outL;
           reverbInterpPrevR = outR;
         } else {
@@ -676,8 +684,8 @@ class FX {
           int32_t summedMono = (audioInLeft + audioInRight) >> 1;
           int32_t ap = allpass2.next(allpass1.next(summedMono));
           processReverb((audioInLeft + ap) >> 1, clip16(audioInRight + ap) >> 1);
-          outL = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11));
-          outR = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>11));
+          outL = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>10));
+          outR = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>10));
           reverbCacheL = outL;
           reverbCacheR = outR;
         } else {
@@ -811,9 +819,12 @@ class FX {
         initChorus();
       }
       M16_ATOMIC_GUARD_BLOCKING(_fxLock, {
+        // Both delay lines use the same triangle LFO. Inverting the right-hand
+        // modulation places it 180 degrees out of phase with the left, so the
+        // stereo image moves in opposite directions instead of pulsing as one.
         float chorusLfoVal = chorusLfo.next() * MAX_16_INV;
         chorusDelay.setTime(chorusDelayTime + chorusLfoVal * chorusLfoWidth);
-        chorusDelay2.setTime(chorusDelayTime2 + chorusLfoVal * chorusLfoWidth);
+        chorusDelay2.setTime(chorusDelayTime2 - chorusLfoVal * chorusLfoWidth);
         int32_t delVal = chorusDelay.next(audioInLeft);
         int32_t delVal2 = chorusDelay2.next(audioInRight);
         int32_t inVal = (audioInLeft * (chorusMixInput))>>10;
@@ -825,6 +836,13 @@ class FX {
         int32_t sumR = inVal2 + delVal2;
         int32_t wetL = clip16((sumL * chorusMixNorm)>>10);
         int32_t wetR = clip16((sumR * chorusMixNorm)>>10);
+        // Mid/side width control applies only to the wet chorus. The dry path
+        // remains unchanged, so increasing spread does not move its centre.
+        int32_t wetMid = (wetL + wetR) >> 1;
+        int32_t wetSide = (wetL - wetR) >> 1;
+        wetSide = (wetSide * _chorusSpread) >> 10;
+        wetL = clip16(wetMid + wetSide);
+        wetR = clip16(wetMid - wetSide);
         // Dry/wet blend controlled by setChorusMix()
         audioOutLeft  = ((audioInLeft  * (1024 - _chorusMixLevel)) >> 10) + ((wetL * _chorusMixLevel) >> 10);
         audioOutRight = ((audioInRight * (1024 - _chorusMixLevel)) >> 10) + ((wetR * _chorusMixLevel) >> 10);
@@ -838,6 +856,16 @@ class FX {
     void setChorusMix(float mix) {
       if (!chorusInitiated) initChorus();
       _chorusMixLevel = (int)(constrain(mix, 0.0f, 1.0f) * 1024);
+    }
+
+    /** Set stereo width of the wet chorus signal.
+    * @spread 0.0 = mono wet signal, 0.5 = natural width (default),
+    *         1.0 = exaggerated stereo width
+    */
+    inline
+    void setChorusSpread(float spread) {
+      if (!chorusInitiated) initChorus();
+      _chorusSpread = (int)(constrain(spread, 0.0f, 1.0f) * 2048.0f);
     }
 
     /** Set the chorus effect depth
@@ -862,7 +890,7 @@ class FX {
     }
 
     /** Set the chorus rate
-    * @rate pitch frequency of chorus LFO, in hertz. Typically 0.01 to 3.0
+    * @rate pitch frequency of chorus LFO, in hertz. Typically 0.01 to 5.0
     */
     inline
     void setChorusRate(float rate) {
@@ -989,10 +1017,11 @@ class FX {
     float waveShaperStepIncInv;
     bool chorusInitiated = false;
     int _chorusMixLevel = 512; // 0-1024, dry/wet blend for chorusStereo() and chorus()
+    int _chorusSpread = 1024; // Public range 0.0-1.0; 0.5 = unchanged wet mid/side width
     int chorusDelayTime = 38;
     int chorusDelayTime2 = 28;
-    float chorusLfoRate = 0.65; // hz
-    float chorusLfoWidth = 0.5; // ms
+    float chorusLfoRate = 0.5; // Hz; default stereo chorus modulation rate
+    float chorusLfoWidth = 0.8; // ms
     int chorusMixInput = 600; // 0 - 1024
     int chorusMixDelay = 800; // 0 - 1024
     int chorusMixNorm = 731; // normalization factor to prevent clipping (1024 * 1024 / (600 + 800))
@@ -1018,17 +1047,60 @@ class FX {
     // Compression state
     float compThreshold = 0.5f;        // Cached threshold (0.0-1.0)
     float compRatio = 4.0f;            // Cached ratio
-    int16_t compThresh = 16383;        // Threshold in samples (threshold * MAX_16)
-    float compInvRatio = 0.25f;        // 1.0 / ratio
-    float compOneMinusInvRatio = 0.75f; // 1.0 - 1.0/ratio (pre-computed, saves 1 sub + 1 mul per sample)
-    float compGainCompensation = 1.0f; // Makeup gain
+    float compMakeupGain = 1.0f;       // Explicit makeup; unity by default
     float compAttackCoeff = 0.9955f;   // Attack smoothing coeff (~5ms at 44.1kHz)
     float compReleaseCoeff = 0.9998f;  // Release smoothing coeff (~100ms at 44.1kHz)
     float compOneMinusAttack = 0.0045f;  // 1.0 - compAttackCoeff (pre-computed)
     float compOneMinusRelease = 0.0002f; // 1.0 - compReleaseCoeff (pre-computed)
-    float compEnvelope = 0.0f;         // Mono envelope state
-    float compEnvelopeL = 0.0f;        // Left channel envelope state
-    float compEnvelopeR = 0.0f;        // Right channel envelope state
+    // Fixed-point compressor hot path. The detector retains eight fractional
+    // sample bits and uses Q24 coefficients; ratio/makeup/gain use Q16.
+    int32_t compThreshInt = 16384;
+    uint32_t compInvRatioQ16 = 16384;       // 1 / 4
+    uint32_t compMakeupGainQ16 = 65536;     // unity
+    uint32_t compAttackStepQ24 = 75497;     // 0.0045
+    uint32_t compReleaseStepQ24 = 3355;     // 0.0002
+    int64_t compEnvelopeQ8 = 0;
+    int64_t compEnvelopeLQ8 = 0;
+    int64_t compEnvelopeRQ8 = 0;
+    int64_t compEnvelopeStereoQ8 = 0;
+
+    inline int32_t compressionMagnitude(int32_t sample) {
+      if (sample >= 0) return sample;
+      if (sample == INT32_MIN) return INT32_MAX;
+      return -sample;
+    }
+
+    inline void updateCompressionDetectorInt(int32_t magnitude, int64_t &detectorQ8) {
+      int64_t deltaQ8 = ((int64_t)magnitude << 8) - detectorQ8;
+      uint32_t stepQ24 = deltaQ8 > 0 ? compAttackStepQ24 : compReleaseStepQ24;
+      detectorQ8 += (deltaQ8 * stepQ24) >> 24;
+    }
+
+    inline uint32_t compressionGainQ16(int64_t detectorQ8) {
+      int32_t detector = (int32_t)(detectorQ8 >> 8);
+      uint32_t gainQ16 = compMakeupGainQ16;
+      if (detector > compThreshInt && detector > 0) {
+        int32_t over = detector - compThreshInt;
+        int32_t compressedLevel = compThreshInt +
+            (int32_t)(((int64_t)over * compInvRatioQ16) >> 16);
+        uint32_t compressionQ16 =
+            (uint32_t)(((uint64_t)compressedLevel << 16) / (uint32_t)detector);
+        gainQ16 = (uint32_t)(((uint64_t)compressionQ16 * compMakeupGainQ16) >> 16);
+      }
+      return gainQ16;
+    }
+
+    inline int32_t safeCompressionScaleInt(int32_t sample, uint32_t gainQ16) {
+      int64_t output = ((int64_t)sample * gainQ16) >> 16;
+      if (output > INT32_MAX) return INT32_MAX;
+      if (output < INT32_MIN) return INT32_MIN;
+      return (int32_t)output;
+    }
+
+    inline int32_t processCompressionSample(int32_t sample, int64_t &detectorQ8) {
+      updateCompressionDetectorInt(compressionMagnitude(sample), detectorQ8);
+      return safeCompressionScaleInt(sample, compressionGainQ16(detectorQ8));
+    }
 
     /** Recalculate chorus normalization factor to prevent clipping */
     void updateChorusMixNorm() {
@@ -1243,7 +1315,7 @@ class FX {
       #else
         chorusLfoTable = new int16_t[FULL_TABLE_SIZE];
       #endif
-      Osc::sinGen(chorusLfoTable); // fill the wavetable
+      Osc::triGen(chorusLfoTable); // shared triangle LFO for both delay lines
       chorusLfo.setTable(chorusLfoTable);
       chorusLfo.setFreq(chorusLfoRate);
       chorusDelay.setMaxDelayTime(chorusDelayTime + 3);
