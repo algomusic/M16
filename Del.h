@@ -34,6 +34,18 @@ private:
   int16_t feedbackLevel = 512; // 0 to 1024
   bool usePSRAM = false;
 
+  void releaseBuffer() {
+    if (!delayBuffer) return;
+    #if IS_ESP32()
+      if (usePSRAM) free(delayBuffer);
+      else delete[] delayBuffer;
+    #else
+      delete[] delayBuffer;
+    #endif
+    delayBuffer = nullptr;
+    usePSRAM = false;
+  }
+
 public:
   /** Constructor.
 	* Create but don't setup delay.
@@ -60,7 +72,7 @@ public:
    * @param maxDelayTime The maximum delay time in milliseconds
    */
   void setMaxDelayTime(unsigned int maxDelayTime) {
-    if (delayBuffer) { delete[] delayBuffer; delayBuffer = nullptr; }
+    releaseBuffer();
     maxDelayTime_ms = max((unsigned int)0, maxDelayTime);
 
     const unsigned int MAX_SAFE_DELAY_MS = 4294967295U / SAMPLE_RATE;  // ~97,000ms at 44.1kHz
@@ -78,13 +90,16 @@ public:
     #if IS_ESP32()
       // Try PSRAM allocation with size checking (silent for delay buffers)
       delayBuffer = psramAllocInt16(delayBufferSize_samples, nullptr);
+      usePSRAM = delayBuffer != nullptr;
       if (!delayBuffer) {
         // Fallback to regular RAM — use nothrow so a failed alloc returns nullptr
         // instead of calling abort() and triggering SW_CPU_RESET on low-heap boards
         delayBuffer = new(std::nothrow) int16_t[delayBufferSize_samples];
+        usePSRAM = false;
       }
     #else
       delayBuffer = new(std::nothrow) int16_t[delayBufferSize_samples];
+      usePSRAM = false;
     #endif
 
     if (!delayBuffer) {
@@ -104,7 +119,7 @@ public:
   }
 
   ~Del() {
-    if (delayBuffer) { delete[] delayBuffer; delayBuffer = nullptr; }
+    releaseBuffer();
   }
 
   /** Return the size of the delay buffer in ms */
@@ -262,7 +277,8 @@ public:
 	void write(int inValue, int pos) {
     if (!delayBuffer) return;  
     if (delayBufferSize_samples == 0) return;  // Prevent divide by zero
-    delayBuffer[max(0, min((int)delayBufferSize_samples, pos))] = min(MAX_16, max(MIN_16, inValue));
+    const int safePos = max(0, min((int)delayBufferSize_samples - 1, pos));
+    delayBuffer[safePos] = min(MAX_16, max(MIN_16, inValue));
   }
 
   /** Write to the buffer and increment the write index
