@@ -186,6 +186,20 @@ public:
     return prevOutput_;
   }
 
+  /** Calculate the next bandpass sample without acquiring the state lock.
+   * Use only when one audio core exclusively owns this filter instance, such
+   * as an even/odd voice partition. Parameter coefficients are still loaded
+   * atomically, so control-rate setFreq()/setRes() updates remain visible.
+   * @param input Audio sample
+   * @return Filtered sample
+   */
+  inline int16_t nextBPFUnlocked(int32_t input) {
+    input = clip16(input);
+    calcFilter(input);
+    prevOutput_ = clip16(band);
+    return prevOutput_;
+  }
+
   /** @return Current bandpass output without advancing filter */
   inline int16_t nextBPF() {
     return clip16(band);
