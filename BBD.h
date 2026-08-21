@@ -42,6 +42,7 @@ private:
 
   int16_t delayLevel = 1024;
   int16_t _targetDelayLevel = 1024;
+  int16_t delayMix = 1024;       // 0=dry, 1024=wet; wet default preserves old API
   int16_t feedbackLevel = 512;
   int16_t _targetFeedbackLevel = 512;
   bool delayFeedback = false;
@@ -179,6 +180,20 @@ public:
   /** @return Output level (0.0 to 1.0) */
   float getLevel() {
     return _targetDelayLevel * 0.0009765625f;
+  }
+
+  /** Set the delay dry/wet mix.
+   * @param mix 0.0 is fully dry, 1.0 is fully wet. Defaults to 1.0 so
+   * existing code continues to receive only the delayed signal from next().
+   */
+  void setDelayMix(float mix) {
+    delayMix = min((int32_t)1024,
+                   max((int32_t)0, (int32_t)(mix * 1024.0f)));
+  }
+
+  /** @return Delay dry/wet mix, from 0.0 to 1.0. */
+  float getDelayMix() {
+    return delayMix * 0.0009765625f;
   }
 
   /** @param state true to enable feedback */
@@ -393,7 +408,95 @@ public:
     smoothedOut += ((holdValue - smoothedOut) * smoothCoeff) >> 15;
     lastResult = (int16_t)smoothedOut;
     #endif
-    return lastResult;
+    // Preserve the original wet-only output exactly at the default setting.
+    if (delayMix >= 1024) return lastResult;
+    if (delayMix <= 0) return clip16(inValue);
+    return clip16(((inValue * (1024 - delayMix)) >> 10)
+                + ((lastResult * delayMix) >> 10));
+  }
+
+  /** Process one sample without acquiring the BBD state lock.
+   * Use only when exactly one audio core owns and advances this instance, such
+   * as a master delay inside the post-combine callback. Parameter targets may
+   * still be changed at control rate; naturally aligned target reads/writes are
+   * atomic on supported 32-bit platforms.
+   * @param inValue Input sample
+   * @return Delayed output sample
+   */
+  inline int16_t nextUnlocked(int32_t inValue) {
+    // Slew all hot parameters to avoid buffer-seam clicks on adjustment.
+    if (scanRate != _targetScanRate) {
+      if (_targetScanRate > scanRate) {
+        uint32_t d = _targetScanRate - scanRate;
+        scanRate += (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
+      } else {
+        uint32_t d = scanRate - _targetScanRate;
+        scanRate -= (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
+      }
+      uint32_t rfs = scanRate < 65536U ? scanRate : 65536U;
+      smoothCoeff = (uint16_t)(2048U + ((rfs * 6144U) >> 16));
+    }
+    if (delayLevel != _targetDelayLevel) {
+      int16_t d = _targetDelayLevel - delayLevel;
+      delayLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
+    }
+    if (feedbackLevel != _targetFeedbackLevel) {
+      int16_t d = _targetFeedbackLevel - feedbackLevel;
+      feedbackLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
+    }
+
+    // Accumulate inputs for anti-aliasing at low scan rates.
+    inputAccum += inValue;
+    inputCount++;
+    uint32_t prevPhase = phase;
+    phase += scanRate;
+    uint16_t prevPos = prevPhase >> 16;
+    uint16_t currPos = phase >> 16;
+    if (phase >= (BUFFER_SIZE << 16)) {
+      phase -= (BUFFER_SIZE << 16);
+      currPos = (currPos >= BUFFER_SIZE) ? currPos - BUFFER_SIZE : currPos;
+    }
+    int16_t steps = currPos - prevPos;
+    if (steps < 0) steps += BUFFER_SIZE;
+
+    if (steps > 0) {
+      int32_t outValue = delayBuffer[bufferIndex];
+      if (filtered > 0) {
+        if (filtered == 1) {
+          outValue = (outValue * 3 + prevOutValue) >> 2;
+        } else if (filtered == 2) {
+          outValue = (outValue + prevOutValue) >> 1;
+        } else if (filtered == 3) {
+          outValue = (outValue + prevOutValue * 3) >> 2;
+        } else {
+          outValue = (outValue + prevOutValue * 7) >> 3;
+        }
+        prevOutValue = outValue;
+      }
+      holdValue = (outValue * delayLevel) >> 10;
+
+      int32_t writeValue;
+      if (inputCount > 0) {
+        writeValue = inputAccum / inputCount;
+        inputAccum = 0;
+        inputCount = 0;
+      } else {
+        writeValue = inValue;
+      }
+      if (delayFeedback) {
+        writeValue += (holdValue * feedbackLevel) >> 10;
+        writeValue = (writeValue * 251) >> 8;
+      }
+      delayBuffer[bufferIndex] = softSaturate(writeValue);
+      bufferIndex = (bufferIndex + steps) & BUFFER_MASK;
+    }
+
+    smoothedOut += ((holdValue - smoothedOut) * smoothCoeff) >> 15;
+    lastResult = (int16_t)smoothedOut;
+    if (delayMix >= 1024) return lastResult;
+    if (delayMix <= 0) return clip16(inValue);
+    return clip16(((inValue * (1024 - delayMix)) >> 10)
+                + ((lastResult * delayMix) >> 10));
   }
 
   /** @return Current hold value */
