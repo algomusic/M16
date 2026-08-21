@@ -14,8 +14,8 @@ M16 is a 16-bit audio synthesis library for ESP8266, ESP32, and RP2040 (Raspberr
 | ESP32 | FreeRTOS dual-core | 2 | Configurable pins, PSRAM auto-detection, internal DAC support |
 | ESP32-S2 | FreeRTOS single-core | 1 | Internal DAC support (GPIO17/18), no PSRAM on most boards |
 | ESP32-S3/C3 | FreeRTOS | 1-2 | No internal DAC, external I2S only |
-| RP2040 (Pico) | Multicore + I2S | 2 | Cooperative scheduling on Core 0 |
-| RP2035/RP2350 (Pico 2) | Multicore + I2S | 2 | Detected via updated `IS_RP2040()` macro |
+| RP2040 (Pico) | Multicore + I2S | 2 | Dedicated Core 1 by default; cooperative block worker available on Core 0 |
+| RP2350 (Pico 2) | Multicore + I2S | 2 | Dedicated Core 1 by default; automatic doorbell block worker with double buffering |
 
 ## M16 Library Summary                                                                                                     
                                                                                                                           
@@ -37,8 +37,9 @@ M16 is a 16-bit audio synthesis library for ESP8266, ESP32, and RP2040 (Raspberr
   - Seq.h - Step sequencer with euclidean rhythms                                                                         
                                                                                                                           
   Key Architecture Points:                                                                                                
-  - Requires audioUpdate() function in every sketch ending with i2s_write_samples(left, right) or audioBlockWrite(L, R)  
+  - Requires an `audioUpdate()` function in every sketch; new sketches should end it with `audioBlockWrite(L, R)`
   - ESP32 external I2S can run the audio callback on one dedicated core or as a pipelined two-core voice partition
+  - Pico-family boards default to dedicated Core 1 rendering; Pico 2 offers an automatic block worker and Pico cooperative service
   - Polyphonic sketches with independent voice arrays use audioPartitionOffset/Stride + audioBlockWrite
   - Stateful master effects use setAudioPostProcessCallback() so they process the combined mix exactly once
   - Serial/state-dependent graphs (FM cascades, shared feedback networks) use setIsDualCore(false) + audioBlockWrite
@@ -74,24 +75,36 @@ void setup() {
 
 void audioUpdate() {  // Called continuously from audio tasks
   int16_t sample = osc.next();
-  i2s_write_samples(sample, sample);  // Left, Right
+  audioBlockWrite(sample, sample);  // Left, Right
 }
 ```
 
 **Thread Safety:**
-- ESP32 external I2S runs `audioUpdate()` on both cores when `isDualCore=true` (the default), or only on Core 0 after `setIsDualCore(false)`
+- ESP32 external I2S defaults to one dedicated audio task on Core 0. Calling `setIsDualCore(true)` before `audioStart()` explicitly enables block-partitioned dual-core rendering for independent voice arrays.
 - ESP32 internal DAC uses a single audio task (avoids buffer interleaving)
 - `M16_ATOMIC_GUARD(lock, code)` macro for non-blocking critical sections
 - `M16_ATOMIC_GUARD_BLOCKING(lock, code)` for blocking critical sections. **Note:** Preferred for deterministic filtering (`SVF2`, `Bob`) and delays (`BBD`, `Del`) to prevent 1-sample hold artifacts.
 
+**Execution defaults:**
+
+| Platform/output | Default execution | Explicit override |
+|-----------------|-------------------|-------------------|
+| ESP32 external I2S | One dedicated audio task on Core 0; Core 1 remains available to Arduino `loop()`, UI, MIDI, USB, and system work | `setIsDualCore(true)` enables block-partitioned rendering when the sketch divides independent voice state with the partition helpers |
+| ESP32/ESP32-S2 internal DAC | One DAC audio task regardless of the partition setting | None required; `audioBlockWrite()` forwards through the internal-DAC accumulation path |
+| ESP32-S2/C3 external I2S | One audio task because the target has only one usable audio core | A true setting does not create a second task on single-core targets |
+| RP2040/RP2350 | One dedicated audio loop on Core 1; Core 0 remains available to Arduino `loop()`, UI, MIDI, and USB | `setIsDualCore(true)` enables block partitioning. Pico 2 services bounded jobs automatically; Pico requires regular `audioLoop()` calls |
+| ESP8266 | Single-core | Partition helpers are compatibility no-ops |
+
+`setIsDualCore(false)` remains in the basic examples even though it is now the ESP32 and RP2040 default. The explicit call documents that their DSP graphs are intentionally serial and keeps their execution choice clear if defaults change later.
+
 **Audio-Frame Clock (`audioFrameCount()`):**
-- Global monotonic counter advanced exactly once per output frame, incremented inside the per-frame write paths (`i2s_write_samples` on every platform, and the `audioBlockWrite` finaliser; the block-split Core-1 branch is skipped to avoid double-counting). On dual-core external I2S both cores advance the shared atomic for alternate frames, so the combined rate equals the output frame rate.
+- Global monotonic counter advanced exactly once per output frame. In partitioned mode, each producer receives the same logical frame index while rendering its partial block; only the platform finalizer advances the committed clock (Core 0 on ESP32, Core 1 on RP2040).
 - It is the correct time base for time-based generators because, unlike `micros()`, it does **not** freeze while the audio task fills the DMA ring in a burst, and unlike a per-call counter it does not assume a particular tick rate. `Env` reads it so envelope slopes are smooth at audio rate and correctly timed whether advanced at control rate or per sample.
 - `uint32_t` — wraps after ~27 h at 44.1 kHz; consumers must use unsigned deltas. Atomic on ESP32/RP2040, `volatile` on ESP8266.
 
 **Dedicated Audio Core Pattern (Recommended for Serial/State-Dependent Chains):**
 
-For synthesis graphs whose stages depend on one another (for example, Drone Machine's FM cascade), the graph cannot be divided into independent voice partitions. Run the complete stateful graph once on Core 0 and leave Core 1 for the Arduino loop, UI, MIDI, and system tasks:
+For synthesis graphs whose stages depend on one another (for example, Drone Machine's FM cascade), the graph cannot be divided into independent voice partitions. Run the complete stateful graph on the platform's dedicated audio core and leave the application core for Arduino `loop()`, UI, MIDI, USB, and system work. This is Core 0 for ESP32 and Core 1 for RP2040:
 
 ```cpp
 void setup() {
@@ -117,7 +130,7 @@ This pattern ensures deterministic state progression and removes audio-core lock
 
 **Block-Split Dual-Core Voice Partitioning (Parallel Chains):**
 
-On dual-core ESP32, `audioUpdate()` runs simultaneously on both cores. Whether partitioning is needed depends on what is inside `audioUpdate()`:
+On dual-core ESP32 and opt-in RP2040 block mode, `audioUpdate()` runs on both cores. Whether partitioning is needed depends on what is inside `audioUpdate()`:
 
 - **Serial or shared-state chain** — use the dedicated-core pattern above.
 - **Voice array loop** — use the partition API. Both cores would otherwise run the full loop, advancing every voice's state twice per frame: doubled frequency, corrupted filter state, audible crackle.
@@ -137,16 +150,29 @@ void audioUpdate() {
 }
 ```
 
-`audioBlockWrite()` accumulates `M16_BLOCK_SIZE` samples (default 32) per core in a two-slot pipeline. Core 1 can render block N+1 while Core 0 combines, post-processes, and writes block N. Sequence tags identify each slot generation so stale task notifications cannot satisfy a later rendezvous. Define `M16_BLOCK_SIZE` before `#include "M16.h"` to override; power-of-2 values are recommended.
+`audioBlockWrite()` accumulates `M16_BLOCK_SIZE` samples (default 32) per partition. On ESP32 these blocks use the FreeRTOS producer/finalizer pipeline. Pico-family boards use two block slots: Core 1 renders odd voices and owns post-processing/I2S, while Core 0 renders bounded even-voice jobs. Pico 2 dispatches jobs with a hardware doorbell interrupt; Pico claims them cooperatively through `audioLoop()`. Define `M16_BLOCK_SIZE` before `#include "M16.h"` to override; power-of-2 values are recommended.
 
-Core 0 waits at most 100 ms for Core 1. If Core 1 misses that deadline, M16 emits Core 0's partial block and attempts to resynchronize rather than wedging the output permanently. DMA writes also have a 100 ms timeout. Diagnostics are available through:
+Core 0 waits for Core 1 for four audio-block periods by default, configured with `M16_BLOCK_SYNC_TIMEOUT_BLOCKS` and clamped to 1–10 ms. At the default 32-frame block size this is about 2.9 ms at 44.1 kHz or 4 ms at 32 kHz (or ~5.8 ms with 64-frame blocks). The rendezvous sleeps for no more than one scheduler tick at a time. If Core 1 misses the deadline, M16 immediately emits Core 0's partial block rather than draining the I2S DMA reserve. Sequence tags reject late notifications. The separate DMA write retains its 100 ms driver timeout.
+
+The ESP32 external-I2S default is four 512-frame DMA descriptors: about 46 ms total ring depth at 44.1 kHz. Some of that ring is normally occupied, so it is reserve against brief system stalls rather than an acceptable inter-core wait time. Diagnostics are available through:
 
 ```cpp
 uint32_t syncMisses = audioBlockSyncTimeoutCount();
+uint32_t currentRun = audioBlockConsecutiveSyncTimeoutCount();
+uint32_t longestRun = audioBlockMaxConsecutiveSyncTimeoutCount();
+uint32_t recoveries = audioBlockLateProducerRecoveryCount();
+uint32_t producerYields = audioProducerStarvationYieldCount();
 uint32_t dmaMisses  = audioDmaWriteTimeoutCount();
+uint32_t idleYields = audioDmaStarvationYieldCount();
 ```
 
-`audioIsFinalizerCore()` still identifies Core 0, but it must **not** be used to run master effects on `mix` before `audioBlockWrite()`: at that point `mix` contains only Core 0's voice partition.
+An isolated synchronization miss produces one block without Core 1's partition. A growing consecutive count indicates sustained overload or a stalled producer and is more significant than an occasional cumulative miss. Slot-release generations use a wrap-safe monotonic comparison at each producer block boundary. If repeated timeouts let Core 0 advance beyond the exact generation a late Core 1 expected, Core 1 discards the obsolete generations, fast-forwards to the newest reusable generation for that slot, records one recovery, and yields for one scheduler tick. It neither waits forever for an obsolete equality value nor tries to render every already-discarded block at maximum priority. A rising recovery count therefore identifies overload severe enough to lap the two-slot producer, while preserving the preferred failure mode of temporary missing audio rather than a deadlock or watchdog reset.
+
+Core 1 can also starve its scheduler without being fully lapped: when it is consistently a little slower than Core 0, each next slot may already be available, so the maximum-priority producer never enters its normal notification wait. After 32 consecutive blocks without natural semaphore pacing, M16 blocks the producer for one scheduler tick so `IDLE1`, `loop()`, and TinyUSB can run. Configure this with `M16_PRODUCER_UNPACED_YIELD_BLOCKS` (`0` disables it); `audioProducerStarvationYieldCount()` reports interventions.
+
+**DMA starvation safeguard:** A normally filled DMA ring paces the maximum-priority finalizer because each block write waits for output space. If 32 consecutive writes return in less than one quarter of an audio-block period, M16 treats the ring as underfilled: after releasing Core 1 it calls `vTaskDelay(1)` so IDLE0 can service the task watchdog. `taskYIELD()` is not sufficient because the audio task would remain the highest-priority runnable task. Override `M16_DMA_FAST_WRITE_YIELD_BLOCKS` before including M16.h, or set it to `0` to disable this safeguard. `audioDmaStarvationYieldCount()` reports how often it intervened; a rising value indicates that DSP is not maintaining a normally buffered output stream.
+
+`audioIsFinalizerCore()` identifies the platform finalizer (Core 0 on ESP32, Core 1 on RP2040), but it must **not** be used to run master effects on `mix` before `audioBlockWrite()`: at that point `mix` contains only that core's voice partition.
 
 **Post-combine master effects:**
 
@@ -174,16 +200,16 @@ void setup() {
 }
 ```
 
-The callback runs on Core 0 for every combined output frame, immediately before formatting and DMA output. It defaults to `nullptr`, so sketches without master processing require no callback. Per-voice effects with one independent instance per voice remain inside the partitioned voice loop.
+The callback runs on the platform's finalizer core for every combined output frame, immediately before formatting and output (Core 0 on ESP32, Core 1 on RP2040). It defaults to `nullptr`, so sketches without master processing require no callback. Per-voice effects with one independent instance per voice remain inside the partitioned voice loop.
 
-On ESP8266 and RP2040 the partition helpers are no-ops (`offset=0`, `stride=1`, `isFinalizerCore=true`) and `audioBlockWrite()` falls through to `i2s_write_samples()` — sketches using the partition API compile and run correctly unchanged on all platforms.
+On ESP8266 the partition helpers remain compatibility no-ops (`offset=0`, `stride=1`, `isFinalizerCore=true`). On RP2040 they become active only after `setIsDualCore(true)`; otherwise `audioBlockWrite()` follows the normal dedicated-Core-1 path.
 
 The legacy `i2s_write_samples()` path remains available for simple or legacy sketches. In dual-core external-I2S mode its two producers can reach the driver in nondeterministic order; the reorder buffer that addresses this is disabled by default. New stateful ESP32 sketches should therefore prefer either the dedicated-core block pattern or the partitioned block pattern rather than relying on two legacy writers.
 
 - Use `volatile` and atomic operations for shared state
 
 **Sample Reorder Buffer (disabled by default, dual-core external I2S only):**
-Even with atomic phase advance, the order in which the two audio cores reach `i2s_channel_write()` is non-deterministic — adjacent samples can be swapped, producing audible discontinuities under high-modulation FM and percussive transients (confirmed in `examples/FrequencyModulation` and Beat Machine).
+Even with atomic phase advance, the order in which two legacy audio producers reach `i2s_channel_write()` is non-deterministic — adjacent samples can be swapped, producing audible discontinuities under high-modulation FM and percussive transients. This was previously confirmed in the old dual-producer `FrequencyModulation` example and Beat Machine; the current example uses dedicated-core block output.
 
 The reorder buffer (`M16_REORDER_BUFFER_ENABLE`) is an MPSC ring + single drainer task that restores deterministic sample order at the DAC. It is **disabled by default** as of 2026-05-30 because:
 1. The drainer task (max priority, Core 0) writes 4 bytes at a time; when DMA has space it returns immediately without blocking → IDLE0 is starved → Task Watchdog fires after ~5 s in lightweight audio loops.
@@ -201,41 +227,49 @@ For new block-partitioned sketches, the preferred fix for shared/master effects 
 
 Tuning: `M16_REORDER_RING_SIZE` (default 16, must be power of 2). At 44.1 kHz a 16-frame ring adds ≤ 360 µs output latency. Cost: ~192 B RAM, ~680 B flash, one extra FreeRTOS task pinned to core 0 at max priority. No effect on internal DAC, single-core (`setIsDualCore(false)`), ESP32-S2/-C3, or ESP8266 paths — those skip the drainer entirely.
 
-**RP2040 (Pico / Pico 2) Audio Model:**
+**Pico-family Audio Model:**
 
-The RP2040 uses cooperative (not preemptive) dual-core scheduling, which is fundamentally different from the ESP32 FreeRTOS model:
+Pico and Pico 2 use the same conservative policy as ESP32: `setIsDualCore(false)` is the default, Core 1 renders the complete graph and writes I2S, and Core 0 is free for application work. Independent voice arrays may explicitly opt into block partitioning with `setIsDualCore(true)`.
 
-- `audioStart()` initialises I2S output and launches `picoAudioCallback()` on Core 1. Core 1 runs a tight `audioUpdate()` loop independently.
-- Core 0 produces audio by calling `audioLoop()` from `loop()`. Without this call, Core 0 produces no samples and UI/MIDI responsiveness improves at the cost of halved audio throughput.
-- I2S writes from both cores are serialised via `picoI2SMutex`. Oscillator phase advance is coordinated via mutex-protected callbacks registered by `Osc.h`.
+In partitioned mode Core 1 is the permanent coordinator and sole I2S writer. It posts an even-voice job and renders its odd-voice partition. Both partitions use the same logical frame indices, so clock-based generators remain aligned. Two alternating partial-buffer slots allow the next even partition to render while Core 1 combines, post-processes, and writes the current block.
 
-**Required `loop()` pattern on RP2040 in dual-core mode:**
+On Pico 2 (RP2350), M16 claims a spare hardware doorbell and installs a bounded Core-0 worker interrupt. This provides meaningful second-core DSP work without continuously executing the complete `audioUpdate()` graph on both cores. If no doorbell is available, M16 safely reverts to cooperative service. Pico (RP2040) has no hardware doorbells and its Arduino runtime owns the FIFO interrupt, so `audioLoop()` remains its job-service mechanism.
+
+**Required Pico, and portable Pico-family, `loop()` pattern:**
 ```cpp
 void loop() {
-  audioLoop();          // REQUIRED on RP2040 dual-core — produces Core 0 samples
-  // UI, MIDI, sequencing here (runs between audio samples)
+  audioLoop();          // Pico: claim one job; Pico 2 auto-worker: no-op
+  // UI, MIDI, sequencing here
 }
 ```
 
-**Voice arrays and partitioning on RP2040:** The block-split partition API (`audioPartitionOffset`, `audioPartitionStride`, `audioBlockWrite`) is implemented as no-ops on RP2040 — both cores still run the full voice loop. For polyphonic sketches with voice arrays, call `setIsDualCore(false)` before `audioStart()` to restrict audio to Core 1 only and avoid double-advancing per-voice state:
+Core 0 has the time taken by Core 1 to render its partition to claim a job. If it misses that window, Core 1 atomically claims and renders the missing partition; output continues correctly rather than dropping half the voices or waiting for Core 0. Once Core 0 claims a job, Core 1 waits for that bounded block to finish so it can never render the same state twice.
+
+Pico-family diagnostics are monotonic counters reset by `audioStart()`:
+
 ```cpp
-void setup() {
-  setIsDualCore(false);  // Core 1 audio only — safe for voice array sketches
-  audioStart();
-}
+uint32_t fallbacks = picoAudioBlockFallbackCount();
+uint32_t claims = picoAudioBlockWorkerClaimCount();
+uint32_t contractErrors = picoAudioBlockWriteErrorCount();
+bool automatic = picoAudioBlockWorkerIsAutomatic();
 ```
+
+A high fallback ratio means Core 0 is not servicing jobs soon enough to contribute much DSP capacity; this is safe, but the graph must then fit on Core 1. `automatic` confirms that Pico 2 acquired its doorbell rather than reverting to cooperative service. A nonzero write-error count means `audioUpdate()` did not call `audioBlockWrite()` exactly once per logical frame, or otherwise violated the partition contract.
+
+The opt-in contract is strict: partition the independent voice loop using `audioPartitionOffset()` and `audioPartitionStride()`, and submit every partial frame with `audioBlockWrite()`. Do not call legacy `i2s_write_samples()` from RP2040 partitioned mode. Serial/shared-state graphs should retain the default dedicated-core mode.
 
 **Audio input on RP2040:** Call `audioInputStart()` after `audioStart()` to initialise the separate I2S input instance. Uses BCLK+4 to avoid pin conflicts with output.
 
 **Internal DAC Output:**
 - Available on ESP32 (GPIO25/26) and ESP32-S2 (GPIO17/18) via `useInternalDAC()`
-- Uses ESP-IDF `dac_continuous` driver with `DAC_CHANNEL_MODE_ALTER` for stereo
+- Uses ESP-IDF `dac_continuous`; the default `M16_INTERNAL_DAC_SIMUL=1` selects simultaneous mono output on both DAC channels at `SAMPLE_RATE`, while setting it to 0 selects alternating stereo output at `2×SAMPLE_RATE`
 - 8-bit output (16-bit internally, converted at output stage)
 - Buffered: 256-byte accumulation buffer, 8 DMA descriptors (~23ms depth)
 - Partial-write retry loop ensures no samples are dropped at DMA seams
 - ESP32 (dual-core): single audio task on core 0 at max priority, `loop()` on core 1
 - ESP32-S2 (single-core): single audio task at priority 2, `dac_continuous_write()` blocking yields to `loop()`
-- `audioLoop()` is a no-op on ESP32 — only meaningful for RP2040
+- `audioBlockWrite()` is portable to internal-DAC sketches: it applies the registered post-process callback once, clips the frame, and forwards it to the DAC accumulation path rather than attempting an external-I2S write
+- `audioLoop()` is a no-op on ESP32 and while Pico 2's automatic worker is active; it services cooperative Pico jobs
 - Known limitation: original ESP32's internal DAC may produce low-level artifacts with complex reverb signals due to DAC hardware characteristics; use external I2S DAC for best reverb quality
 
 **Memory Management:**
@@ -262,34 +296,65 @@ void setup() {
   (Chowning sideband-vs-Nyquist limit). Cached in `setFreq()`/`setCMRatio()`, applied
   as a per-call clamp on `modIndex`. Cached values are `volatile` for cross-core visibility.
 - Per-carrier `_pairLock` spinlock for atomically paired modulator+carrier advance (see FM methods)
-- Dual-core phase synchronization for RP2040
+- Atomic phase/state operations on ESP32 and RP2040; partitioned sketches give each stateful voice one owning core
 - Sample and hold mode for stepped random output at oscillator frequency
+- `WaveTable` owner type for sharing one allocation across oscillators without exposing pointers
 
-**Waveform Generators (Static):**
+**Waveform Generators:**
 - `sinGen()` - Sine wave (starts at 0, sine phase)
 - `cosGen()` - Cosine wave (starts at MAX_16, cosine phase)
 - `sawGen()` - Band-limited sawtooth (sine phase, peaks early)
 - `sqrGen()` - Band-limited square (sine phase, peaks early)
 - `triGen()` - Band-limited triangle (cosine phase, starts at MAX_16)
-- `noiseGen()`, `noiseGen(grainSize)` - White noise, optionally with sample-and-hold grain
+- `pulseGen(duty)` - DC-free, band-limited pulse wave with floating-point duty cycle clamped to 0.0-1.0. It uses the square generator's 56/28/12 low/mid/high harmonic limits and is available as either `osc.pulseGen(duty)` for an oscillator-owned table or `sharedTable.pulseGen(duty)` for a shared table. Exact 0.0 and 1.0 produce silence after DC removal.
+- `noiseGen()`, `noiseGen(grainSize)` - Mean-corrected white noise, optionally with sample-and-hold grain
 - `brownNoiseGen()`, `pinkNoiseGen()` - Brownian and pink noise
 - `crackleGen()` - Sparse impulse noise
 
+An oscillator can allocate and own its waveform directly (`osc.sinGen()`), which
+is simplest when only one oscillator uses it. To share one allocation across
+multiple oscillators, use the beginner-facing `WaveTable` owner:
+
+```cpp
+WaveTable sharedSine;
+Osc carrier;
+Osc modulator;
+
+void setup() {
+  sharedSine.sinGen();       // allocates and generates the table
+  carrier.setTable(sharedSine);
+  modulator.setTable(sharedSine);
+}
+```
+
+`WaveTable` selects PSRAM when available, falls back to ordinary RAM, owns the
+allocation, and prevents accidental copying. It must outlive every oscillator
+that uses it; declaring tables and oscillators globally, as in the examples,
+satisfies this rule. The same object can be passed directly to `nextMorph()`,
+`currentMorph()`, `nextWTrans()`, `phModMorph()`, and `phModWTrans()`.
+
+The legacy `int16_t*` generator and processing overloads remain available for
+existing and advanced sketches, but new examples use `WaveTable` whenever a
+table is shared.
+
 **Key Methods:**
 ```cpp
-osc.setTable(waveTable);        // Set external wavetable
+osc.setTable(sharedWaveTable);  // Share a WaveTable allocation
 osc.setFreq(440.0f);            // Set frequency in Hz
 osc.setPitch(69);               // Set MIDI pitch
 osc.setPhase(0.5f);             // Set phase 0.0-1.0
 osc.setSpread(0.01f);           // Detuning for thickness
 osc.setPulseWidth(0.3f);        // PWM 0.05-0.95
-osc.setNoise(true);             // Enable non-looping noise (random index on phase wrap)
+osc.setNoise(true);             // Enable stateless hashed noise lookup
+// Each Osc receives an automatic unique salt; no seed setup is required.
+osc.setNoiseSeed(1234);         // Optional reproducible lookup sequence
 osc.setSandH(true);             // Sample and hold: pick random sample once per period
 int16_t held = osc.getSandHValue(); // Read the current held S&H value without advancing phase
 osc.setCMRatio(2.0f);           // C:M ratio for FM anti-aliasing depth cap (default 1.0)
 osc.disableAntiAlias();         // Disable depth cap entirely (feedback FM, intentional aliasing)
 
 int16_t sample = osc.next();    // Get next sample (fast)
+int16_t owned = osc.nextUnlocked(); // Exclusive partition owner only
 int16_t sample = osc.next2();   // Get next sample (interpolated, higher quality)
 ```
 
@@ -298,6 +363,8 @@ int16_t sample = osc.next2();   // Get next sample (interpolated, higher quality
 - `phMod(modOsc, modIndex)` - FM with atomically paired modulator advance **(dual-core safe)**
 - `phModInt(modulator, scaledIndex)` - FM with pre-scaled integer mod index (faster, no per-sample float multiply)
 - `phModInt(modOsc, scaledIndex)` - Integer FM with atomically paired modulator advance **(dual-core safe)**
+- `nextUnlocked()` - removes atomic phase advancement for an oscillator owned by exactly one audio core; frequency/band control updates retain seqlock protection
+- `phModIntUnlocked(modOsc, scaledIndex)` - removes both the carrier/modulator atomic phase advances and pair lock when the complete oscillator pair has one partition owner
 - `phMod2(modulator, modIndex)` - 2x oversampled FM (higher quality)
 - `ringMod(audioIn)` - Ring modulation
 - `feedback(modIndex)` - Self-feedback FM
@@ -316,6 +383,13 @@ carrier.phModInt(modOsc.next(), scaledIndex);
 // Safe — modulator and carrier advance atomically under _pairLock:
 carrier.phModInt(modOsc, scaledIndex);
 ```
+
+Partitioned voice arrays may instead use
+`carrier.phModIntUnlocked(modOsc, scaledIndex)` (or `nextUnlocked()`) when both
+oscillators are permanently owned by that partition. Never use the unlocked
+methods when the same oscillator can be advanced by both audio cores. Parameter
+changes from the control core remain visible and band/increment pairs remain
+consistent; only render-state ownership is assumed.
 
 The `Osc&` overloads use a per-carrier `_pairLock` spinlock (`std::atomic<bool>`) with hold time of ~2 atomic fetch_add operations. On single-core platforms (ESP8266, ESP32-S2, ESP32-C3) the lock compiles away entirely via the `M16_ATOMIC_GUARD_BLOCKING` macro.
 
@@ -375,7 +449,7 @@ This affects only the oscillator instance it is called on; other instances are u
 
 The cache-the-value-at-control-rate anti-pattern (`v = env.next()` in `loop()`, reuse stale `v` per sample) re-introduces a zipper — read `getValue()` per sample instead.
 
-**Thread Safety:** `envVal`, `envState`, and the `releaseTriggered` note-off latch are `std::atomic` for dual-core consistency. The entire pre-release contour (attack/hold/decay/sustain and the deterministic AD/AR releases when `sustain == 0`) is a pure function of frames-since-start, so concurrent evaluation from both audio cores (single-voice sketches call `getValue()` on both cores) is safe. Only `startRelease()` (asynchronous note-off) writes a release snapshot, published under the atomic flag.
+**Thread Safety:** `envVal`, `envState`, and the `releaseTriggered` note-off latch are `std::atomic` for dual-core consistency. The entire pre-release contour (attack/hold/decay/sustain and the deterministic AD/AR releases when `sustain == 0`) is a pure function of frames-since-start, so concurrent evaluation remains safe when partitioned mode is explicitly enabled. Ordinary single-voice ESP32 sketches now run on the default dedicated audio task. Only `startRelease()` (asynchronous note-off) writes a release snapshot, published under the atomic flag.
 
 **Key Methods:**
 ```cpp
@@ -385,6 +459,8 @@ env.setDecay(100);      // Decay time in ms
 env.setSustain(0.5);    // Sustain level 0.0-1.0
 env.setRelease(200);    // Release time in ms
 env.setMaxLevel(1.0);   // Peak level 0.0-1.0 (gain control)
+env.setResetOnStart(true);     // Make each trigger begin from zero
+env.setResetTransition(5.0f);  // Glide current level to zero before attack
 
 env.start();            // Trigger envelope
 env.startRelease();     // Begin release phase (note off)
@@ -394,7 +470,8 @@ uint16_t val = env.next();      // Equivalent to getValue()
 
 **Special Features:**
 - `setDecayRepeats(n)` - Repeat decay phase (claps, guiro); applies when `sustain == 0`
-- `setResetOnStart(true)` - Reset to 0 on start (consistent drum attacks)
+- `setResetOnStart(true)` - Start every trigger with a zero-based attack (consistent drum attacks)
+- `setResetTransition(ms)` - When reset-on-start is enabled and the envelope is already above zero, glide it to zero over `ms`, then begin attack. Default `0` preserves the immediate reset. This avoids discontinuities when stealing or reusing active voices; it adds the transition duration before attack and is unnecessary when `setResetOnStart(false)` uses the default current-level retrigger.
 - Exponential curves for natural decay/release
 
 **Caveats from the audio-frame timing change:**
@@ -437,9 +514,15 @@ svf.reset();  // Clear state for consistent attacks
 ```cpp
 ema.setFreq(5000);          // Cutoff in Hz
 ema.setCutoff(0.5);         // Normalized 0.0-1.0
+int16_t coeff = EMA::coefficientForCutoff(0.5); // Precompute at setup/control rate
+ema.setCoefficient(coeff);  // Cheap application in a real-time path
 int16_t lp = ema.nextLPF(input);
 int16_t hp = ema.nextHPF(input);
 ```
+
+`setCutoff()` retains the original nonlinear mapping and therefore evaluates
+`pow()`. For frequently updated filters, build a coefficient lookup table during
+setup with `coefficientForCutoff()` and apply entries with `setCoefficient()`.
 
 ---
 
@@ -551,7 +634,8 @@ samp.setBasePitch(69);   // match the original sample's pitch
 ```
 
 **`bufRate` in `loadFromFlash()`:**
-- **Internal DAC**: the DAC driver runs `audioUpdate()` at `2×SAMPLE_RATE` (88200 Hz). `loadFromFlash()` detects `_useInternalDAC` and sets `bufRate = SAMPLE_RATE/2` to compensate.
+- **Internal DAC, default simultaneous mode**: the DAC driver runs `audioUpdate()` at `SAMPLE_RATE`, so `loadFromFlash()` uses `bufRate = SAMPLE_RATE`.
+- **Internal DAC, alternating stereo mode** (`M16_INTERNAL_DAC_SIMUL=0`): the driver runs `audioUpdate()` at `2×SAMPLE_RATE`, so `loadFromFlash()` uses `bufRate = SAMPLE_RATE/2` to compensate.
 - **External I2S (any core count)**: SAMP_LOCK serialises all `next()` calls to exactly `SAMPLE_RATE` calls/sec total. `bufRate = SAMPLE_RATE` is always correct — the lock neutralises the dual-core double-advance that was previously suspected.
 
 Flash cost: ~3 KB per 0.5s sample (compressed). PSRAM/RAM cost: ~43 KB decoded at 44100 Hz. See `examples/SampleDataPlay` for the full workflow.
@@ -588,6 +672,18 @@ fx.waveFold(sample, 2.0);       // Wave folding
 fx.overdrive(sample, 2.0);      // Filtered overdrive
 ```
 
+**Transparent limiting:**
+```cpp
+fx.softLimit(sample);        // Linear below 85% full scale (default)
+fx.softLimit(sample, 0.9f);  // Linear below 90%, then a smooth limiting knee
+```
+
+Unlike the saturation-oriented `softClip*()` functions, `softLimit()` returns
+samples below its threshold unchanged. Above the threshold it uses a quadratic
+knee whose slope changes continuously from unity to zero, reaching full scale
+after an overload equal to twice the remaining headroom. It does not add makeup
+gain, fold the waveform, or colour ordinary below-threshold samples.
+
 **Bit Crusher:**
 ```cpp
 fx.bitCrush(sample, 8);         // Bit depth (1-16)
@@ -597,11 +693,32 @@ fx.bitCrushF(sample, 0.5);      // Normalized amount
 
 **Compression:**
 ```cpp
-fx.setCompression(0.5, 4.0, 5.0, 100.0);  // threshold, ratio, attack_ms, release_ms
-fx.compression(sample);          // Mono
-fx.compressionL(sample);         // Stereo left
-fx.compressionR(sample);         // Stereo right
+fx.setCompression(0.5, 4.0, 5.0, 100.0);       // unity makeup (transparent default)
+fx.setCompression(0.5, 4.0, 5.0, 100.0, 1.2);  // optional explicit makeup gain
+int32_t mono = fx.compression(sample);
+int32_t left = fx.compressionL(sampleL);        // independent channel detector
+int32_t right = fx.compressionR(sampleR);
+fx.compressionStereo(inL, inR, outL, outR);     // linked detector preserves stereo image
 ```
+
+The primary compressor uses a smoothed peak detector and a continuous
+above-threshold ratio curve. Automatic makeup gain and internal 16-bit hard
+clipping were removed: makeup now defaults to unity, and the compressor returns
+`int32_t` headroom so a transparent limiter can follow it. For a master chain,
+retain the result in `int32_t` and call `softLimit()` before conversion to the
+16-bit output range. `compressionStereo()` detects the louder channel and
+applies one gain to both channels, avoiding stereo-image movement.
+
+**Chorus stereo width:**
+```cpp
+fx.setChorusSpread(0.0f);  // mono wet chorus
+fx.setChorusSpread(0.5f);  // natural stereo width (default)
+fx.setChorusSpread(1.0f);  // exaggerated stereo width
+```
+
+`setChorusSpread()` scales the side component of the processed chorus before
+the final `setChorusMix()` dry/wet blend. It affects only `chorusStereo()` and
+leaves the dry signal centred. Values are clamped to `0.0-1.0`.
 
 **Reverb:**
 ```cpp
@@ -622,7 +739,7 @@ fx.reverbStereoInterp(inL, inR, outL, outR);  // Half-rate (CPU saver)
 - Both paths include: input HPF (prevents DC accumulation), dampening lowpass, soft limiting (prevents hard clipping in feedback), and Hadamard mixing matrix
 - Legacy path disables Del's built-in smoothing filter (`setFiltered(0)`) to avoid double-filtering with explicit dampening
 
-**Dual-core thread safety for reverb functions:**
+**Dual-core thread safety for reverb functions (when partitioned mode is explicitly enabled):**
 - `reverbStereo`: uses `M16_ATOMIC_GUARD` (non-blocking try-lock) + `reverbCacheL`/`reverbCacheR` output cache. If the lock is taken by the other core, returns the cached previous output. Both core outputs are coherent; no DMA ordering artifacts.
 - `reverbStereo2`: same non-blocking guard + cache. Adds allpass preprocessing (`All` instances) processed *inside* the lock so `All`'s unprotected buffers are never touched by two cores simultaneously. Runs at half sample rate (toggle) with IIR smoothing (`>> 2`) to halve CPU cost.
 - `reverbStereoInterp`: half-rate toggle + IIR smoothing; no allpass. Can trigger Task Watchdog if used in a very lightweight audio loop (Core 0 never blocks long enough for IDLE0).
@@ -769,7 +886,7 @@ double ms = Seq::calcStepDelta(120, 4, 2);  // BPM, slice, div
 
 **Purpose:** Alternative to SVF.h using 64-bit arithmetic with gain compensation at high resonance. Higher CPU cost than SVF but avoids clipping artefacts at high Q.
 
-**Thread Safety:** Uses `M16_ATOMIC_GUARD_BLOCKING` for deterministic dual-core operation, ensuring Core 1 waits for fresh state rather than using a 1-sample hold.
+**Thread Safety:** The normal advancing methods use `M16_ATOMIC_GUARD_BLOCKING` for deterministic access when the same instance may be reached from both cores. Independent voice partitions should instead give each filter one owning audio core and may use `nextBPFUnlocked()` to remove the unnecessary per-sample spinlock. Coefficients are still loaded atomically, so control-rate `setFreq()` and `setRes()` changes remain visible across cores. Never use the unlocked method when two audio producers can advance the same filter state.
 
 **Key Methods:**
 ```cpp
@@ -780,6 +897,7 @@ svf2.setRes(0.8);               // Resonance 0.01–1.0 (gain-compensated)
 int16_t lp = svf2.nextLPF(input);
 int16_t hp = svf2.nextHPF(input);
 int16_t bp = svf2.nextBPF(input);
+int16_t ownedBp = svf2.nextBPFUnlocked(input); // Exclusive partition owner only
 int16_t notch = svf2.nextNotch(input);
 int16_t lp = svf2.currentLPF();   // Last computed LP output (no advance)
 svf2.reset();
@@ -811,7 +929,7 @@ Uses a tanh lookup table (`softTanh`) for saturation and clamps internal state a
 
 **Purpose:** Analog BBD / tape delay emulation. Fixed 4096-sample buffer; delay time is controlled by adjusting the simulated clock (scan rate), not the buffer length — giving the characteristic pitch-shift artefact when delay time changes.
 
-**Thread Safety:** Hardened with `M16_ATOMIC_GUARD_BLOCKING` to eliminate "fuzz" (sample-hold artifacts) caused by dual-core contention.
+**Thread Safety:** `next()` uses `M16_ATOMIC_GUARD_BLOCKING` to eliminate "fuzz" caused by two cores advancing the same delay state. `nextUnlocked()` provides the same processing without the state spinlock for an instance with exactly one owning audio core, such as a master delay in the post-combine callback. Keep using `next()` for shared or legacy dual-producer graphs.
 
 **Parameter slewing:** All three time/level setters use target+slew to prevent buffer-seam clicks. When a parameter changes instantly, the ring buffer still holds content written at the old value; one full delay period later the read head encounters the seam, producing a click. Slewing ensures transitions complete before the buffer wraps:
 
@@ -826,11 +944,13 @@ The `empty()` method and the 4-parameter constructor both snap live values direc
 bbd.setTime(200);        // Delay in ms (~31–9000 ms range)
 bbd.setScanRate(1.0);    // BBD clock rate multiplier (lower = darker, longer)
 bbd.setLevel(0.8);
+bbd.setDelayMix(0.5);    // 0=dry, 1=wet; defaults to fully wet
 bbd.setFeedback(true);
 bbd.setFeedbackLevel(0.5);
 bbd.setFiltered(2);      // Output smoothing 0–4
 
 int16_t out = bbd.next(input);
+int16_t owned = bbd.nextUnlocked(input); // Exclusive audio-core owner only
 int16_t r   = bbd.read();
 bbd.write(sample);
 ```
@@ -915,12 +1035,17 @@ midi.endClockTask();
 midi.setClockSendBpm(bpm);   // start/update outgoing clock from clock task; bpm=0 stops
 midi.stopClockSend();
 
-// Send (always available, uses Serial2.write directly)
+// Send (same API in direct and queued modes)
 midi.sendNoteOn(channel, pitch, velocity);
 midi.sendNoteOff(channel, pitch, velocity);
 midi.sendControlChange(channel, cc, value);
 midi.sendClock();   // 24 PPQN (manual send, use setClockSendBpm for task-based send)
 midi.sendStart();  midi.sendContinue();  midi.sendStop();
+
+// Optional ESP32 queued-TX diagnostics
+uint32_t dropped = midi.getTxDroppedMessageCount();
+uint32_t droppedRT = midi.getTxDroppedRealtimeCount();
+uint32_t pressure = midi.getTxBackpressureCount();
 
 // Receive — drain all available messages each loop iteration
 uint8_t status;
@@ -949,9 +1074,20 @@ When a CC message is assembled, `read()` peeks ahead in the buffer and drains an
 **Clock Send Jitter (with clock task):**
 `setClockSendBpm()` runs outgoing clock pulses from the clock task using adaptive sleep: the task sleeps for most of the inter-pulse interval then busy-waits the final 1ms for ~50µs send accuracy, compared to ±1ms with a fixed `vTaskDelay(1)`. Interval advance is cumulative (not reset to `micros()`) so no long-term BPM drift.
 
+**Prioritized DIN MIDI transmission (ESP32 clock task):**
+When `beginClockTask()` is active, the existing send methods enqueue complete
+channel messages in a 64-slot queue and explicit Clock/Start/Continue/Stop bytes
+in a separate 16-slot priority queue. The task sends generated clock first,
+drains explicit Real-Time bytes next, and admits at most one ordinary message per
+pass so note bursts cannot fill the UART immediately before a clock deadline.
+MIDI permits Real-Time bytes between channel-message bytes. Without the task,
+and on RP2040/ESP8266, the same API retains direct UART output.
+
 **Internal SPSC Ring Buffers (ESP32 clock task):**
 - `_rxBuf[64]` — all incoming bytes forwarded from Serial2 to `read()` via the ring
 - `_tsBuf[32]` — one `micros()` timestamp per 0xF8 byte, pushed before the byte enters `_rxBuf` so the timestamp is always available when `clockToBpm()` is called
+- `_txMessages[64]` — complete ordinary channel messages, one admitted per task pass
+- `_txRealtime[16]` — explicit Real-Time bytes, always serviced before ordinary output
 - Both rings are Single-Producer (clock task) / Single-Consumer (`loop()`) with volatile write indices — no mutex required
 
 **Status Constants:**
@@ -1034,6 +1170,19 @@ Configure with: `seti2sPins(bck, ws, dout, din);` before `audioStart()`
 
 ---
 
+## Example Execution Policy
+
+The example suite now teaches the same deterministic architecture as the library documentation:
+
+- All 39 basic and serial/state-dependent audio examples explicitly call `setIsDualCore(false)` and finish `audioUpdate()` with `audioBlockWrite()`. The explicit call is intentional documentation even though dedicated-core execution is the ESP32 and RP2040 default.
+- `Polyphony` and `SequenceVoices` are the two dual-core DSP examples. They call `setIsDualCore(true)` on capable dual-core platforms, divide independent voice arrays with `audioPartitionOffset()` / `audioPartitionStride()`, combine partial blocks through `audioBlockWrite()`, and run reverb through the post-process callback.
+- Partitioned Pico-family examples retain `audioLoop()` for source portability. It services Pico jobs and is a harmless no-op while Pico 2's automatic doorbell worker is active. Missed claims fall back safely to Core 1.
+- Internal-DAC examples also use `audioBlockWrite()`; M16 forwards that API to the single DAC task without attempting to use an external-I2S channel.
+- The legacy `i2s_write_samples()` API remains supported for existing sketches, but no current audio example presents it as the preferred output path.
+- All 42 example sketches compile for ESP32-S3 with the current library; the `InternalDAC` example additionally compiles for classic ESP32 to exercise the DAC forwarding path. The RP2040 paths are compile-verified with partitioned `Polyphony` and dedicated-core `Sinewave` on Raspberry Pi Pico, plus partitioned `SequenceVoices` on Raspberry Pi Pico 2.
+
+---
+
 ## Required Program Structure
 
 **ESP32 / ESP8266:**
@@ -1045,7 +1194,7 @@ Osc osc;
 
 void setup() {
   Serial.begin(115200);
-  setIsDualCore(false);  // safe default for one stateful oscillator chain
+  setIsDualCore(false);  // explicit serial-graph policy (also the ESP32 default)
   osc.sinGen();
   osc.setPitch(69);
   audioStart();
@@ -1061,45 +1210,53 @@ void audioUpdate() {  // REQUIRED - called at sample rate from audio task(s)
 }
 ```
 
-For independent polyphonic voices on dual-core ESP32, replace the single-core selection with `setIsDualCore(true)`, partition the voice loop using `audioPartitionOffset()` / `audioPartitionStride()`, submit partial mixes with `audioBlockWrite()`, and register shared effects through `setAudioPostProcessCallback()`.
+For independent polyphonic voices on dual-core ESP32 or Pico-family boards, replace the single-core selection with `setIsDualCore(true)`, partition the voice loop using `audioPartitionOffset()` / `audioPartitionStride()`, submit partial mixes with `audioBlockWrite()`, and register shared effects through `setAudioPostProcessCallback()`. Pico requires regular `audioLoop()` calls; retaining the call is portable to Pico 2, where it becomes a no-op while the automatic worker is active.
 
-**RP2040 (Pico / Pico 2) — dual-core mode:**
+**Pico / Pico 2 — optional block partitioning:**
 ```cpp
 #include "M16.h"
 #include "Osc.h"
 
-Osc osc;
+constexpr int voiceCount = 8;
+Osc voices[voiceCount];
 
 void setup() {
   Serial.begin(115200);
-  osc.sinGen();
-  osc.setPitch(69);
-  audioStart();  // launches Core 1 audio loop
+  for (int i = 0; i < voiceCount; ++i) {
+    voices[i].sinGen();
+    voices[i].setPitch(48 + i * 3);
+  }
+  setIsDualCore(true);
+  audioStart();
 }
 
 void loop() {
-  audioLoop();  // REQUIRED on RP2040 - Core 0 produces samples here
-  // UI, MIDI, sequencing between samples
+  audioLoop();  // required on Pico; harmless with Pico 2's auto worker
+  // UI, MIDI, sequencing
 }
 
-void audioUpdate() {  // called from both cores via audioLoop() and Core 1 callback
-  int16_t sample = osc.next();
-  i2s_write_samples(sample, sample);
+void audioUpdate() {
+  int32_t mix = 0;
+  for (int i = audioPartitionOffset(); i < voiceCount;
+       i += audioPartitionStride()) {
+    mix += voices[i].next() / voiceCount;
+  }
+  audioBlockWrite(mix, mix);
 }
 ```
 
-For polyphonic RP2040 sketches with voice arrays, call `setIsDualCore(false)` in `setup()` before `audioStart()` and omit the `audioLoop()` call — audio runs on Core 1 only, `loop()` is free for UI.
+For ordinary or serial RP2040 graphs, retain `setIsDualCore(false)` (the default), omit `audioLoop()`, and render the complete graph on Core 1. This is the safest and usually most efficient choice unless the DSP load needs the second core.
 
 ---
 
 ## Performance Considerations
 
 1. **ESP32 audio architecture:** Choose one of two explicit patterns:
-   - Serial/shared-state graph: `setIsDualCore(false)` + complete DSP chain + `audioBlockWrite()`.
-   - Independent polyphonic voices: `setIsDualCore(true)` + `audioPartitionOffset()` / `audioPartitionStride()` + `audioBlockWrite()` + `setAudioPostProcessCallback()` for master effects.
+   - Serial/shared-state graph (the default): `setIsDualCore(false)` + complete DSP chain + `audioBlockWrite()`.
+   - Independent polyphonic voices (explicit opt-in): `setIsDualCore(true)` + `audioPartitionOffset()` / `audioPartitionStride()` + `audioBlockWrite()` + `setAudioPostProcessCallback()` for master effects.
    Do not advance the same stateful object from both audio tasks. For FM between independent oscillator pairs, use the `phMod(Osc&, ...)` / `phModInt(Osc&, ...)` overloads.
 
-2. **RP2040 dual-core:** `audioLoop()` must be called from `loop()` for Core 0 to produce audio. Omitting it gives Core 0 fully to UI/MIDI but halves throughput. Voice array sketches must use `setIsDualCore(false)` — the partition API is not implemented on RP2040 and both cores would otherwise run the full voice loop.
+2. **Pico-family dual-core:** opt in only for independent partitionable voices. Pico 2 uses an automatic bounded Core-0 doorbell worker and double buffering; Pico uses `audioLoop()` to claim jobs. Core 1 remains coordinator and sole I2S writer. If Core 0 misses a job, Core 1 renders that partition safely; monitor the fallback counter to determine whether dual-core mode is providing useful capacity. Shared/stateful master effects belong in the post-process callback.
 
 3. **Memory:** Use PSRAM for large buffers (delays, reverb). Check `isPSRAMAvailable()`.
 
@@ -1119,7 +1276,7 @@ For polyphonic RP2040 sketches with voice arrays, call `setIsDualCore(false)` in
 
 9. **Waveform phase alignment for morphing:** When using `nextMorph()`, waveforms should be phase-aligned to avoid cancellation during crossfade. `triGen()`, `cosGen()` are cosine-phase (start at MAX_16). `sinGen()`, `sqrGen()`, `sawGen()` are sine-phase (start at 0, peak early). For morphing across all standard waveforms, use `sinGen()` as the base since sqr/saw are also sine-phase, and tri peaks early enough to blend smoothly. `nextMorph()` supports noise-aware morphing — when `setNoise(true)`, the morph target reads random table positions via `audioRand()`. When `setSandH(true)` is also set, the noise morph target holds a single random value per period instead.
 
-10. **Block pipeline balance:** In dual-core block mode, Core 1 can render ahead while Core 0 performs post-combine processing. If master effects are substantially more expensive than a voice partition, assign fewer voices to Core 0 manually or reduce effect cost. Monitor `audioBlockSyncTimeoutCount()` and `audioDmaWriteTimeoutCount()` when diagnosing gaps.
+10. **Block pipeline balance:** On ESP32, Core 1 can render ahead while Core 0 performs post-combine processing. On Pico 2, Core 0 can render the next even partition while Core 1 finalizes the current double-buffered block. If master effects are substantially more expensive than a voice partition, rebalance voices or reduce effect cost. Monitor ESP32's `audioBlockSyncTimeoutCount()` / `audioDmaWriteTimeoutCount()`, or Pico-family `picoAudioBlockFallbackCount()`, `picoAudioBlockWorkerClaimCount()`, and `picoAudioBlockWriteErrorCount()`.
 
 ---
 
@@ -1128,7 +1285,7 @@ For polyphonic RP2040 sketches with voice arrays, call `setIsDualCore(false)` in
 | File | Purpose | Key Class |
 |------|---------|-----------|
 | M16.h | Core system, I2S, dual-core audio, utilities | - |
-| Osc.h | Band-limited wavetable oscillator | `Osc` |
+| Osc.h | Band-limited wavetable oscillator and shareable table owner | `Osc`, `WaveTable` |
 | Env.h | AHDSR envelope | `Env` |
 | SVF.h | State variable filter (LPF/HPF/BPF/Notch) | `SVF` |
 | SVF2.h | Higher-quality SVF with 64-bit math and gain compensation | `SVF2` |
@@ -1168,25 +1325,40 @@ Enable with `useInternalDAC()` before `audioStart()`. Not available on ESP32-S3,
 - Primary development: 2021-2025
 - ESP32 Arduino Core: Supports both V2 (commented) and V3+ I2S APIs
 - RP2040 support: Added with dual-core cooperative scheduling
-- Pico 2 (RP2035/RP2350) detection folded into `IS_RP2040()` macro
+- Pico 2 (RP2350, including legacy board-package macro spellings) detection folded into `IS_RP2040()` macro
 - Internal DAC support: ESP32 and ESP32-S2 via `dac_continuous` driver (ESP-IDF V5+)
 - SVF.h: Added non-blocking try-lock for dual-core thread safety on filter state
 - FX.h: Legacy Del reverb path upgraded with soft limiting, input HPF, dampening; Del built-in filtering disabled for reverb delays
 - M16.h: Removed per-sample `yield()` from audio callback (4-9% CPU savings); partial-write retry on DAC output
 - Osc.h (Apr 2025): Fixed memory ordering bug — `phase_increment_fractional` loads in `next()`, `next2()`, `phMod()`, `phModInt()` changed from `__ATOMIC_RELAXED` to `__ATOMIC_ACQUIRE` to correctly pair with `setFreq()`'s `__ATOMIC_RELEASE` stores; `modDepthScale` marked `volatile`; added `phMod(Osc&, float)` and `phModInt(Osc&, int32_t)` overloads with per-carrier `_pairLock` spinlock for dual-core-safe paired modulator+carrier advance
 - Osc.h (May 2026): Replaced ad-hoc `modDepthScale` Nyquist-headroom taper with the Chowning-derived depth cap `depth_max = 9000 / (freq × cmRatio)` applied across all phMod variants (`phMod`, `phModInt`, `phMod2`, `phModMorph`, `phModWTrans` and their `Osc&` overloads); added `setCMRatio(float)` setter; the `Osc&` overloads auto-derive ratio from the modulator's frequency when `setCMRatio()` has not been called explicitly
+- Osc.h (Aug 2026): Added `nextUnlocked()` and scalar/paired `phModIntUnlocked()` overloads for oscillators with exclusive partition ownership. They preserve frequency seqlock reads, deferred band switching, noise/pulse mode behavior, interpolation, spread, and FM depth limiting while removing atomic phase fetch-add and the paired carrier/modulator spinlock. Existing guarded methods remain the default and are unchanged.
+- EMA.h (Aug 2026): Added `coefficientForCutoff()` and `setCoefficient()` so control-rate or setup code can precompute the existing nonlinear cutoff mapping and real-time paths can update EMA filters without repeatedly evaluating `pow()`.
  - M16.h (May 2026): Added sample reorder buffer for dual-core external I2S (`M16_REORDER_BUFFER_ENABLE`). MPSC ring + single drainer task pinned to core 0 restores deterministic sample order at the DAC. **Disabled by default as of 2026-05-30** — the drainer task starves IDLE0 (→ Task Watchdog) in lightweight audio loops and causes crackle in reverb functions. Enable with `#define M16_REORDER_BUFFER_ENABLE 1` before `#include "M16.h"`. The preferred dual-core fix for shared-state FX is `M16_ATOMIC_GUARD` + output cache. Implementation plan: `DOCS/REORDER_BUFFER_PLAN.md`.
 - M16.h (May 2026): Replaced experimental per-sample split-core API with block-based dual-core voice partitioning. New API: `audioPartitionOffset()`, `audioPartitionStride()`, `audioIsFinalizerCore()`, `audioBlockWrite()`. Block size is configurable via `M16_BLOCK_SIZE` (default 32); design rationale: `DOCS/BLOCK_SPLIT_PLAN.md`.
 - Library Hardening (May 2026): Migrated `SVF2.h` and `BBD.h` to blocking locks (`M16_ATOMIC_GUARD_BLOCKING`) to eliminate 1-sample hold artifacts (fuzz) on dual-core systems. Migrated `Env.h` to `std::atomic`. Documented "Dedicated Audio Core" pattern for serial synthesis chains to eliminate lock contention and state corruption. Resolved I2S/I2C pin conflicts for ESP32-S3 hardware.
 - M16.h (May 2026): Inlined `Hardware_defines.h` platform detection macros directly into M16.h — the separate file is removed. Added `IS_ESP32S2()`, `IS_ESP32C3()`, and `IS_CAPABLE()` (`IS_ESP32() || IS_RP2040()`) macros. `panLeft()`/`panRight()` outputs now clamped to [0.0, 1.0].
 - M16.h (May 2026): Reorder buffer pre-claim fix — `m16_claimReorderSeq()` claims the output sequence number *inside* the SAMP_LOCK spinlock rather than after release, atomically pairing sample computation order with reorder ring slot assignment. Eliminates sign-flip spikes at zero crossings caused by the other core stealing an earlier seq# between lock release and seq claim. `Samp::next()` and `Samp::nextStereo()` both call `m16_claimReorderSeq()` before releasing SAMP_LOCK on dual-core ESP32.
-- Samp.h (May 2026): Added `loadFromFlash(Wav&, const uint8_t*, uint32_t)` for flash-stored IMA ADPCM samples (no SD card at runtime). Fixed `bufRate` logic: internal DAC requires `SAMPLE_RATE/2` (driver runs `audioUpdate()` at 2×rate); external I2S always uses `SAMPLE_RATE` (SAMP_LOCK serialises to 44100 calls/sec regardless of core count). Added `setBasePitch(float)` / `setPitch(float)` for pitch-relative playback speed. Added `setNearZeroSmooth(bool, int16_t threshold=1024)` — amplitude-gated IIR blend at zero crossings to reduce quantisation click artifacts on internal DAC playback.
+- Samp.h (May/Aug 2026): Added `loadFromFlash(Wav&, const uint8_t*, uint32_t)` for flash-stored IMA ADPCM samples (no SD card at runtime). External I2S always uses `bufRate = SAMPLE_RATE`; internal DAC uses `SAMPLE_RATE` in the default simultaneous mode and `SAMPLE_RATE/2` only in alternating stereo mode, whose driver invokes `audioUpdate()` at 2× rate. Added `setBasePitch(float)` / `setPitch(float)` for pitch-relative playback speed. Added `setNearZeroSmooth(bool, int16_t threshold=1024)` — amplitude-gated IIR blend at zero crossings to reduce quantisation click artifacts on internal DAC playback.
 - MIDI16.h (May 2026): Added optional FreeRTOS clock task (`beginClockTask()`) that owns all Serial2 reads on ESP32, routing bytes through internal SPSC lock-free ring buffers. Clock byte timestamps captured at read time for accurate `clockToBpm()` independent of `loop()` blocking. Outgoing clock send moved into the same task via `setClockSendBpm()`; adaptive sleep (sleep until 1ms before deadline, then busy-wait) reduces send jitter from ±1ms to ~±50µs. Added CC coalescing in `handleChannelRead()` — same-channel/controller CC messages are collapsed to the final value on each `read()` call, eliminating slider lag at 31250 baud. BPM tracking improvements: 8-sample rolling average (down from 16), 0.75 BPM hysteresis on integer output, stop/restart detection with history pre-fill for accurate first post-restart reading, and 3ms burst guard against drain-loop artefacts. Added `getBpm()` for side-effect-free BPM reads.
+- MIDI16.h (Aug 2026): Added transparent prioritized DIN transmission while the ESP32 clock task is active. Generated clock remains deadline-first; explicit Clock/Start/Continue/Stop use a 16-slot Real-Time queue; complete Note/CC messages use a 64-slot ordinary queue and are paced one per worker pass. Existing send signatures and direct-output behavior on ESP32 without the task, RP2040, and ESP8266 are unchanged. Added queue-drop/backpressure diagnostics and corrected the default constructor to use C++ delegating-constructor syntax.
 - FX.h (May 2026): Fixed dual-core crackle in `reverbStereo` and `reverbStereo2`. Root cause: `M16_ATOMIC_GUARD_BLOCKING` serialised both cores but allowed them to write DMA samples out of slot order → audible discontinuities. Fix: switched to `M16_ATOMIC_GUARD` (non-blocking try-lock) + `reverbCacheL`/`reverbCacheR` output cache — losing core returns cached previous output, which is audibly correct. `reverbStereo2` additionally moves `All` allpass processing inside the guard (All has no internal locking) and adds half-rate toggle + IIR smoothing for CPU efficiency. Confirmed fix: both functions run cleanly with dual-core enabled and `M16_REORDER_BUFFER_ENABLE 0`.
 - Osc.h (Jun 2026): Added `disableAntiAlias()` — pins `_cachedDepthMax` to 9999 and sets `_antiAliasDisabled` flag so subsequent `setFreq()`/`setCMRatio()` calls do not reset the cap. Intended for feedback FM (self-modulation noise), intentional aliasing, and bit-crush effects where the Chowning depth cap is counterproductive. Per-instance; does not affect other oscillators. Added `_antiAliasDisabled` guard to both `setFreq()` and `setCMRatio()` depth-cap recalculation paths.
 - BBD.h (Jun 2026): Extended parameter slewing to `delayLevel` and `feedbackLevel` in addition to the existing `scanRate` slew. All three setters (`setLevel`, `setFeedbackLevel`, `setScanRate`/`setTime`) now write only to target variables; `next()` slews live values toward targets at 4 units/sample (level/feedback, ~6ms full range) or 32 fp-units/sample (scan rate, ~42ms). Prevents buffer-seam clicks when any of these parameters are adjusted during playback. Also lowered `softSaturate` threshold from 24000 to 20000 to ensure 4:1 compression handles worst-case feedback inputs without hitting the hard-clip guard.
 - FX.h (May 2026): Added `setChorusMix(float)` — top-level dry/wet blend for `chorusStereo()` (0.0 = dry, 1.0 = wet, default 0.5). Blend is applied as a final stage inside `chorusStereo()` after the internal depth/normalisation processing, matching the pattern of `reverbMix` in `reverbStereo`. All public chorus setters (`setChorusMix`, `setChorusDepth`, `setChorusWidth`, `setChorusRate`, `setChorusDelayTime`) now auto-call `initChorus()` on first use, so calling any setter in `setup()` before `audioStart()` pre-allocates chorus buffers and eliminates the startup click caused by lazy init inside the audio callback. `setChorusFeedback` is excluded from auto-init (it is called from within `initChorus()` and would recurse).
-- M16.h + Env.h (Jun 2026): Fixed envelope "zipper"/stepped slopes by giving time-based generators a real audio-frame clock. Added global `audioFrameCount()` / `m16AdvanceAudioFrame()` (atomic on ESP32/RP2040, `volatile` on ESP8266), advanced once per output frame in `i2s_write_samples` (all platforms) and the `audioBlockWrite` finaliser (Core-1 block-split branch skipped to avoid double-count). Rewrote `Env.h` to evaluate the envelope as a function of this clock instead of `micros()` (which freezes within a DMA-fill burst → ~11.6 ms staircase) or a per-`next()`-call counter (which only kept time at per-sample call rates, breaking the control-rate `next()`-in-`loop()` pattern). `Env::next()` and `getValue()` are now equivalent clock evaluators; the pre-release contour is a pure function of frames-since-start (concurrent dual-core evaluation safe), and only `startRelease()` writes an async snapshot under the new `releaseTriggered` atomic latch. Decay-repeats are clock-derived. Both the control-rate (`getValue()` per sample) and per-sample (`next()`/`getValue()` in `audioUpdate`) patterns are now smooth and correctly timed with no sketch changes. Behavior changes: `setValue()` is transient (overwritten by the evaluator), `getStartTime()` returns a frame index, durations stored in ms. Refactored the cache-the-value examples (`Envelope`, `FM_spread`, `PluckArpeggio`, `Sync`) to read `getValue()` per sample in `audioUpdate()`; examples that already read `getValue()`/`next()` per sample are smooth unchanged.
+- M16.h + Env.h (Jun/Aug 2026): Fixed envelope "zipper"/stepped slopes by giving time-based generators a real audio-frame clock. Added global `audioFrameCount()` / `m16AdvanceAudioFrame()` (atomic on ESP32/RP2040, `volatile` on ESP8266), advanced once per emitted output frame. Partition producers render against a per-core logical frame context, while only the platform finalizer commits the public clock, preventing double-counting and keeping both partitions aligned. Rewrote `Env.h` to evaluate the envelope as a function of this clock instead of `micros()` (which freezes within a DMA-fill burst → ~11.6 ms staircase) or a per-`next()`-call counter (which only kept time at per-sample call rates, breaking the control-rate `next()`-in-`loop()` pattern). `Env::next()` and `getValue()` are now equivalent clock evaluators; the pre-release contour is a pure function of frames-since-start (concurrent dual-core evaluation safe), and only `startRelease()` writes an async snapshot under the new `releaseTriggered` atomic latch. Decay-repeats are clock-derived. Both the control-rate (`getValue()` per sample) and per-sample (`next()`/`getValue()` in `audioUpdate`) patterns are now smooth and correctly timed with no sketch changes. Behavior changes: `setValue()` is transient (overwritten by the evaluator), `getStartTime()` returns a frame index, durations stored in ms. Refactored the cache-the-value examples (`Envelope`, `FM_spread`, `PluckArpeggio`, `Sync`) to read `getValue()` per sample in `audioUpdate()`; examples that already read `getValue()`/`next()` per sample are smooth unchanged.
+- Env.h (Aug 2026): Added optional `setResetTransition(ms)` click avoidance for `setResetOnStart(true)`. On an active-envelope retrigger, the output moves linearly from its current level to zero for the requested duration before the normal zero-based attack begins. The default is `0 ms`, preserving existing immediate-reset behaviour; reset-on-start disabled continues to attack smoothly from the current level.
+- FX.h (Aug 2026): Added `softLimit(sample, threshold=0.85)`, a transparent threshold-based master limiter. The signal remains exactly linear below the threshold; a unity-slope quadratic knee above it approaches full scale without the continuous saturation, makeup gain, or foldback of the existing distortion-oriented soft clippers.
+- FX.h (Aug 2026): Refactored the primary compressor for transparent master use. It now uses a smoothed peak detector, unity makeup by default with an optional explicit fifth `setCompression()` argument, continuous ratio gain above threshold, and `int32_t` outputs without internal hard clipping. Added stereo-linked `compressionStereo()` so both channels follow the louder detector without image shifts. The older three-argument `compression(sample, threshold, ratio)` overload remains the legacy instantaneous character compressor.
+- FX.h (Aug 2026): Added `setChorusSpread(0.0-1.0)` for `chorusStereo()`. The control scales the wet signal's mid/side side component before the final dry/wet blend: `0.0` collapses wet output to mono, `0.5` preserves the previous stereo image, and `1.0` exaggerates width while the dry centre remains unchanged.
 - M16.h (Jul 2026): Added `setAudioPostProcessCallback()` for master processing after dual-core partial mixes are combined. Reverb, master delay, chorus, compression, global filters, distortion, and final gain now have a defined full-mix stage instead of being applied to Core 0's partial mix. Updated `Polyphony` and `SequenceVoices` examples to use the callback.
-- M16.h (Jul 2026): Converted dual-core `audioBlockWrite()` to a two-slot, sequence-tagged pipeline. Core 1 renders block N+1 while Core 0 combines, post-processes, and writes block N. Added bounded 100 ms Core-1 rendezvous and DMA-write timeouts so a failed producer or driver call cannot wedge audio permanently. Added `audioBlockSyncTimeoutCount()` and `audioDmaWriteTimeoutCount()` diagnostics. The pipeline adds approximately 512 bytes of static RAM at the default block size.
-- Beat Machine integration (Jul 2026): Migrated from two complete shared-state callbacks to partitioned voice rendering, post-combine master effects, pipelined block output, and workload-aware voice ownership. Hardware testing eliminated permanent stalls and recurring silent underruns.
+- M16.h (Jul/Aug 2026): Converted dual-core `audioBlockWrite()` to a two-slot, sequence-tagged pipeline. Core 1 renders block N+1 while Core 0 combines, post-processes, and writes block N. The original 100 ms Core-1 rendezvous was replaced with a deadline of two audio blocks (`M16_BLOCK_SYNC_TIMEOUT_BLOCKS`, clamped to 1–10 ms), preventing a missed partition from exhausting the DMA reserve. Added cumulative, current-consecutive, and maximum-consecutive synchronization diagnostics; the DMA driver call retains its separate 100 ms timeout. Added fast-DMA-write detection and a one-tick IDLE0 safeguard so an underfilled output cannot turn the maximum-priority finalizer into a watchdog-producing busy loop; `audioDmaStarvationYieldCount()` exposes interventions. Corrected late-producer slot recovery to use wrap-safe monotonic sequence comparison instead of exact equality. Recovery is evaluated once per block: a lapped producer fast-forwards past DSP blocks that Core 0 has already discarded and yields one tick for IDLE1/TinyUSB instead of entering a maximum-priority catch-up loop. A separate unpaced-producer safeguard yields after 32 Core-1 blocks that did not naturally wait for a slot, covering the sustained slightly-slower case before it becomes a sequence recovery. `audioBlockLateProducerRecoveryCount()` and `audioProducerStarvationYieldCount()` report these events. The pipeline adds approximately 512 bytes of static RAM at the default block size.
+- SVF2.h (Aug 2026): Added `nextBPFUnlocked()` for filters with exclusive partition ownership. It removes the per-sample state spinlock while retaining atomic coefficient loads for cross-core control updates. The normal `nextBPF()` remains the safe default for shared instances.
+- BBD.h (Aug 2026): Added `nextUnlocked()` for delays exclusively advanced by one audio core. It preserves the normal BBD processing, parameter slewing, feedback, filtering, saturation, and wet/dry mix while omitting the per-sample state spinlock. `next()` remains the safe default for shared instances.
+- Beat Machine integration (Jul/Aug 2026): Migrated from two complete shared-state callbacks to pipelined partition rendering with fixed ownership (Core 0: even voices; Core 1: odd voices) and post-combine master effects. Added whole-voice culling, independent tone/FM and noise/BPF path gating, lock-free partition-owned SVF2 BPF rendering, and demand-activated BBD send/tail processing. Hardware testing eliminated permanent stalls and recurring silent underruns; short M16 rendezvous deadlines now preserve DMA continuity when a partition misses a block.
+- Osc.h (Aug 2026): Improved wavetable-noise unpredictability without replacing the lookup architecture. `noiseGen()` and grain-noise generation remove the mean independently from all three table bands. Noise lookup now applies a strong two-multiply 32-bit avalanche hash to phase plus an automatically generated per-oscillator salt, followed by a power-of-two mask and one table read. This removes the correlated traversal and audible pulsing of the former single-multiply hash. Existing `setNoise(true)` sketches require no changes; `setNoiseSeed(uint32_t)` is available only when a reproducible stream is desired.
+- Osc.h (Aug 2026): Added the memory-owning `WaveTable` type so sketches can allocate, generate, share, morph, and window-transform wavetables without declaring raw pointers. `WaveTable` uses PSRAM when available, falls back to ordinary RAM, releases its allocation, and is deliberately non-copyable. Added `WaveTable` overloads for `Osc::setTable()`, `nextMorph()`, `currentMorph()`, `nextWTrans()`, `phModMorph()`, and `phModWTrans()` while retaining all pointer overloads for compatibility. Migrated every example with an external oscillator wavetable to the new API; this also corrects the undersized one-band arrays formerly shown by `TinyUSB-MIDI`.
+- Osc.h (Aug 2026): Replaced the hard-edged `pulseGen()` table with DC-free additive synthesis using 56/28/12 harmonic limits for the low/mid/high bands, matching `sqrGen()`'s anti-aliasing policy while including both odd and even harmonics for arbitrary duty cycles. Added the oscillator-owned `osc.pulseGen(float duty)` overload alongside `WaveTable::pulseGen(float duty)`; the legacy static pointer overload remains available.
+- Osc.h (Aug 2026): Reworked additive wavetable construction to generate one complete harmonic at a time using a complex-rotation recurrence. Each harmonic now evaluates only its initial phase and phase step trigonometrically; subsequent table samples use multiply-add recurrence with phasor renormalization every 256 samples. Triangle, square, sawtooth, and arbitrary-duty pulse retain their existing three-band harmonic limits and normalization, while eliminating roughly 930,000 startup trigonometric calls when the common cosine/triangle/square/saw/noise morph set is generated.
+- M16.h (Aug 2026): Changed the ESP32 and Pico-family defaults to one dedicated audio core. Independent voice arrays explicitly call `setIsDualCore(true)` and use the block partition API. Pico-family partitioning now uses two alternating block slots. Pico 2 (RP2350) dispatches bounded Core-0 jobs through a claimed hardware doorbell, overlapping the next even-voice render with Core-1 finalization; Pico (RP2040) retains cooperative `audioLoop()` service because the hardware lacks doorbells and the Arduino runtime owns its FIFO IRQ. Both safely fall back to Core 1 when a job is missed. ESP32's established FreeRTOS block pipeline is unchanged. The claim, fallback, and block-contract diagnostics and per-core logical frame contexts apply to both Pico generations. `Polyphony` and `SequenceVoices` demonstrate the opt-in partition contract.
+- M16.h (Aug 2026): Fixed ESP32 dual-core Task Watchdog Timer (TWDT) panic crashes and inter-core sync dropouts under high CPU load. Increased default `M16_BLOCK_SYNC_TIMEOUT_BLOCKS` from 2 to 4 blocks (~2.9ms timeout at 44.1kHz with N=32, ~5.8ms with N=64) to tolerate scheduler jitter during heavy DSP execution. Increased audio task stack allocations from 8KB (`8192`) to 16KB (`16384`) bytes and tuned task priority to `configMAX_PRIORITIES - 2` to prevent OS timer thread starvation. Preserved `_audioProducerBlockWasPaced` guard on unpaced yields and removed `vTaskDelay(1)` from Core 1 late producer recovery, eliminating the self-perpetuating desync loop that muted odd voices.
