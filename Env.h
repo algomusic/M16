@@ -106,7 +106,7 @@ class Env {
     /** Set releaseState time in ms. */
     void setRelease(float val) {
       if (val >= 0) {
-        envRelease = fmaxf(10.0f, val); // ms, min 10ms
+        envRelease = fmaxf(1.0f, val); // ms, min 10ms
       }
     }
 
@@ -118,23 +118,34 @@ class Env {
     /** Begin the current envelope */
     inline
     void start() {
-      // Snapshot current level so attack interpolates from here (avoids held-then-jump on retrigger).
-      // resetOnStart forces a 0 start for consistent drum attacks.
-      uint16_t startLevel;
+      // Snapshot the current level. Normal retriggers attack from here. A hard
+      // reset starts from zero; an optional reset transition first glides this
+      // level to zero and then begins the zero-based attack.
+      uint16_t currentLevel;
       #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
-      if (resetOnStart) envVal.store(0, std::memory_order_relaxed);
-      startLevel = resetOnStart ? 0 : envVal.load(std::memory_order_relaxed);
+      currentLevel = envVal.load(std::memory_order_relaxed);
       #else
-      if (resetOnStart) envVal = 0;
-      startLevel = envVal;
+      currentLevel = envVal;
       #endif
-      attackStartLevel = startLevel;
+      resetStartLevel = currentLevel;
+      attackStartLevel = resetOnStart ? 0 : currentLevel;
 
       // Jittered peak level and release time, mirroring historical behaviour.
       JIT_MAX_ENV_LEVEL = MAX_ENV_LEVEL - (audioRand(MAX_ENV_LEVEL * 0.05));
 
       // Convert ms durations to samples using the live sample rate.
       const float samplesPerMs = SAMPLE_RATE * 0.001f;
+      resetTransitionSamples =
+          (resetOnStart && currentLevel > 0) ? resetTransitionMs * samplesPerMs : 0.0f;
+      invResetTransitionSamples = (resetTransitionSamples > 0.0f)
+          ? (1.0f / resetTransitionSamples) : 0.0f;
+      if (resetOnStart && resetTransitionSamples <= 0.0f) {
+        #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+        envVal.store(0, std::memory_order_relaxed);
+        #else
+        envVal = 0;
+        #endif
+      }
       attackSamples = envAttack * samplesPerMs;
       invAttackSamples = (attackSamples > 0.0f) ? (1.0f / attackSamples) : 0.0f;
       holdSamples = envHold * samplesPerMs;
@@ -168,6 +179,21 @@ class Env {
     /** Get resetOnStart setting */
     bool getResetOnStart() {
       return resetOnStart;
+    }
+
+    /** Set the click-avoidance transition used by resetOnStart.
+     * When resetOnStart is true and the envelope is above zero, start() glides
+     * from the current level to zero over this duration, then begins attack.
+     * A value of 0 (default) preserves the immediate-reset behaviour.
+     * @param milliseconds transition duration in ms, clamped to >= 0
+     */
+    void setResetTransition(float milliseconds) {
+      resetTransitionMs = fmaxf(0.0f, milliseconds);
+    }
+
+    /** Get the reset transition duration in milliseconds. */
+    float getResetTransition() {
+      return resetTransitionMs;
     }
 
     /** Return the audio frame at which the current note started. */
@@ -347,6 +373,19 @@ class Env {
         // Deterministic pre-release contour, a pure function of frames-since-start.
         uint32_t elapsed = frameNow - startFrame;
 
+        if (resetTransitionSamples > 0.0f &&
+            elapsed < (uint32_t)resetTransitionSamples) {
+          // Linear current-level -> zero transition before a reset attack.
+          float t = elapsed * invResetTransitionSamples;
+          currVal = (uint16_t)(resetStartLevel * (1.0f - t));
+          currState = 1;
+        }
+        else {
+          // Attack timing begins after the optional reset transition.
+          if (resetTransitionSamples > 0.0f) {
+            elapsed -= (uint32_t)resetTransitionSamples;
+          }
+
         if (attackSamples > 0.0f && elapsed < (uint32_t)attackSamples) {
           // attack: ease-out (fast initial rise, smooth approach to peak),
           // interpolated from attackStartLevel for click-free retrigger.
@@ -399,6 +438,7 @@ class Env {
             } else { currVal = 0; currState = 0; }
           }
         }
+        }
       }
 
       if (currState > 0 && currState != prevEnvState) {
@@ -425,6 +465,7 @@ class Env {
     uint16_t envVal = 0;
     #endif
     uint16_t attackStartLevel = 0;
+    uint16_t resetStartLevel = 0;
     uint16_t releaseStartLevel = 0;
     // Durations in milliseconds (converted to samples in start()).
     float envAttack = 0.0f, envHold = 0.0f, envDecay = 0.0f;
@@ -432,6 +473,8 @@ class Env {
     // Per-note durations in samples (computed in start()).
     float attackSamples = 0.0f, holdSamples = 0.0f, decaySamples = 0.0f, releaseSamples = 0.0f;
     float invAttackSamples = 0.0f, invDecaySamples = 0.0f, invReleaseSamples = 0.0001f;
+    float resetTransitionMs = 0.0f;
+    float resetTransitionSamples = 0.0f, invResetTransitionSamples = 0.0f;
     // Audio-frame anchors (see audioFrameCount() in M16.h).
     uint32_t startFrame = 0;
     uint32_t releaseStartFrame = 0;
@@ -445,7 +488,7 @@ class Env {
     int envState = 0;
     bool releaseTriggered = false;
     #endif
-    bool resetOnStart = false; // If true, reset envVal to 0 on start() for consistent drum attacks
+    bool resetOnStart = false; // If true, start a zero-based attack (optionally transitioned)
 
 };
 
