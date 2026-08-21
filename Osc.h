@@ -15,53 +15,67 @@
 #ifndef OSC_H_
 #define OSC_H_
 
+/** A shareable, memory-owning oscillator wavetable.
+ *
+ * WaveTable keeps allocation details and raw pointers out of sketches. Generate
+ * a waveform once, then pass the same object to any number of Osc instances.
+ * The legacy pointer APIs remain available for advanced and existing code.
+ */
+class WaveTable {
+public:
+  WaveTable() = default;
+  ~WaveTable() {
+    if (_samples == nullptr) return;
+    #if IS_ESP32()
+      if (_usesPSRAM) free(_samples);
+      else delete[] _samples;
+    #else
+      delete[] _samples;
+    #endif
+  }
+
+  WaveTable(const WaveTable&) = delete;
+  WaveTable& operator=(const WaveTable&) = delete;
+
+  void cosGen();
+  void sinGen();
+  void triGen();
+  void pulseGen(float duty);
+  void sqrGen();
+  void sawGen();
+  void noiseGen();
+  void noiseGen(int grainSize);
+  void crackleGen();
+  void brownNoiseGen();
+  void pinkNoiseGen();
+
+  bool isAllocated() const { return _samples != nullptr; }
+
+private:
+  int16_t* _samples = nullptr;
+  bool _usesPSRAM = false;
+
+  void allocate() {
+    if (_samples != nullptr) return;
+    #if IS_ESP32()
+      _samples = psramAllocInt16(FULL_TABLE_SIZE, "wavetable");
+      _usesPSRAM = (_samples != nullptr);
+    #endif
+    if (_samples == nullptr) {
+      _samples = new int16_t[FULL_TABLE_SIZE];
+      for (int i = 0; i < FULL_TABLE_SIZE; ++i) _samples[i] = 0;
+      #if IS_ESP32()
+        Serial.println("Wavetable allocated in regular RAM");
+      #endif
+    }
+  }
+
+  friend class Osc;
+};
+
 class Osc {
 
 public:
-  // ============== Dual-core phase synchronization (RP2040) ==============
-  #if IS_RP2040()
-  static constexpr int MAX_REGISTERED_OSCS = 32;
-  static Osc* registeredOscs[MAX_REGISTERED_OSCS];
-  static int numRegisteredOscs;
-
-  // Per-core phase storage for synchronized dual-core operation
-  uint32_t storedPhase[2] = {0, 0};
-  bool useStoredPhase[2] = {false, false};  // Per-core flag to prevent race conditions
-
-  /** Register this oscillator for dual-core phase sync */
-  void registerForDualCore() {
-    if (numRegisteredOscs < MAX_REGISTERED_OSCS) {
-      // Check if already registered
-      for (int i = 0; i < numRegisteredOscs; i++) {
-        if (registeredOscs[i] == this) return;
-      }
-      registeredOscs[numRegisteredOscs++] = this;
-    }
-  }
-
-  /** Advance phases for all registered oscillators (call under mutex) */
-  static void advanceAllPhases(int coreNum) {
-    for (int i = 0; i < numRegisteredOscs; i++) {
-      Osc* osc = registeredOscs[i];
-      if (osc) {
-        // Store current phase for this core, then advance
-        osc->storedPhase[coreNum] = osc->phase_fractional;
-        osc->phase_fractional += osc->phase_increment_fractional;
-        osc->useStoredPhase[coreNum] = true;  // Only set flag for this core
-      }
-    }
-  }
-
-  /** Mark this core's oscillators as done with stored phase */
-  static void clearStoredPhaseFlag(int coreNum) {
-    for (int i = 0; i < numRegisteredOscs; i++) {
-      if (registeredOscs[i]) {
-        registeredOscs[i]->useStoredPhase[coreNum] = false;  // Only clear this core's flag
-      }
-    }
-  }
-  #endif
-  // ========================================================================
 
   /** Constructor.
 	* Has no table specified - make sure to use setTable() after initialising
@@ -71,9 +85,6 @@ public:
     // consuming or locking the global audio PRNG. Users can override this via
     // setNoiseSeed() when a reproducible stream is required.
     noiseSalt = noiseHash((uint32_t)(uintptr_t)this ^ 0x9E3779B9u);
-    #if IS_RP2040()
-    registerForDualCore();
-    #endif
   }
 
   /** Updates the phase according to the current frequency and returns the sample at the new phase position.
@@ -107,34 +118,6 @@ public:
       }
       return sandHValue;
     }
-
-    // Fast path: atomic phase increment for thread-safe dual-core operation
-    #if IS_RP2040()
-    // Pico dual-core: use pre-acquired phase if available (set by advanceAllPhases)
-    if (isDualCore && !pulseWidthOn) {
-      int coreNum = get_core_num();
-      // Check this core's flag - prevents race where other core clears our flag
-      if (useStoredPhase[coreNum]) {
-        int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
-        if (cachedBandPtr == nullptr) return 0;
-
-        // Use the phase that was stored for this core (already advanced under mutex)
-        uint32_t myPhase = storedPhase[coreNum];
-        int idx;
-        if (isNoise && !isCrackle) {
-          idx = noiseTableIndex(myPhase);
-        } else {
-          idx = (myPhase >> 16) & (TABLE_SIZE - 1);
-        }
-        sampVal = cachedBandPtr[idx];
-
-        if (spreadActive) {
-          sampVal = doSpreadAtomic(sampVal);
-        }
-        return sampVal;
-      }
-    }
-    #endif
 
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
@@ -219,6 +202,82 @@ public:
     }
     return sampVal;
 	}
+
+  /** Return the next sample without an atomic phase advance.
+   * Use only when exactly one audio core owns this oscillator's render state,
+   * such as a voice assigned with audioPartitionOffset()/Stride(). Control-rate
+   * setFreq()/setPitch() changes remain safe: the frequency seqlock still gives
+   * this method a consistent wavetable-band pointer and phase increment.
+   */
+  inline int16_t nextUnlocked() {
+    int32_t sampVal;
+
+    #if IS_ESP32() || IS_RP2040()
+    uint32_t cachedIncrement;
+    int16_t* cachedBandPtr;
+    uint32_t seqBefore, seqAfter;
+    do {
+      seqBefore = _freqSeq.load(std::memory_order_acquire);
+      if (seqBefore & 1u) continue;
+      cachedIncrement = __atomic_load_n(&phase_increment_fractional,
+                                         __ATOMIC_RELAXED);
+      cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr,
+                                                __ATOMIC_RELAXED);
+      seqAfter = _freqSeq.load(std::memory_order_acquire);
+    } while (seqAfter != seqBefore);
+    #else
+    uint32_t cachedIncrement = phase_increment_fractional;
+    int16_t* cachedBandPtr = bandPtr;
+    #endif
+
+    if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
+
+    if (isSandH) {
+      uint32_t oldPhase = phase_fractional;
+      uint32_t newPhase = oldPhase + cachedIncrement;
+      phase_fractional = newPhase & TABLE_SIZE_FP_MASK;
+      if ((oldPhase & ~TABLE_SIZE_FP_MASK) !=
+          (newPhase & ~TABLE_SIZE_FP_MASK)) {
+        sandHValue = cachedBandPtr[audioRand(TABLE_SIZE)];
+      }
+      return sandHValue;
+    }
+
+    // Pulse-width and crackle modes have specialised phase/wrap behaviour.
+    if (pulseWidthOn || isCrackle) {
+      int idx = (phase_fractional >> 16) & (TABLE_SIZE - 1);
+      sampVal = cachedBandPtr[idx];
+      incrementPhase();
+      if (spreadActive) sampVal = doSpread(sampVal);
+      return sampVal;
+    }
+
+    uint32_t myPhase = phase_fractional;
+    phase_fractional = (myPhase + cachedIncrement) & TABLE_SIZE_FP_MASK;
+
+    // Preserve next()'s click-reducing deferred band switch without making the
+    // exclusively owned phase atomic.
+    #if IS_ESP32() || IS_RP2040()
+    int16_t* pending = (int16_t*)__atomic_load_n(
+        (uintptr_t*)&_pendingBandPtr, __ATOMIC_RELAXED);
+    if (pending != nullptr) {
+      int rawIdx = (myPhase >> 16) & (TABLE_SIZE - 1);
+      if (abs(cachedBandPtr[rawIdx]) < (MAX_16 >> 3)) {
+        __atomic_store_n((uintptr_t*)&bandPtr, (uintptr_t)pending,
+                         __ATOMIC_RELAXED);
+        __atomic_store_n((uintptr_t*)&_pendingBandPtr, (uintptr_t)nullptr,
+                         __ATOMIC_RELAXED);
+        cachedBandPtr = pending;
+      }
+    }
+    #endif
+
+    int idx = isNoise ? noiseTableIndex(myPhase)
+                      : ((myPhase >> 16) & (TABLE_SIZE - 1));
+    sampVal = cachedBandPtr[idx];
+    if (spreadActive) sampVal = doSpread(sampVal);
+    return sampVal;
+  }
 
   /** Updates the phase and returns the next sample with interpolation.
    * Uses cubic interpolation for high band (>831Hz), linear for mid band (>208Hz),
@@ -365,6 +424,12 @@ public:
     }
 	}
 
+  /** Use a shared WaveTable without exposing its internal memory pointer. */
+  inline void setTable(WaveTable& table) {
+    table.allocate();
+    setTable(table._samples);
+  }
+
 	/** Set the phase of the Oscil. Phase ranges from 0.0 - 1.0 */
 	inline
   void setPhase(float phase) {
@@ -480,6 +545,12 @@ public:
     return sampVal;
 	}
 
+  /** Morph toward a shared WaveTable. */
+  inline int16_t nextMorph(const WaveTable& secondWaveTable, float morphAmount) {
+    if (!secondWaveTable.isAllocated()) return next();
+    return nextMorph(secondWaveTable._samples, morphAmount);
+  }
+
   /** Get a blend of this Osc and another, without incrementing the waveTable lookup.
   * @param secondWaveTable - a waveTable  array to morph with
   * @param morphAmount - The balance (mix) of the second waveTable , 0.0 - 1.0
@@ -532,6 +603,12 @@ public:
     }
     return sampVal;
 	}
+
+  /** Read the current phase morphed toward a shared WaveTable. */
+  inline int16_t currentMorph(const WaveTable& secondWaveTable, float morphAmount) {
+    if (!secondWaveTable.isAllocated()) return getValue();
+    return currentMorph(secondWaveTable._samples, morphAmount);
+  }
 
   /** Get a window transform between this Osc and another waveTable .
   * Inspired by the Window Transform Function by Dove Audio
@@ -606,6 +683,13 @@ public:
     prevSampVal = sampVal;
     incrementPhase();
     return sampVal;
+  }
+
+  /** Apply a window transform using a shared WaveTable. */
+  inline int16_t nextWTrans(const WaveTable& secondWaveTable, float windowSize,
+                           bool duel, bool invert) {
+    if (!secondWaveTable.isAllocated()) return next();
+    return nextWTrans(secondWaveTable._samples, windowSize, duel, invert);
   }
 
   /** Phase Modulation (FM)
@@ -759,6 +843,60 @@ public:
     return sampVal;
   }
 
+  /** Integer phase modulation without an atomic carrier-phase advance.
+   * Use only for an oscillator exclusively owned by the calling audio core.
+   */
+  inline int16_t phModIntUnlocked(int16_t modulator,
+                                  int32_t modIndexScaled) {
+    int32_t dMaxScaled = _cachedDepthMaxScaled;
+    if (modIndexScaled > dMaxScaled) modIndexScaled = dMaxScaled;
+
+    int32_t modOffset = ((int32_t)modulator * modIndexScaled) >> 8;
+    modOffset <<= 8;
+
+    #if IS_ESP32() || IS_RP2040()
+    uint32_t cachedIncrement;
+    int16_t* cachedBandPtr;
+    uint32_t seqBefore, seqAfter;
+    do {
+      seqBefore = _freqSeq.load(std::memory_order_acquire);
+      if (seqBefore & 1u) continue;
+      cachedIncrement = __atomic_load_n(&phase_increment_fractional,
+                                         __ATOMIC_RELAXED);
+      cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr,
+                                                __ATOMIC_RELAXED);
+      seqAfter = _freqSeq.load(std::memory_order_acquire);
+    } while (seqAfter != seqBefore);
+    #else
+    uint32_t cachedIncrement = phase_increment_fractional;
+    int16_t* cachedBandPtr = bandPtr;
+    #endif
+
+    if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
+    if (pulseWidthOn || isNoise || isCrackle) {
+      uint32_t p = phase_fractional + modOffset;
+      int idx = (p >> 16) & (TABLE_SIZE - 1);
+      int frac = (p >> 6) & 0x3FF;
+      int16_t s0 = cachedBandPtr[idx];
+      int16_t s1 = cachedBandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+      int32_t sampVal = s0 + (((s1 - s0) * frac) >> 10);
+      incrementPhase();
+      if (spreadActive) sampVal = doSpread(sampVal);
+      return sampVal;
+    }
+
+    uint32_t myPhase = phase_fractional;
+    phase_fractional = (myPhase + cachedIncrement) & TABLE_SIZE_FP_MASK;
+    uint32_t p = myPhase + modOffset;
+    int idx = (p >> 16) & (TABLE_SIZE - 1);
+    int frac = (p >> 6) & 0x3FF;
+    int16_t s0 = cachedBandPtr[idx];
+    int16_t s1 = cachedBandPtr[(idx + 1) & (TABLE_SIZE - 1)];
+    int32_t sampVal = s0 + (((s1 - s0) * frac) >> 10);
+    if (spreadActive) sampVal = doSpread(sampVal);
+    return sampVal;
+  }
+
   /** Phase Modulation with wavetable morphing (FM + Morph)
    * Combines phMod and nextMorph in a single phase advance.
    * @param modulator - The next sample from the modulating waveform (int16_t)
@@ -799,6 +937,10 @@ public:
       } else {
         sampVal2 = secondWaveTable[bandOffset + idx];
       }
+      if (intMorphAmount >= 1024) {
+        if (spreadActive) sampVal2 = doSpreadAtomic(sampVal2);
+        return sampVal2;
+      }
       int32_t sampVal = (((sampVal2 * intMorphAmount) >> 10) +
         ((sampVal1 * (1024 - intMorphAmount)) >> 10));
       if (spreadActive) {
@@ -832,6 +974,13 @@ public:
       sampVal = doSpread(sampVal);
     }
     return sampVal;
+  }
+
+  /** Phase modulation and morphing using a shared WaveTable. */
+  inline int16_t phModMorph(int16_t modulator, float modIndex,
+                           const WaveTable& secondWaveTable, float morphAmount) {
+    if (!secondWaveTable.isAllocated()) return phMod(modulator, modIndex);
+    return phModMorph(modulator, modIndex, secondWaveTable._samples, morphAmount);
   }
 
   /** Phase Modulation with window transform (FM + WTrans)
@@ -961,6 +1110,15 @@ public:
     return sampVal;
   }
 
+  /** Phase modulation and window transform using a shared WaveTable. */
+  inline int16_t phModWTrans(int16_t modulator, float modIndex,
+                            const WaveTable& secondWaveTable, float windowSize,
+                            bool duel, bool invert) {
+    if (!secondWaveTable.isAllocated()) return phMod(modulator, modIndex);
+    return phModWTrans(modulator, modIndex, secondWaveTable._samples,
+                       windowSize, duel, invert);
+  }
+
   /** Set cached mod index for use with single-argument phMod
    * @param modIndex - The depth value (0.0 - 10.0 typical)
    */
@@ -1042,6 +1200,20 @@ public:
     #else
     return phModInt(modOsc.next(), modIndexScaled);
     #endif
+  }
+
+  /** Paired integer phase modulation for an exclusively owned voice pair.
+   * Unlike phModInt(Osc&, ...), this performs no pair lock or atomic phase
+   * fetch-add. Both carrier and modulator must belong to this audio core.
+   */
+  inline int16_t phModIntUnlocked(Osc& modOsc, int32_t modIndexScaled) {
+    if (!_cmRatioSet) {
+      float modFreq = modOsc.getFreq();
+      if (modFreq < 1.0f) modFreq = 1.0f;
+      int32_t dMaxScaled = (int32_t)((9000.0f / modFreq) * 2048.0f);
+      if (modIndexScaled > dMaxScaled) modIndexScaled = dMaxScaled;
+    }
+    return phModIntUnlocked(modOsc.nextUnlocked(), modIndexScaled);
   }
 
   /** Phase Modulation with 2x oversampling (FM)
@@ -1515,22 +1687,30 @@ public:
     Osc::generateWave(waveTable, 2, 12, 1); // high
   }
 
-  /** Generate a square/pulse wave for the provided wavetable
+  /** Generate a band-limited pulse wave for the provided wavetable.
+  * Each frequency band uses a progressively lower harmonic limit, matching
+  * sqrGen(). The DC component is removed so duty changes do not shift the
+  * output baseline.
   * @theTable The the wavetable to be filled
   * @duty The duty cycle, or pulse width, 0.0 - 1.0, 0.5 = sqr
   */
   static void pulseGen(int16_t * theTable, float duty) {
-    for(int i=0; i<TABLE_SIZE; i++) {
-      if (i < TABLE_SIZE * duty) {
-        theTable[i] = MAX_16;
-        theTable[i + TABLE_SIZE] = MAX_16;
-        theTable[i + TABLE_SIZE * 2] = MAX_16;
-      } else {
-        theTable[i] = MIN_16;
-        theTable[i + TABLE_SIZE] = MIN_16;
-        theTable[i + TABLE_SIZE * 2] = MIN_16;
-      }
+    duty = max(0.0f, min(1.0f, duty));
+    if (duty <= 0.0f || duty >= 1.0f) {
+      for (int i = 0; i < FULL_TABLE_SIZE; i++) theTable[i] = 0;
+      return;
     }
+    Osc::generatePulseWave(theTable, 0, 56, duty); // low
+    Osc::generatePulseWave(theTable, 1, 28, duty); // mid
+    Osc::generatePulseWave(theTable, 2, 12, duty); // high
+  }
+
+  /** Generate a pulse wave in this oscillator's internal wavetable.
+   * @param duty Pulse width from 0.0 to 1.0
+   */
+  void pulseGen(float duty) {
+    allocateWavetable();
+    Osc::pulseGen(waveTable, duty);
   }
 
   /** Generate a square wave for the provided wavetable
@@ -1863,45 +2043,131 @@ private:
   * @segment Which 3rd of the full table to use, low (0), mid (1), high (2)
   */
   static void generateWave(int16_t * theTable, int segment, int overtones, int waveType) {
-    float angularFreq = (2.0f * PI) / (float)TABLE_SIZE;
-    float maxAmp = 1.0;
-    float maxValue = -1;
-    float minValue = 1;
+    const float angularFreq = (2.0f * PI) / (float)TABLE_SIZE;
     float * tempTable = new float[TABLE_SIZE];
 
     for (int i=0; i<TABLE_SIZE; i++) {
       tempTable[i] = 0;
     }
-    for (int i=0; i<TABLE_SIZE; i++) {
-      if (waveType == 1) { // triangle
-        for(int m=0; m<overtones; m+=2) { // low 48, mid 20, high 12
-          float nextOvertone = (maxAmp/((m+1)*(m+1)) * sin((angularFreq*(m+1))*(i + TABLE_SIZE/4))); //triangle formula (cosine phase)
-          if (m%4 == 2) nextOvertone *= -1;
-          tempTable[i] = (tempTable[i] + nextOvertone); 
-        }
+
+    // Generate one complete harmonic at a time. Each harmonic needs only its
+    // initial angle and phase step evaluated trigonometrically; all remaining
+    // samples use the inexpensive oscillator recurrence in addSineHarmonic().
+    if (waveType == 1) { // triangle
+      for (int m=0; m<overtones; m+=2) {
+        int harmonic = m + 1;
+        float amplitude = 1.0f / (harmonic * harmonic);
+        if (m % 4 == 2) amplitude *= -1.0f;
+        float initialPhase = harmonic * PI * 0.5f;
+        addSineHarmonic(tempTable, amplitude,
+                        angularFreq * harmonic, initialPhase);
       }
-      if (waveType == 2) { // square
-        for(int m=0; m<overtones; m+=2) {  // <56 = 56, 28, >80 = 12
-          float nextOvertone = (maxAmp/((m+1)) * sin((angularFreq*(m+1))*i)); //square wave formula
-          tempTable[i] = (tempTable[i] + nextOvertone); 
-        }
+    } else if (waveType == 2) { // square
+      for (int m=0; m<overtones; m+=2) {
+        int harmonic = m + 1;
+        addSineHarmonic(tempTable, 1.0f / harmonic,
+                        angularFreq * harmonic, 0.0f);
       }
-      if (waveType == 3) { // sawtooth
-        for(int m=0; m<overtones; m++) { // low 84, mid 34, high 8
-          tempTable[i] = (tempTable[i] + ((maxAmp/(m+1) * sin((angularFreq*(m+1))*i)))); //sawtooth formula
-        }
-      }
-      if (tempTable[i] > maxValue) { //checks highest value
-        maxValue = tempTable[i];
-      }
-      if (tempTable[i] < minValue) { //checks lowest value
-          minValue = tempTable[i];
+    } else if (waveType == 3) { // sawtooth
+      for (int m=0; m<overtones; m++) {
+        int harmonic = m + 1;
+        addSineHarmonic(tempTable, 1.0f / harmonic,
+                        angularFreq * harmonic, 0.0f);
       }
     }
+
+    float maxValue = tempTable[0];
+    float minValue = tempTable[0];
+    for (int i=1; i<TABLE_SIZE; i++) {
+      if (tempTable[i] > maxValue) maxValue = tempTable[i];
+      if (tempTable[i] < minValue) minValue = tempTable[i];
+    }
+
     // normalise
     int segOffset = TABLE_SIZE * segment;
+    float range = maxValue - minValue;
+    if (range <= 0.000001f) {
+      for (int i=0; i<TABLE_SIZE; i++) theTable[i + segOffset] = 0;
+    } else {
+      for (int i=0; i<TABLE_SIZE; i++) {
+        float normalized = ((tempTable[i] - minValue) / range) * 2.0f - 1.0f;
+        theTable[i + segOffset] = (int16_t)clip16(
+            (int32_t)lroundf(normalized * MAX_16));
+      }
+    }
+    delete[] tempTable;
+  }
+
+  /** Add one sine harmonic using a complex-rotation recurrence.
+   * Renormalising the phasor periodically bounds floating-point amplitude drift
+   * without returning to a trigonometric call for every output sample.
+   */
+  static void addSineHarmonic(float* table, float amplitude,
+                              float phaseStep, float initialPhase) {
+    float sine = sinf(initialPhase);
+    float cosine = cosf(initialPhase);
+    float stepSine = sinf(phaseStep);
+    float stepCosine = cosf(phaseStep);
+
     for (int i=0; i<TABLE_SIZE; i++) {
-      theTable[i + segOffset] = floatMap(tempTable[i], minValue, maxValue, -1, 1) * (MAX_16 * 2 - MAX_16);
+      table[i] += amplitude * sine;
+
+      float nextSine = sine * stepCosine + cosine * stepSine;
+      float nextCosine = cosine * stepCosine - sine * stepSine;
+      sine = nextSine;
+      cosine = nextCosine;
+
+      if ((i & 255) == 255) {
+        float magnitudeSquared = sine * sine + cosine * cosine;
+        if (magnitudeSquared > 0.0f) {
+          float inverseMagnitude = 1.0f / sqrtf(magnitudeSquared);
+          sine *= inverseMagnitude;
+          cosine *= inverseMagnitude;
+        }
+      }
+    }
+  }
+
+  /** Generate one anti-aliased pulse-wave band by additive synthesis.
+   *
+   * A non-50% pulse contains both odd and even harmonics. The phase-shifted
+   * cosine form places the positive portion at the start of the table, matching
+   * the former hard-edged generator. The theoretical DC term (2*duty-1) is
+   * deliberately omitted, then residual numerical mean is removed before
+   * peak normalization.
+   */
+  static void generatePulseWave(int16_t* theTable, int segment,
+                                int harmonicLimit, float duty) {
+    float* tempTable = new float[TABLE_SIZE];
+    for (int i = 0; i < TABLE_SIZE; i++) tempTable[i] = 0.0f;
+
+    const float angularFreq = (2.0f * PI) / (float)TABLE_SIZE;
+    for (int harmonic = 1; harmonic <= harmonicLimit; harmonic++) {
+      float coefficient = sinf(PI * harmonic * duty) / harmonic;
+      // cos(x) = sin(x + PI/2), allowing reuse of the sine recurrence.
+      float initialPhase = PI * 0.5f - harmonic * PI * duty;
+      addSineHarmonic(tempTable, coefficient,
+                      angularFreq * harmonic, initialPhase);
+    }
+
+    double sum = 0.0;
+    for (int i = 0; i < TABLE_SIZE; i++) sum += tempTable[i];
+    float mean = (float)(sum / TABLE_SIZE);
+    float peak = 0.0f;
+    for (int i = 0; i < TABLE_SIZE; i++) {
+      tempTable[i] -= mean;
+      peak = max(peak, fabsf(tempTable[i]));
+    }
+
+    int offset = segment * TABLE_SIZE;
+    if (peak <= 0.000001f) {
+      for (int i = 0; i < TABLE_SIZE; i++) theTable[offset + i] = 0;
+    } else {
+      float scale = MAX_16 / peak;
+      for (int i = 0; i < TABLE_SIZE; i++) {
+        theTable[offset + i] = (int16_t)clip16(
+            (int32_t)lroundf(tempTable[i] * scale));
+      }
     }
     delete[] tempTable;
   }
@@ -1977,24 +2243,59 @@ private:
   #endif
 };
 
-// Static member definitions for RP2040 dual-core phase sync
-#if IS_RP2040()
-Osc* Osc::registeredOscs[Osc::MAX_REGISTERED_OSCS] = {nullptr};
-int Osc::numRegisteredOscs = 0;
-
-// Wrapper functions for callbacks (can't use static member functions directly as function pointers easily)
-void _oscAdvanceAllPhases(int coreNum) { Osc::advanceAllPhases(coreNum); }
-void _oscClearStoredPhaseFlag(int coreNum) { Osc::clearStoredPhaseFlag(coreNum); }
-
-// Auto-register callbacks when Osc.h is included
-namespace {
-  struct OscPhaseSyncRegistrar {
-    OscPhaseSyncRegistrar() {
-      registerPhaseSyncCallbacks(_oscAdvanceAllPhases, _oscClearStoredPhaseFlag);
-    }
-  };
-  static OscPhaseSyncRegistrar _oscPhaseSyncRegistrar;
+inline void WaveTable::cosGen() {
+  allocate();
+  Osc::cosGen(_samples);
 }
-#endif
+
+inline void WaveTable::sinGen() {
+  allocate();
+  Osc::sinGen(_samples);
+}
+
+inline void WaveTable::triGen() {
+  allocate();
+  Osc::triGen(_samples);
+}
+
+inline void WaveTable::pulseGen(float duty) {
+  allocate();
+  Osc::pulseGen(_samples, duty);
+}
+
+inline void WaveTable::sqrGen() {
+  allocate();
+  Osc::sqrGen(_samples);
+}
+
+inline void WaveTable::sawGen() {
+  allocate();
+  Osc::sawGen(_samples);
+}
+
+inline void WaveTable::noiseGen() {
+  allocate();
+  Osc::noiseGen(_samples);
+}
+
+inline void WaveTable::noiseGen(int grainSize) {
+  allocate();
+  Osc::noiseGen(_samples, grainSize);
+}
+
+inline void WaveTable::crackleGen() {
+  allocate();
+  Osc::crackleGen(_samples);
+}
+
+inline void WaveTable::brownNoiseGen() {
+  allocate();
+  Osc::brownNoiseGen(_samples);
+}
+
+inline void WaveTable::pinkNoiseGen() {
+  allocate();
+  Osc::pinkNoiseGen(_samples);
+}
 
 #endif /* OSC_H_ */
