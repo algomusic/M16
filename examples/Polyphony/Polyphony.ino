@@ -5,7 +5,7 @@
 #include "SVF.h"
 #include "FX.h"
 
-int16_t * wavetable; // empty array pointer
+WaveTable wavetable; // one wavetable shared by every voice
 const int poly = 16; // change polyphony as desired, each MCU type will handle particular amounts
 Osc osc[poly]; // an array of oscillators
 Env env[poly];
@@ -19,7 +19,7 @@ int noteDelta = 250;
 int envDelta = 4;
 int scale [] = {0, 2, 4, 0, 7, 9, 0, 0, 0, 0, 0};
 
-#if IS_ESP32()
+#if IS_CAPABLE()
 void audioPostProcess(int32_t &left, int32_t &right) {
   int32_t outL, outR;
   effect1.reverbStereoInterp(left, right, outL, outR);
@@ -31,8 +31,7 @@ void audioPostProcess(int32_t &left, int32_t &right) {
 void setup() {
   Serial.begin(115200);
   // tone
-  Osc::allocateWaveMemory(&wavetable);
-  Osc::sawGen(wavetable); // fill the wavetable
+  wavetable.sawGen(); // allocate and fill the shared wavetable
   for (int i=0; i<poly; i++) {
     osc[i].setTable(wavetable); // use the same wavetable for each osc to save memory
     osc[i].setPitch(60);
@@ -47,18 +46,26 @@ void setup() {
     effect1.setReverbMix(0.7); // 0-1 balance between dry and wet signals
     effect1.initReverbSafe();
   #endif
-  #if IS_ESP32()
-    // Run reverb after M16 combines the two per-core voice partitions.
+  #if IS_CAPABLE()
+    // Run reverb after M16 combines the per-core voice partitions.
     setAudioPostProcessCallback(audioPostProcess);
   #endif
   // seti2sPins(38,39,40,41);
   // useInternalDAC(); // enable internal DAC output, call before audioStart()
+  #if IS_CAPABLE()
+    setIsDualCore(true);  // ESP32 and RP2040 partition independent voices.
+  #else
+    setIsDualCore(false);
+  #endif
   noteTime = millis(); // schedule first note
   envTime = millis();
   audioStart();
 }
 
 void loop() {
+  #if IS_RP2040()
+    audioLoop(); // Pico worker service; a harmless no-op on Pico 2's auto worker.
+  #endif
 
   msNow = millis();
 
@@ -86,29 +93,26 @@ void loop() {
 // loops over arrays of per-voice stateful objects (Osc[], SVF[], Env[], etc.).
 // Both cores run the full loop otherwise, advancing every voice state twice per
 // sample — causing doubled frequency and filter corruption.
-// On dual-core ESP32, audioUpdate() runs simultaneously on both cores.
+// On dual-core ESP32 and Pico-family partitioned block mode, both cores render.
 // audioPartitionOffset() / audioPartitionStride() split the voice array so
 // Core 0 owns even voices (0, 2, …) and Core 1 owns odd voices (1, 3, …),
 // preventing both cores from advancing the same filter/oscillator state.
-// Each core submits its partial mix through audioBlockWrite(). On ESP32, M16
+// Each core submits its partial mix through audioBlockWrite(). M16
 // combines both partitions and then invokes audioPostProcess() on the full mix,
 // so every voice feeds the shared reverb.
-// On single-core targets the partition helpers are no-ops and audioBlockWrite
-// behaves like i2s_write_samples().
+// Core 1 safely renders both partitions when the Core-0 worker misses a job.
 void audioUpdate() {
   int32_t mix = 0;
   for (int i = audioPartitionOffset(); i < poly; i += audioPartitionStride()) {
-    int32_t voice = filter[i].nextLPF((osc[i].next() * env[i].getValue()) >> 16);
+    // Envelopes are derived from M16's audio-frame clock, so they must still be
+    // evaluated while silent to notice the next attack. Avoid advancing the
+    // oscillator or filter until the envelope actually contributes a sample.
+    uint16_t envLevel = env[i].getValue();
+    if (envLevel == 0) continue;
+
+    int32_t voice = filter[i].nextLPF((osc[i].next() * envLevel) >> 16);
     voice *= 0.6; // compensate for poly mix
     mix += voice;
   }
-  #if IS_CAPABLE() && !IS_ESP32()
-  {
-    int32_t L = mix, R = mix;
-    effect1.reverbStereoInterp(mix, mix, L, R);
-    audioBlockWrite(L, R);
-    return;
-  }
-  #endif
   audioBlockWrite(mix, mix);
 }

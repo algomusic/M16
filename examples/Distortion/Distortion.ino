@@ -61,12 +61,12 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs 
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 */
 void audioUpdate() {
   int32_t leftVal = aOsc.next() * ampEnv.getValue() >> 16;
   leftVal = effect1.overdrive(leftVal, distLevel); // applies some gain and distortion
   // leftVal = effect1.softClip(leftVal, distLevel * 3); // applies some compression and saturation
   int32_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

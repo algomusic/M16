@@ -3,7 +3,7 @@
 #include "M16.h"
 #include "Osc.h"
 
-int16_t * triTable; // empty wavetable
+WaveTable triTable; // one shareable wavetable with hidden memory management
 Osc aOsc1;
 int16_t vol = 1000; // 0 - 1024, 10 bit
 float morphVal = 0;
@@ -17,8 +17,7 @@ int morphDelta = 32;
 void setup() {
   Serial.begin(115200);
   aOsc1.sinGen(); // fill the internal wavetable
-  Osc::allocateWaveMemory(&triTable); // setup the external wavetable
-  Osc::triGen(triTable); // fill the external wavetable
+  triTable.triGen(); // allocate and fill the shared wavetable
   aOsc1.setPitch(60);
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
   // useInternalDAC();
@@ -54,10 +53,10 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs 
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 */
 void audioUpdate() {
   int16_t leftVal = (aOsc1.nextMorph(triTable, morphVal) * vol)>>10;
   int16_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

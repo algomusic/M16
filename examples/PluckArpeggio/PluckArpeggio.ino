@@ -4,15 +4,14 @@
 #include "Env.h"
 #include "Arp.h"
 #include "SVF.h"
-#include "FX.h"
+#include "Phys.h"
 
-// int16_t noiseTable [TABLE_SIZE]; // empty wavetable
 Osc aOsc1;
 Env ampEnv1;
 Arp arp1;
 SVF exciterFilter;
 SVF dampeningFilter;
-FX effect1;
+Phys phys1;
 int bpm = 120;
 int stepDelta = 1000;
 unsigned long msNow, stepTime;
@@ -35,11 +34,10 @@ void setup() {
   stepDelta = arp1.calcStepDelta(120, 2); // ms between steps at bpm sliced into 2
   stepTime = millis() + stepDelta;
   arp1.start();
-  aOsc1.setPitch(arp1.next());
   exciterFilter.setFreq(SAMPLE_RATE / 2); // at the Nyquist to avoid aliasing
   dampeningFilter.setFreq(10000);
   stepTime = millis();
-  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
 }
@@ -61,12 +59,12 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 * Read the envelope per audio sample with getValue() for a smooth pluck excitation.
 */
 void audioUpdate() {
-  int32_t leftVal = (dampeningFilter.nextLPF(effect1.pluck((exciterFilter.nextLPF(aOsc1.next()) * ampEnv1.getValue()) >> 16, aOsc1.getFreq(), feedback)) * vol)>>10;
-  // int32_t leftVal = (dampeningFilter.nextLPF(effect1.waveguide((exciterFilter.nextLPF(aOsc1.next()) * ampEnv1.getValue()) >> 16, aOsc1.getFreq(), feedback)) * vol)>>10;
+  int32_t leftVal = (dampeningFilter.nextLPF(phys1.pluck((exciterFilter.nextLPF(aOsc1.next()) * ampEnv1.getValue()) >> 16, aOsc1.getFreq(), feedback)) * vol)>>10;
+  // int32_t leftVal = (dampeningFilter.nextLPF(phys1.waveguide((exciterFilter.nextLPF(aOsc1.next()) * ampEnv1.getValue()) >> 16, aOsc1.getFreq(), feedback)) * vol)>>10;
   int32_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

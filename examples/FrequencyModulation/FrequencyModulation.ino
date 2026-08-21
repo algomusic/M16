@@ -2,7 +2,7 @@
 #include "M16.h"
 #include "Osc.h"
 
-int16_t * sineTable; // empty wavetable for use by boith oscillators
+WaveTable sineTable; // one wavetable shared by both oscillators
 Osc aOsc1, aOsc2;
 float modIndex = 0.2;
 unsigned long msNow = millis();
@@ -11,13 +11,11 @@ int pitchDelta = 2000;
 
 void setup() {
   Serial.begin(115200);
-  Osc::allocateWaveMemory(&sineTable);
-  Osc::sinGen(sineTable); // fill wavetable
+  sineTable.sinGen(); // allocate and fill wavetable
   aOsc1.setTable(sineTable); // assign wave to osc1
   aOsc2.setTable(sineTable); // assign wave to osc2
   // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
   // useInternalDAC();
-  // setIsDualCore(false);
   audioStart();
 }
 
@@ -39,11 +37,11 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs 
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 */
 void audioUpdate() {
   // modIndex changes modulation depth. Values for PM are about 1/100th of those typical for FM
   int32_t leftVal = aOsc1.phMod(aOsc2, modIndex);
   int32_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

@@ -7,7 +7,7 @@
 #include "Osc.h"
 #include "Env.h"
 
-int16_t * wavetable; // empty wavetable for use by both oscillators
+WaveTable wavetable; // one wavetable shared by both oscillators
 Osc aOsc1, modOsc;
 Env modEnv;
 int16_t vol = 1000; // 0 - 1024, 10 bit
@@ -18,8 +18,7 @@ int pitchDelta = 3000;
 
 void setup() {
   Serial.begin(115200);
-  Osc::allocateWaveMemory(&wavetable); // clear memory for wavetable
-  Osc::sinGen(wavetable); // fill the wavetable
+  wavetable.sinGen(); // allocate and fill the wavetable
   aOsc1.setTable(wavetable); // assign wavetable to osc
   modOsc.setTable(wavetable); // assign wavetable to osc
   aOsc1.setPitch(69);
@@ -62,12 +61,12 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 * Read the modulation envelope per audio sample with getValue() for smooth FM depth.
 */
 void audioUpdate() {
   float modVal = modIndex * modEnv.getValue() * MAX_16_INV;
   int32_t leftVal = (aOsc1.phMod(modOsc, modVal) * vol)>>10; // no filtering
   int32_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

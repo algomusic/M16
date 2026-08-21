@@ -49,5 +49,5 @@ void loop() {
 
 void audioUpdate() {
   int16_t sample = osc.feedback(fbAmount);
-  i2s_write_samples(sample, sample);
+  audioBlockWrite(sample, sample);
 }

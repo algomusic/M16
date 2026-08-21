@@ -48,7 +48,7 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs 
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 */
 void audioUpdate() {
   // mono version
@@ -60,5 +60,5 @@ void audioUpdate() {
   int32_t leftVal, rightVal;
   effects.chorusStereo(oscVal, oscVal, leftVal, rightVal);
   //
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

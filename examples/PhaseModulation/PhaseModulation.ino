@@ -60,10 +60,10 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs 
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 */
 void audioUpdate() {
   int16_t sample = carrier.phMod(modulator, modIndex);
   // Output to both channels
-  i2s_write_samples(sample, sample);
+  audioBlockWrite(sample, sample);
 }

@@ -38,5 +38,5 @@ void loop() {
 void audioUpdate() {
   int32_t leftVal = (aOsc1.next() * vol) >> 10;
   int32_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

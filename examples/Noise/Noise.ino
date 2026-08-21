@@ -75,5 +75,5 @@ void audioUpdate() {
   int32_t crackleVal = (crackleOsc.next() * ampEnvC.getValue())>>16;
   int32_t leftVal = ((whiteVal + pinkVal + brownVal + crackleVal) * vol)>>10; // master volume
   int32_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }

@@ -78,11 +78,11 @@ void loop() {
 
 /* The audioUpdate function is required in all M16 programs 
 * to specify the audio sample values to be played.
-* Always finish with i2s_write_samples()
+* Always finish with audioBlockWrite()
 */
 void audioUpdate() {
   int32_t oscVal = (osc1.next() * ampEnv1.getValue()) >> 16;
   int32_t delayed = delay1.next(oscVal);
   int32_t mix = clip16(oscVal + delayed);
-  i2s_write_samples(mix, mix);
+  audioBlockWrite(mix, mix);
 }

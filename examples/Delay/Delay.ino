@@ -23,8 +23,8 @@ void setup() {
   osc1.triGen(); // fill the osc wavetable
   osc1.setPitch(60);
   ampEnv1.setAttack(10);
-  // seti2sPins(25, 27, 12, 21); // bck, ws, data_out, data_in // change ESP32 defaults
-  useInternalDAC(); // enable internal DAC output, call before audioStart()
+  // seti2sPins(38, 39, 40, 41); // bck, ws, data_out, data_in // change ESP32 defaults
+  // useInternalDAC(); // enable internal DAC output, call before audioStart()
   audioStart();
 }
 
@@ -53,5 +53,5 @@ void audioUpdate() {
   int32_t oscVal = (osc1.next() * ampEnv1.getValue())>>16;
   int32_t leftVal = (oscVal + delay1.next(oscVal)) * 0.75;
   int32_t rightVal = leftVal;
-  i2s_write_samples(leftVal, rightVal);
+  audioBlockWrite(leftVal, rightVal);
 }
