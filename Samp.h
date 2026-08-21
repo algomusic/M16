@@ -15,14 +15,20 @@
 #ifndef SAMP_H_
 #define SAMP_H_
 
-// Thread-safety for 64-bit phase on 32-bit ESP32
-// Uses lightweight spinlock (atomic_flag) that doesn't disable interrupts
-// to avoid I2S DMA underruns while protecting against torn reads/writes
+// Thread-safety for the 64-bit phase on 32-bit ESP32 and RP2040.
+// Use atomic<bool>: the RP2040 Arduino toolchain does not provide the
+// __atomic_test_and_set runtime symbol required by std::atomic_flag.
 #if IS_ESP32() || IS_RP2040()
   #include <atomic>
-  #define SAMP_LOCK_DECLARE() std::atomic_flag _phaseLock = ATOMIC_FLAG_INIT;
-  #define SAMP_LOCK() while (_phaseLock.test_and_set(std::memory_order_acquire)) {}
-  #define SAMP_UNLOCK() _phaseLock.clear(std::memory_order_release)
+  #define SAMP_LOCK_DECLARE() std::atomic<bool> _phaseLock{false};
+  #define SAMP_LOCK() \
+    do { \
+      bool _sampExpected = false; \
+      while (!_phaseLock.compare_exchange_weak(_sampExpected, true, std::memory_order_acquire)) { \
+        _sampExpected = false; \
+      } \
+    } while (0)
+  #define SAMP_UNLOCK() _phaseLock.store(false, std::memory_order_release)
 #else
   #define SAMP_LOCK_DECLARE()
   #define SAMP_LOCK()
@@ -1009,7 +1015,7 @@ public:
 #ifdef WAV_H_
   /** Decode a PROGMEM ADPCM array into PSRAM/RAM and set up for immediate playback.
    * Requires: #include "Wav.h" BEFORE #include "Samp.h" in your sketch.
-   * Automatically compensates for dual-core mode (both cores advancing phase per sample).
+   * Uses the actual audio callback rate on every output backend.
    * @param wav      Wav instance (SD not required — used for buffer management only)
    * @param pgmData  PROGMEM byte array (e.g. SNARE_DATA from an exported header)
    * @param dataSize Total bytes in array (e.g. SNARE_DATA_SIZE)
@@ -1017,23 +1023,16 @@ public:
    */
   bool loadFromFlash(Wav& wav, const uint8_t* pgmData, uint32_t dataSize) {
     if (!wav.loadFromFlash(pgmData, dataSize)) return false;
-    // On dual-core ESP32/RP2040, both cores call next() per I2S sample, advancing
-    // the phase twice per output sample. Halving buffer_sample_rate halves the
-    // phase increment per core so the combined rate equals 1x.
-    // Internal DAC only: its driver is configured at freq_hz = SAMPLE_RATE*2
-    // (alternating-channel mode), so audioUpdate() runs at 2× SAMPLE_RATE.
-    // Halving bufRate compensates so each call advances half a sample.
-    // External I2S (single or dual-core): SAMP_LOCK serialises all next()
-    // calls, giving exactly SAMPLE_RATE calls/sec total regardless of core
-    // count — full rate is always correct there.
+    // Internal DAC alternating-channel mode invokes audioUpdate() at
+    // 2 * SAMPLE_RATE, so each callback advances by half a source frame.
+    // External I2S, including RP2040 cooperative partitioning, renders each
+    // voice exactly once per output frame and therefore uses the full rate.
 #if IS_ESP32()
-    bool dualActive = _useInternalDAC;
-#elif IS_RP2040()
-    bool dualActive = isDualCore;
+    bool halfRateCallback = _useInternalDAC && !M16_INTERNAL_DAC_SIMUL;
 #else
-    bool dualActive = false;
+    bool halfRateCallback = false;
 #endif
-    uint32_t bufRate = dualActive ? SAMPLE_RATE / 2 : SAMPLE_RATE;
+    uint32_t bufRate = halfRateCallback ? SAMPLE_RATE / 2 : SAMPLE_RATE;
     setTable(wav.getBuffer(), wav.getFrameCount(), bufRate, wav.getChannels());
     return true;
   }
