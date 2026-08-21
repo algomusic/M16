@@ -26,9 +26,10 @@
 // IS_CAPABLE() groups platforms with sufficient CPU/memory for complex DSP (filters, reverb, etc.)
 #define IS_CAPABLE() (IS_ESP32() || IS_RP2040())
 
-/* Thread-safety helpers for dual-core ESP32
-* On ESP32, audioUpdate() runs on BOTH cores simultaneously. Any shared state
-* modified in audioUpdate() needs protection to prevent race conditions.
+/* Thread-safety helpers for explicitly enabled dual-core ESP32 rendering.
+* ESP32 defaults to one dedicated audio task. After setIsDualCore(true),
+* audioUpdate() runs on BOTH cores simultaneously and shared state modified in
+* audioUpdate() needs protection or explicit voice partitioning.
 * Only necessary when sample accurate triggering of a new audio event (note) 
 * is required from within audioUpdate.
 *
@@ -49,7 +50,7 @@
 *     });
 *
 *     // Unguarded: Both cores write samples
-*     i2s_write_samples(mix, mix);
+*     audioBlockWrite(mix, mix);
 * }
 *
 * Note: The losing core SKIPS the guarded code (doesn't wait). Use this for
@@ -120,7 +121,18 @@ float SAMPLE_RATE_INV = 1.0f / SAMPLE_RATE;
 #define MAX_16 32767
 #define MIN_16 -32767
 const float MAX_16_INV = 0.00003052;
-bool isDualCore = true; // assume dual-core unless changed in setup()
+// ESP32 defaults to one dedicated audio task. This is deterministic for the
+// ordinary shared/stateful DSP graph and leaves the other core for loop(), UI,
+// MIDI, USB, and system work. Independent voice arrays can explicitly opt into
+// block-partitioned dual-core rendering with setIsDualCore(true).
+// Pico-family boards use the same conservative default. Polyphonic sketches
+// explicitly opt into block jobs with setIsDualCore(true): Pico 2 uses an
+// automatic doorbell worker, while Pico uses cooperative audioLoop() service.
+#if IS_ESP32() || IS_RP2040()
+bool isDualCore = false;
+#else
+bool isDualCore = true;
+#endif
 
 // ---- Global audio-frame clock --------------------------------------------
 // Monotonic counter incremented once per output frame produced (advanced inside
@@ -133,7 +145,37 @@ bool isDualCore = true; // assume dual-core unless changed in setup()
 // per sample (audioUpdate()). Wraps after ~27 h at 44.1 kHz; consumers must use
 // unsigned deltas. On dual-core external I2S both cores advance the shared atomic
 // for alternate frames, so the combined rate equals the output frame rate.
-#if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+#if IS_RP2040()
+#include "pico/multicore.h"
+std::atomic<uint32_t> _m16AudioFrameCount{0};
+static std::atomic<uint32_t> _m16RenderFrame[2]{{0}, {0}};
+static std::atomic<bool> _m16RenderFrameActive[2]{{false}, {false}};
+
+// During partitioned block rendering each core evaluates time-based generators
+// against the same logical frame range. Outside that render context callers see
+// the committed output-frame clock.
+inline uint32_t audioFrameCount() {
+  int core = get_core_num();
+  if (_m16RenderFrameActive[core].load(std::memory_order_acquire)) {
+    return _m16RenderFrame[core].load(std::memory_order_relaxed);
+  }
+  return _m16AudioFrameCount.load(std::memory_order_relaxed);
+}
+inline void m16AdvanceAudioFrame() {
+  _m16AudioFrameCount.fetch_add(1, std::memory_order_relaxed);
+}
+inline void m16BeginRenderFrameContext(uint32_t frame) {
+  int core = get_core_num();
+  _m16RenderFrame[core].store(frame, std::memory_order_relaxed);
+  _m16RenderFrameActive[core].store(true, std::memory_order_release);
+}
+inline void m16SetRenderFrame(uint32_t frame) {
+  _m16RenderFrame[get_core_num()].store(frame, std::memory_order_relaxed);
+}
+inline void m16EndRenderFrameContext() {
+  _m16RenderFrameActive[get_core_num()].store(false, std::memory_order_release);
+}
+#elif defined(ESP32) || defined(ESP_PLATFORM)
 std::atomic<uint32_t> _m16AudioFrameCount{0};
 inline uint32_t audioFrameCount() { return _m16AudioFrameCount.load(std::memory_order_relaxed); }
 inline void m16AdvanceAudioFrame() { _m16AudioFrameCount.fetch_add(1, std::memory_order_relaxed); }
@@ -170,6 +212,32 @@ inline void m16AdvanceAudioFrame() { _m16AudioFrameCount++; }
   #define M16_BLOCK_SIZE 32
 #endif
 
+// Maximum time Core 0 waits for Core 1 at a block rendezvous, expressed as
+// audio-block periods. Four blocks tolerates ordinary scheduler skew without
+// allowing a stalled partition to drain the I2S DMA reserve. The calculated
+// deadline is clamped to 1-10 ms for unusually small blocks/sample rates.
+#ifndef M16_BLOCK_SYNC_TIMEOUT_BLOCKS
+  #define M16_BLOCK_SYNC_TIMEOUT_BLOCKS 4
+#endif
+
+// A healthy, filled DMA ring makes block writes wait for approximately one
+// block period. If many writes return almost immediately, output is underfilled
+// and the maximum-priority audio task may never block long enough for IDLE0 to
+// service the task watchdog. Force one scheduler tick of sleep after this many
+// consecutive fast writes. Define 0 to disable the safeguard.
+#ifndef M16_DMA_FAST_WRITE_YIELD_BLOCKS
+  #define M16_DMA_FAST_WRITE_YIELD_BLOCKS 32
+#endif
+
+// Core 1 normally blocks while waiting for a reusable partition slot. If it is
+// consistently a little slower than Core 0, however, every slot may already be
+// free and the maximum-priority producer can run forever without allowing
+// IDLE1, loop(), or TinyUSB to execute. Force one tick of sleep after this many
+// consecutive producer blocks that received no natural semaphore pacing.
+#ifndef M16_PRODUCER_UNPACED_YIELD_BLOCKS
+  #define M16_PRODUCER_UNPACED_YIELD_BLOCKS 32
+#endif
+
 // Original ESP32 internal DAC is only 8-bit. TPDF dither can make quiet
 // delay/reverb tails less steppy, but it adds a fixed one-DAC-LSB noise floor
 // after all gain/effects, which can read as crackle on low-level repeats.
@@ -193,11 +261,16 @@ inline void m16AdvanceAudioFrame() { _m16AudioFrameCount++; }
   #define M16_INTERNAL_DAC_GATE_THRESHOLD 3000
 #endif
 
-/** Specify the use of one or two cores for audio processing
-* @dualCore True to use both cores (ESP32/PiPico2), false for single-core mode
+/** Specify the use of one or two cores for audio processing.
+* ESP32 defaults to false (one dedicated audio core). Set true only when
+* audioUpdate() partitions independent voice state with audioPartitionOffset()
+* and audioPartitionStride(). Pico-family boards use the same dedicated-core
+* default. Pico 2 adds Core 0 automatically through bounded doorbell jobs;
+* Pico adds it cooperatively through audioLoop().
+* @dualCore True to use both cores, false for dedicated single-audio-core mode
 * Call this function before audioStart() in setUp() to set the desired number of cores used for audio.
-* ESP32 uses FreeRTOS which preemptively schedules tasks. 
-* Pi Pico 2 requires cooperative scheduling - the user must call audioLoop() from loop() to process audio on Core 0.
+* ESP32 uses FreeRTOS tasks; Pico 2 uses an interrupt-driven block worker.
+* Retaining audioLoop() in Pico-family sketches provides Pico compatibility.
 */
 void setIsDualCore(bool dualCore) { 
   isDualCore = dualCore;
@@ -351,6 +424,15 @@ inline int16_t* psramAllocInt16(size_t count, const char* description = nullptr)
 // Needed so platform-specific functions (e.g. audioBlockWrite) can call it.
 int32_t clip16(int input);
 
+// Master processing hook shared by every block-output platform. In partitioned
+// mode the finalizer invokes it exactly once after combining both partial mixes.
+typedef void (*AudioPostProcessCallback)(int32_t& left, int32_t& right);
+static AudioPostProcessCallback _audioPostProcessCallback = nullptr;
+
+inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
+  _audioPostProcessCallback = callback;
+}
+
 // ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)
 // ESP8266 I2S interface (D1 mini pins) BCLK->BCK (D8 GPIO15), I2SO->DOUT (RX GPIO3), and LRCLK(WS)->LCK (D4 GPIO2) [SCK to GND on some boards]
 
@@ -398,8 +480,12 @@ int32_t clip16(int input);
   // Sketches using audioPartitionOffset/Stride/audioBlockWrite compile unchanged.
   inline int  audioPartitionOffset()  { return 0; }
   inline int  audioPartitionStride()  { return 1; }
+  inline bool audioPartitionIsActive() { return false; }
   inline bool audioIsFinalizerCore()  { return true; }
   inline bool audioBlockWrite(int32_t L, int32_t R) {
+    if (_audioPostProcessCallback != nullptr) {
+      _audioPostProcessCallback(L, R);
+    }
     i2s_write_samples((int16_t)clip16(L), (int16_t)clip16(R));
     return true;
   }
@@ -455,11 +541,10 @@ int32_t clip16(int input);
 
   // Configuration macros/constants
   // DMA_BUFFERS × DMA_BUFFER_LENGTH frames at SAMPLE_RATE sets total ring depth.
-  // Default 6 × 512 = 70 ms ring (~58 ms guaranteed underrun protection) — covers
-  // a worst-case NVS sector erase (~30-40 ms) on the host with margin, at the
-  // cost of ~23 ms added control-to-audio latency vs. the prior 4-descriptor
-  // config. Sketches needing tighter latency (percussive/Beat Machine style) can
-  // override before #include "M16.h".
+  // Default 4 × 512 = 46 ms total ring depth at 44.1 kHz. Some of that ring is
+  // normally occupied, so it must not be treated as a permissible render stall.
+  // Sketches can override these values before including M16.h when they prefer
+  // more stall tolerance or lower latency.
   #ifndef DMA_BUFFERS
     #define DMA_BUFFERS       4
   #endif
@@ -638,25 +723,50 @@ int32_t clip16(int input);
   static std::atomic<uint32_t> _blockReadySequence[2]{{0}, {0}};
   static std::atomic<uint32_t> _blockConsumedSequence[2]{{0}, {0}};
   static volatile uint32_t _audioBlockSyncTimeouts = 0;
+  static volatile uint32_t _audioBlockConsecutiveSyncTimeouts = 0;
+  static volatile uint32_t _audioBlockMaxConsecutiveSyncTimeouts = 0;
+  static volatile uint32_t _audioBlockLateProducerRecoveries = 0;
+  static volatile uint32_t _audioProducerStarvationYields = 0;
   static volatile uint32_t _audioDmaWriteTimeouts = 0;
+  static volatile uint32_t _audioDmaStarvationYields = 0;
+  static uint16_t _audioConsecutiveFastDmaWrites = 0;
+  static uint16_t _audioConsecutiveUnpacedProducerBlocks = 0;
+  static bool _audioProducerBlockWasPaced = false;
 
-  // Optional final processing stage for block-split audio. It runs on Core 0
-  // after the two voice partitions have been combined, immediately before the
-  // completed stereo frame is written to DMA. This is the safe place for
-  // stateful master effects that must see the full mix exactly once.
-  typedef void (*AudioPostProcessCallback)(int32_t& left, int32_t& right);
-  static AudioPostProcessCallback _audioPostProcessCallback = nullptr;
-
-  inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
-    _audioPostProcessCallback = callback;
-  }
+  // The global post-process hook runs here on Core 0 after both ESP32 voice
+  // partitions have been combined.
 
   inline uint32_t audioBlockSyncTimeoutCount() {
     return _audioBlockSyncTimeouts;
   }
 
+  inline uint32_t audioBlockConsecutiveSyncTimeoutCount() {
+    return _audioBlockConsecutiveSyncTimeouts;
+  }
+
+  inline uint32_t audioBlockMaxConsecutiveSyncTimeoutCount() {
+    return _audioBlockMaxConsecutiveSyncTimeouts;
+  }
+
+  /** Number of times Core 1 found that Core 0 had already advanced beyond the
+   * exact slot generation it expected. Such overload is recovered rather than
+   * becoming a permanent wait for a sequence value that cannot recur. */
+  inline uint32_t audioBlockLateProducerRecoveryCount() {
+    return _audioBlockLateProducerRecoveries;
+  }
+
+  /** Number of times an unpaced maximum-priority Core 1 producer was briefly
+   * blocked so IDLE1, loop(), and USB tasks could run. */
+  inline uint32_t audioProducerStarvationYieldCount() {
+    return _audioProducerStarvationYields;
+  }
+
   inline uint32_t audioDmaWriteTimeoutCount() {
     return _audioDmaWriteTimeouts;
+  }
+
+  inline uint32_t audioDmaStarvationYieldCount() {
+    return _audioDmaStarvationYields;
   }
 
   bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
@@ -784,6 +894,13 @@ int32_t clip16(int input);
     return _blockSplitActive ? 2 : 1;
   }
 
+  /** True only when both ESP32 audio tasks were created successfully and the
+   * block-split pipeline is actually running. Sketches may use this to provide
+   * a safe all-voices fallback when dual-core startup is unavailable. */
+  inline bool audioPartitionIsActive() {
+    return _blockSplitActive;
+  }
+
   // Returns true only on Core 0 (the finaliser) in block-split mode, or always
   // in single-core mode. Use to guard shared-state effects (reverb, global
   // filters) that should run once per sample. In block-split mode these effects
@@ -798,6 +915,19 @@ int32_t clip16(int input);
   // Accumulates samples into a per-core partial buffer of M16_BLOCK_SIZE entries.
   // This creates "breathing room" for the OS and prevents watchdog resets.
   bool audioBlockWrite(int32_t leftSample, int32_t rightSample) {
+    #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
+      // The internal DAC already owns a single buffered audio task and does not
+      // create an external-I2S TX channel. Preserve the portable block-writer API
+      // by forwarding each frame to its dedicated DAC accumulation path.
+      if (_useInternalDAC) {
+        if (_audioPostProcessCallback != nullptr) {
+          _audioPostProcessCallback(leftSample, rightSample);
+        }
+        return i2s_write_samples((int16_t)clip16(leftSample),
+                                 (int16_t)clip16(rightSample));
+      }
+    #endif
+
     int coreId = xPortGetCoreID();
     
     // Safety: if we are in dual-core block-split mode but running on Core 1,
@@ -805,13 +935,42 @@ int32_t clip16(int input);
     if (_blockSplitActive && coreId == 1) {
       uint32_t sequence = _blockSequence[1];
       int slot = sequence & 1;
-      if (sequence >= 2) {
+      int pos = _blockPos[1];
+      // Claim the reusable slot once, at the start of a block. Checking on
+      // every sample made a producer that had been lapped repeatedly account
+      // the same recovery and continue rendering obsolete blocks at maximum
+      // task priority.
+      if (pos == 0 && sequence >= 2) {
+        _audioProducerBlockWasPaced = false;
         uint32_t expectedConsumed = sequence - 1;
-        while (_blockConsumedSequence[slot].load(std::memory_order_acquire) != expectedConsumed) {
+        uint32_t consumed =
+            _blockConsumedSequence[slot].load(std::memory_order_acquire);
+        bool producerWasPaced = false;
+        // Wrap-safe monotonic comparison: wait only while Core 0 is behind.
+        // Requiring equality deadlocks if repeated timeout recovery lets Core 0
+        // pass this generation before Core 1 observes it.
+        while ((int32_t)(consumed - expectedConsumed) < 0) {
+          producerWasPaced = true;
           ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+          consumed =
+              _blockConsumedSequence[slot].load(std::memory_order_acquire);
+        }
+        if (consumed != expectedConsumed) {
+          // Core 0 has already discarded one or more missing partitions and
+          // released this slot for a newer generation. Skip the obsolete DSP
+          // work instead of trying to render every lost block. consumed+1 is
+          // the next generation that legitimately owns this same slot.
+          sequence = consumed + 1;
+          _blockSequence[1] = sequence;
+          slot = sequence & 1;
+          _audioBlockLateProducerRecoveries++;
+          producerWasPaced = true;
+        }
+        if (producerWasPaced) {
+          _audioProducerBlockWasPaced = true;
+          _audioConsecutiveUnpacedProducerBlocks = 0;
         }
       }
-      int pos = _blockPos[1];
       _blockPartialL[slot][1][pos] = leftSample;
       _blockPartialR[slot][1][pos] = rightSample;
       pos++;
@@ -821,6 +980,16 @@ int32_t clip16(int input);
       _blockReadySequence[slot].store(sequence + 1, std::memory_order_release);
       _blockSequence[1] = sequence + 1;
       xTaskNotifyGive(audioCallback1Handle); // Wake Core 0
+      #if M16_PRODUCER_UNPACED_YIELD_BLOCKS > 0
+        if (!_audioProducerBlockWasPaced) {
+          if (++_audioConsecutiveUnpacedProducerBlocks >=
+              M16_PRODUCER_UNPACED_YIELD_BLOCKS) {
+            _audioConsecutiveUnpacedProducerBlocks = 0;
+            _audioProducerStarvationYields++;
+            vTaskDelay(1);
+          }
+        }
+      #endif
       return true;
     }
 
@@ -847,18 +1016,33 @@ int32_t clip16(int input);
 
     bool core1Ready = _blockSplitActive;
     if (_blockSplitActive) {
-      // Never let a failed/stalled producer permanently wedge the I2S stream.
-      // If Core 1 misses this generous deadline, emit Core 0's half-mix for one
-      // block. Sequence tags ensure a late notification cannot satisfy the
-      // rendezvous for a different block.
-      TickType_t waitStart = xTaskGetTickCount();
+      // Never let a failed/stalled producer drain the I2S DMA reserve. Core 1
+      // normally finishes at almost the same time as Core 0, so two block
+      // periods allow scheduler jitter without turning a missed partition into
+      // a long output stall. Sequence tags reject late/stale notifications.
+      uint32_t syncTimeoutUs = (uint32_t)(((uint64_t)M16_BLOCK_SIZE *
+                                (uint64_t)M16_BLOCK_SYNC_TIMEOUT_BLOCKS *
+                                1000000ULL) / (uint32_t)SAMPLE_RATE);
+      if (syncTimeoutUs < 1000U) syncTimeoutUs = 1000U;
+      if (syncTimeoutUs > 10000U) syncTimeoutUs = 10000U;
+      uint32_t waitStartUs = micros();
       uint32_t expectedReady = sequence + 1;
       while (_blockReadySequence[slot].load(std::memory_order_acquire) != expectedReady &&
-             (xTaskGetTickCount() - waitStart) < pdMS_TO_TICKS(100)) {
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
+             (uint32_t)(micros() - waitStartUs) < syncTimeoutUs) {
+        // One scheduler tick is the longest sleep appropriate in an audio
+        // rendezvous. Re-check the microsecond deadline after every wake-up.
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1));
       }
       core1Ready = _blockReadySequence[slot].load(std::memory_order_acquire) == expectedReady;
-      if (!core1Ready) _audioBlockSyncTimeouts++;
+      if (!core1Ready) {
+        _audioBlockSyncTimeouts++;
+        uint32_t consecutive = ++_audioBlockConsecutiveSyncTimeouts;
+        if (consecutive > _audioBlockMaxConsecutiveSyncTimeouts) {
+          _audioBlockMaxConsecutiveSyncTimeouts = consecutive;
+        }
+      } else {
+        _audioBlockConsecutiveSyncTimeouts = 0;
+      }
     }
 
     // Combine and/or Format for DMA
@@ -884,16 +1068,45 @@ int32_t clip16(int input);
     }
 
     size_t bytesWritten = 0;
+    uint32_t dmaWriteStartUs = micros();
     esp_err_t writeResult = i2s_channel_write(tx_handle, _blockBuf, sizeof(_blockBuf),
                                               &bytesWritten, 100);
+    uint32_t dmaWriteElapsedUs = (uint32_t)(micros() - dmaWriteStartUs);
     bool result = (writeResult == ESP_OK && bytesWritten == sizeof(_blockBuf));
     if (!result) _audioDmaWriteTimeouts++;
+
+    bool yieldForIdle = false;
+    #if M16_DMA_FAST_WRITE_YIELD_BLOCKS > 0
+      // Less than one quarter of a block period means DMA accepted the block
+      // without providing meaningful pacing. A streak is used so normal startup
+      // ring filling and isolated quick writes do not add latency.
+      uint32_t blockPeriodUs = (uint32_t)(((uint64_t)M16_BLOCK_SIZE * 1000000ULL) /
+                                          (uint32_t)SAMPLE_RATE);
+      uint32_t fastWriteUs = blockPeriodUs >> 2;
+      if (fastWriteUs < 50U) fastWriteUs = 50U;
+      if (dmaWriteElapsedUs < fastWriteUs) {
+        if (_audioConsecutiveFastDmaWrites < M16_DMA_FAST_WRITE_YIELD_BLOCKS) {
+          _audioConsecutiveFastDmaWrites++;
+        }
+        if (_audioConsecutiveFastDmaWrites >= M16_DMA_FAST_WRITE_YIELD_BLOCKS) {
+          _audioConsecutiveFastDmaWrites = 0;
+          _audioDmaStarvationYields++;
+          yieldForIdle = true;
+        }
+      } else {
+        _audioConsecutiveFastDmaWrites = 0;
+      }
+    #endif
     
     if (_blockSplitActive) {
       _blockConsumedSequence[slot].store(sequence + 1, std::memory_order_release);
       _blockSequence[0] = sequence + 1;
       xTaskNotifyGive(audioCallback2Handle); // Release this slot for reuse
     }
+    // taskYIELD()/yield() is insufficient here: this maximum-priority task can
+    // immediately win scheduling again. A one-tick block guarantees IDLE0 and
+    // the task watchdog get a scheduling opportunity. Core 1 is released first.
+    if (yieldForIdle) vTaskDelay(1);
     return result;
   }
 
@@ -965,30 +1178,51 @@ int32_t clip16(int input);
       _blockReadySequence[1].store(0, std::memory_order_relaxed);
       _blockConsumedSequence[0].store(0, std::memory_order_relaxed);
       _blockConsumedSequence[1].store(0, std::memory_order_relaxed);
+      _audioBlockLateProducerRecoveries = 0;
+      _audioProducerStarvationYields = 0;
+      _audioConsecutiveFastDmaWrites = 0;
+      _audioConsecutiveUnpacedProducerBlocks = 0;
+      _audioProducerBlockWasPaced = false;
 
-      // Core 0 audio task — always started.
-      xTaskCreatePinnedToCore(
+      audioCallback1Handle = NULL;
+      audioCallback2Handle = NULL;
+
+      // Core 0 audio task — required for both single- and dual-core output.
+      BaseType_t core0TaskResult = xTaskCreatePinnedToCore(
           audioCallback,
           "FillAudioBuffer0",
-          8192,
+          16384,
           NULL,
-          configMAX_PRIORITIES - 1,
+          configMAX_PRIORITIES - 2,
           &audioCallback1Handle,
           0
       );
 
       bool dualTasksActive = false;
-      if (isDualCore && ESP.getChipCores() > 1) {
-        xTaskCreatePinnedToCore(
+      BaseType_t core1TaskResult = pdFAIL;
+      if (core0TaskResult == pdPASS && isDualCore && ESP.getChipCores() > 1) {
+        core1TaskResult = xTaskCreatePinnedToCore(
             audioCallback,
             "FillAudioBuffer1",
-            8192,
+            16384,
             NULL,
-            configMAX_PRIORITIES - 1,
+            configMAX_PRIORITIES - 2,
             &audioCallback2Handle,
             1
         );
-        dualTasksActive = (audioCallback2Handle != NULL);
+        dualTasksActive = (core1TaskResult == pdPASS && audioCallback2Handle != NULL);
+      }
+
+      if (core0TaskResult != pdPASS || audioCallback1Handle == NULL) {
+        Serial.printf("M16 ERROR: Core 0 audio task creation failed (result=%ld, free heap=%u)\n",
+                      (long)core0TaskResult, (unsigned)ESP.getFreeHeap());
+        _audioTasksRunning = false;
+        return;
+      }
+      if (isDualCore && !dualTasksActive) {
+        Serial.printf("M16 WARNING: Core 1 audio task unavailable (result=%ld, chip cores=%u, free heap=%u); using single-core fallback\n",
+                      (long)core1TaskResult, (unsigned)ESP.getChipCores(),
+                      (unsigned)ESP.getFreeHeap());
       }
 
 #if M16_REORDER_BUFFER_ENABLE
@@ -1123,7 +1357,8 @@ int32_t clip16(int input);
   */
 #elif IS_RP2040()
   // Raspberry Pi Pico / Pico 2 (RP2040/RP2350)
-  // Dual-core audio support with cooperative scheduling on Core 0
+  // Dual-core audio support. RP2350 uses a dedicated interrupt-driven block
+  // worker on Core 0; RP2040 retains the cooperative audioLoop() worker.
   #include <I2S.h>
   #include "pico/multicore.h"
   #include "pico/mutex.h"
@@ -1179,23 +1414,9 @@ int32_t clip16(int input);
   static int32_t _prevOutL = 0;
   static int32_t _prevOutR = 0;
 
-  // ============== Dual-core audio with direct I2S writes ==============
-  // Simpler approach: use mutex to serialize I2S writes directly (like ESP32)
-  // This avoids ring buffer ordering issues at the cost of some serialization
-  auto_init_mutex(picoAudioMutex);
+  // Legacy direct writes are serialized, but partitioned block mode has a
+  // single I2S writer on Core 1 and does not use this mutex.
   auto_init_mutex(picoI2SMutex);  // Separate mutex for I2S writes
-
-  // Callbacks for oscillator phase sync (set by Osc.h)
-  typedef void (*PhaseAdvanceCallback)(int coreNum);
-  typedef void (*PhaseClearCallback)(int coreNum);
-  static PhaseAdvanceCallback picoPhaseAdvanceFunc = nullptr;
-  static PhaseClearCallback picoPhaseClearFunc = nullptr;
-
-  /** Register phase sync callbacks (called from Osc.h) */
-  inline void registerPhaseSyncCallbacks(PhaseAdvanceCallback advance, PhaseClearCallback clear) {
-    picoPhaseAdvanceFunc = advance;
-    picoPhaseClearFunc = clear;
-  }
 
   /** Write audio samples - direct I2S write with mutex serialization */
   void i2s_write_samples(int16_t leftSample, int16_t rightSample) {
@@ -1205,26 +1426,245 @@ int32_t clip16(int input);
     leftAudioOuputValue = outL;
     rightAudioOuputValue = outR;
 
-    int32_t sample32 = ((int32_t)outL << 16) | ((uint16_t)outR);
+    uint32_t sample32 = ((uint32_t)(uint16_t)outL << 16) |
+                        (uint16_t)outR;
 
     if (isDualCore) {
       // Serialize I2S writes with mutex - samples go directly to I2S in order
       mutex_enter_blocking(&picoI2SMutex);
-      i2sOut.write(sample32);
+      i2sOut.write((int32_t)sample32);
       mutex_exit(&picoI2SMutex);
     } else {
-      i2sOut.write(sample32);
+      i2sOut.write((int32_t)sample32);
     }
     m16AdvanceAudioFrame(); // one output frame produced (both cores, serialized)
   }
 
-  // Block-split API stubs — RP2040 uses cooperative single-core audio scheduling.
-  inline int  audioPartitionOffset()  { return 0; }
-  inline int  audioPartitionStride()  { return 1; }
-  inline bool audioIsFinalizerCore()  { return true; }
+  // ---- Block-partitioned rendering ---------------------------------------
+  // Core 1 is the permanent coordinator and sole I2S writer. Two block slots
+  // allow Core 0 to render the next even-voice partition while Core 1 finalizes
+  // the current block. On RP2350 a spare hardware doorbell invokes the bounded
+  // Core-0 worker automatically. RP2040 has no doorbells, so audioLoop() claims
+  // the same jobs cooperatively. An unclaimed job always falls back to Core 1.
+  enum PicoBlockJobState : uint8_t {
+    PICO_BLOCK_IDLE = 0,
+    PICO_BLOCK_POSTED,
+    PICO_BLOCK_CLAIMED,
+    PICO_BLOCK_READY,
+    PICO_BLOCK_FALLBACK
+  };
+
+  static bool _picoBlockSplitActive = false;
+  static constexpr uint8_t PICO_BLOCK_SLOTS = 2;
+  static std::atomic<uint8_t> _picoBlockJobState[PICO_BLOCK_SLOTS];
+  static std::atomic<uint32_t> _picoBlockJobStartFrame[PICO_BLOCK_SLOTS];
+  static std::atomic<uint32_t> _picoBlockFallbacks{0};
+  static std::atomic<uint32_t> _picoBlockWorkerClaims{0};
+  static std::atomic<uint32_t> _picoBlockWriteErrors{0};
+  static int32_t _picoBlockPartialL[PICO_BLOCK_SLOTS][2][M16_BLOCK_SIZE] __attribute__((aligned(32)));
+  static int32_t _picoBlockPartialR[PICO_BLOCK_SLOTS][2][M16_BLOCK_SIZE] __attribute__((aligned(32)));
+  static uint16_t _picoBlockWritePos[2] = {0, 0};
+  static uint8_t _picoBlockWriteSlot[2] = {0, 0};
+  static int8_t _picoPartitionOverride[2] = {-1, -1};
+
+  #ifdef PICO_RP2350
+  static int _picoBlockWorkerDoorbell = -1;
+  static bool _picoBlockWorkerInterruptActive = false;
+  #endif
+
+  inline int audioPartitionOffset() {
+    if (!_picoBlockSplitActive) return 0;
+    int core = get_core_num();
+    int8_t overridePartition = _picoPartitionOverride[core];
+    return overridePartition >= 0 ? overridePartition : core;
+  }
+
+  inline int audioPartitionStride() {
+    return _picoBlockSplitActive ? 2 : 1;
+  }
+
+  inline bool audioPartitionIsActive() {
+    return _picoBlockSplitActive;
+  }
+
+  inline bool audioIsFinalizerCore() {
+    return !_picoBlockSplitActive || get_core_num() == 1;
+  }
+
+  inline uint32_t picoAudioBlockFallbackCount() {
+    return _picoBlockFallbacks.load(std::memory_order_relaxed);
+  }
+
+  inline uint32_t picoAudioBlockWorkerClaimCount() {
+    return _picoBlockWorkerClaims.load(std::memory_order_relaxed);
+  }
+
+  inline uint32_t picoAudioBlockWriteErrorCount() {
+    return _picoBlockWriteErrors.load(std::memory_order_relaxed);
+  }
+
+  inline bool picoAudioBlockWorkerIsAutomatic() {
+    #ifdef PICO_RP2350
+    return _picoBlockWorkerInterruptActive;
+    #else
+    return false;
+    #endif
+  }
+
   inline bool audioBlockWrite(int32_t L, int32_t R) {
-    i2s_write_samples((int16_t)clip16(L), (int16_t)clip16(R));
+    if (!_picoBlockSplitActive) {
+      if (_audioPostProcessCallback != nullptr) {
+        _audioPostProcessCallback(L, R);
+      }
+      i2s_write_samples((int16_t)clip16(L), (int16_t)clip16(R));
+      return true;
+    }
+
+    int core = get_core_num();
+    int partition = audioPartitionOffset();
+    uint16_t pos = _picoBlockWritePos[core];
+    if (partition < 0 || partition > 1 || pos >= M16_BLOCK_SIZE) {
+      _picoBlockWriteErrors.fetch_add(1, std::memory_order_relaxed);
+      return false;
+    }
+    uint8_t slot = _picoBlockWriteSlot[core];
+    _picoBlockPartialL[slot][partition][pos] = L;
+    _picoBlockPartialR[slot][partition][pos] = R;
+    _picoBlockWritePos[core] = pos + 1;
     return true;
+  }
+
+  inline void picoRenderBlockPartition(int partition, uint8_t slot,
+                                       uint32_t startFrame) {
+    int core = get_core_num();
+    _picoPartitionOverride[core] = partition;
+    _picoBlockWriteSlot[core] = slot;
+    _picoBlockWritePos[core] = 0;
+    for (int i = 0; i < M16_BLOCK_SIZE; i++) {
+      _picoBlockPartialL[slot][partition][i] = 0;
+      _picoBlockPartialR[slot][partition][i] = 0;
+    }
+
+    m16BeginRenderFrameContext(startFrame);
+    for (int i = 0; i < M16_BLOCK_SIZE; i++) {
+      m16SetRenderFrame(startFrame + (uint32_t)i);
+      audioUpdate();
+    }
+    m16EndRenderFrameContext();
+    _picoPartitionOverride[core] = -1;
+
+    if (_picoBlockWritePos[core] != M16_BLOCK_SIZE) {
+      _picoBlockWriteErrors.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  inline void picoFinalizeBlock(uint8_t slot) {
+    for (int i = 0; i < M16_BLOCK_SIZE; i++) {
+      int64_t combinedL = (int64_t)_picoBlockPartialL[slot][0][i] +
+                          _picoBlockPartialL[slot][1][i];
+      int64_t combinedR = (int64_t)_picoBlockPartialR[slot][0][i] +
+                          _picoBlockPartialR[slot][1][i];
+      int32_t outL = combinedL > INT32_MAX ? INT32_MAX :
+                     combinedL < INT32_MIN ? INT32_MIN : (int32_t)combinedL;
+      int32_t outR = combinedR > INT32_MAX ? INT32_MAX :
+                     combinedR < INT32_MIN ? INT32_MIN : (int32_t)combinedR;
+      if (_audioPostProcessCallback != nullptr) {
+        _audioPostProcessCallback(outL, outR);
+      }
+      outL = clip16(outL);
+      outR = clip16(outR);
+      leftAudioOuputValue = outL;
+      rightAudioOuputValue = outR;
+      uint32_t sample32 = ((uint32_t)(uint16_t)outL << 16) |
+                          (uint16_t)outR;
+      i2sOut.write((int32_t)sample32);
+      m16AdvanceAudioFrame();
+    }
+  }
+
+  inline bool picoClaimAndRenderBlock(uint8_t slot) {
+    uint8_t expected = PICO_BLOCK_POSTED;
+    if (!_picoBlockJobState[slot].compare_exchange_strong(
+            expected, PICO_BLOCK_CLAIMED,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+      return false;
+    }
+    _picoBlockWorkerClaims.fetch_add(1, std::memory_order_relaxed);
+    uint32_t startFrame =
+        _picoBlockJobStartFrame[slot].load(std::memory_order_relaxed);
+    picoRenderBlockPartition(0, slot, startFrame);
+    _picoBlockJobState[slot].store(PICO_BLOCK_READY,
+                                   std::memory_order_release);
+    return true;
+  }
+
+  #ifdef PICO_RP2350
+  static void __no_inline_not_in_flash_func(picoBlockWorkerIrq)() {
+    if (_picoBlockWorkerDoorbell < 0 ||
+        !multicore_doorbell_is_set_current_core(_picoBlockWorkerDoorbell)) {
+      return;
+    }
+    multicore_doorbell_clear_current_core(_picoBlockWorkerDoorbell);
+    // At most two bounded jobs can be outstanding. Normally only one is.
+    for (uint8_t slot = 0; slot < PICO_BLOCK_SLOTS; ++slot) {
+      picoClaimAndRenderBlock(slot);
+    }
+  }
+  #endif
+
+  inline void picoPostBlock(uint8_t slot, uint32_t startFrame) {
+    _picoBlockJobStartFrame[slot].store(startFrame,
+                                        std::memory_order_relaxed);
+    _picoBlockJobState[slot].store(PICO_BLOCK_POSTED,
+                                   std::memory_order_release);
+    #ifdef PICO_RP2350
+    if (_picoBlockWorkerInterruptActive) {
+      multicore_doorbell_set_other_core(_picoBlockWorkerDoorbell);
+    }
+    #endif
+  }
+
+  inline void picoFinishBlock(uint8_t slot) {
+    uint32_t startFrame =
+        _picoBlockJobStartFrame[slot].load(std::memory_order_relaxed);
+
+    // Core 0 has the duration of Core 1's odd-voice render to claim the job.
+    picoRenderBlockPartition(1, slot, startFrame);
+
+    uint8_t expected = PICO_BLOCK_POSTED;
+    if (_picoBlockJobState[slot].compare_exchange_strong(
+            expected, PICO_BLOCK_FALLBACK,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+      _picoBlockFallbacks.fetch_add(1, std::memory_order_relaxed);
+      picoRenderBlockPartition(0, slot, startFrame);
+    } else {
+      // Once Core 0 has claimed a job it completes the whole bounded block
+      // synchronously inside audioLoop(), so duplicate fallback is forbidden.
+      while (_picoBlockJobState[slot].load(std::memory_order_acquire) != PICO_BLOCK_READY) {
+        tight_loop_contents();
+      }
+    }
+  }
+
+  inline void picoRenderPipelinedBlocks() {
+    uint8_t slot = 0;
+    uint32_t startFrame = audioFrameCount();
+    picoPostBlock(slot, startFrame);
+
+    while (true) {
+      picoFinishBlock(slot);
+
+      // Queue the alternate slot before finalizing this one. On Pico 2 the
+      // Core-0 doorbell worker overlaps that render with post-processing/I2S.
+      uint8_t nextSlot = slot ^ 1u;
+      uint32_t nextFrame = startFrame + M16_BLOCK_SIZE;
+      picoPostBlock(nextSlot, nextFrame);
+      picoFinalizeBlock(slot);
+      _picoBlockJobState[slot].store(PICO_BLOCK_IDLE,
+                                     std::memory_order_release);
+      slot = nextSlot;
+      startFrame = nextFrame;
+    }
   }
 
   /** Core 1 audio callback */
@@ -1233,19 +1673,8 @@ int32_t clip16(int input);
       tight_loop_contents();
     }
 
-    if (isDualCore) {
-      while (true) {
-        // Under mutex: advance all oscillator phases atomically
-        mutex_enter_blocking(&picoAudioMutex);
-        if (picoPhaseAdvanceFunc) picoPhaseAdvanceFunc(1);  // Advance phases for Core 1
-        mutex_exit(&picoAudioMutex);
-
-        // Generate sample (uses pre-advanced phase)
-        audioUpdate();  // This calls i2s_write_samples which serializes I2S writes
-
-        // Clear this core's stored phase flags
-        if (picoPhaseClearFunc) picoPhaseClearFunc(1);
-      }
+    if (_picoBlockSplitActive) {
+      picoRenderPipelinedBlocks();
     } else {
       // Single-core: simple tight loop
       while (true) {
@@ -1256,17 +1685,13 @@ int32_t clip16(int input);
 
   /** Core 0 audio processing - call from loop() in dual-core mode */
   inline void audioLoop() {
-    if (isDualCore && picoAudioRunning) {
-      // Under mutex: advance all oscillator phases atomically
-      mutex_enter_blocking(&picoAudioMutex);
-      if (picoPhaseAdvanceFunc) picoPhaseAdvanceFunc(0);  // Advance phases for Core 0
-      mutex_exit(&picoAudioMutex);
+    if (!_picoBlockSplitActive || !picoAudioRunning) return;
 
-      // Generate sample (uses pre-advanced phase)
-      audioUpdate();  // This calls i2s_write_samples which serializes I2S writes
-
-      // Clear this core's stored phase flags
-      if (picoPhaseClearFunc) picoPhaseClearFunc(0);
+    #ifdef PICO_RP2350
+    if (_picoBlockWorkerInterruptActive) return;
+    #endif
+    for (uint8_t slot = 0; slot < PICO_BLOCK_SLOTS; ++slot) {
+      if (picoClaimAndRenderBlock(slot)) return;
     }
   }
 
@@ -1288,16 +1713,50 @@ int32_t clip16(int input);
       while(1);
     }
 
+    _picoBlockSplitActive = isDualCore;
+    for (uint8_t slot = 0; slot < PICO_BLOCK_SLOTS; ++slot) {
+      _picoBlockJobState[slot].store(PICO_BLOCK_IDLE,
+                                     std::memory_order_relaxed);
+      _picoBlockJobStartFrame[slot].store(0, std::memory_order_relaxed);
+    }
+    _picoBlockFallbacks.store(0, std::memory_order_relaxed);
+    _picoBlockWorkerClaims.store(0, std::memory_order_relaxed);
+    _picoBlockWriteErrors.store(0, std::memory_order_relaxed);
+
+    #ifdef PICO_RP2350
+    if (_picoBlockSplitActive) {
+      // The Arduino core reserves one doorbell for multicore coordination.
+      // Claim a different doorbell on Core 0 and share its IRQ safely.
+      _picoBlockWorkerDoorbell = multicore_doorbell_claim_unused(0b01, false);
+      if (_picoBlockWorkerDoorbell >= 0) {
+        uint32_t workerIrq =
+            multicore_doorbell_irq_num(_picoBlockWorkerDoorbell);
+        irq_add_shared_handler(workerIrq, picoBlockWorkerIrq, 129);
+        irq_set_enabled(workerIrq, true);
+        _picoBlockWorkerInterruptActive = true;
+      }
+    }
+    #endif
+
     // Signal that I2S is ready
     picoAudioRunning = true;
 
     // Launch Core 1 for dedicated audio processing
     multicore_launch_core1(picoAudioCallback);
 
-    if (isDualCore) {
-      Serial.println("M16 is running (Pico dual-core mode)");
-      Serial.println("  Core 1: dedicated audio");
-      Serial.println("  Core 0: call audioLoop() from loop() for audio + UI");
+    if (_picoBlockSplitActive) {
+      Serial.println("M16 is running (Pico block-partitioned mode)");
+      Serial.println("  Core 1: coordinator, odd voices, post-process, I2S");
+      #ifdef PICO_RP2350
+      if (_picoBlockWorkerInterruptActive) {
+        Serial.println("  Core 0: automatic doorbell block worker (double buffered)");
+      } else {
+        Serial.println("  Core 0: audioLoop() block worker (no free doorbell)");
+      }
+      #else
+      Serial.println("  Core 0: audioLoop() services even-voice block jobs");
+      #endif
+      Serial.println("  Missing Core 0 jobs fall back safely to Core 1");
     } else {
       Serial.println("M16 is running (Pico single-core mode)");
       Serial.println("  Core 1: dedicated audio");
