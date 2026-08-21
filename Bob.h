@@ -45,9 +45,11 @@ public:
     // If the other core holds the lock, return the previous output immediately.
     // This avoids spin-waiting and produces a 1-sample hold — inaudible at 44.1kHz.
     #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
-    bool expected = false;
-    if (!_bobLock.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
-      return prevOutput_;
+    if (_threadSafe) {
+      bool expected = false;
+      if (!_bobLock.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+        return prevOutput_;
+      }
     }
     #endif
 
@@ -149,7 +151,7 @@ public:
     prevOutput_ = (int16_t)outi;
 
     #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
-    _bobLock.store(false, std::memory_order_release);
+    if (_threadSafe) _bobLock.store(false, std::memory_order_release);
     #endif
 
     return prevOutput_;
@@ -203,6 +205,12 @@ public:
   /** Alias for getNormalisedCutoff for backwards compatibility */
   inline float getCutoff() const { return getNormalisedCutoff(); }
 
+  /** Enable cross-core protection for next(). Enabled by default.
+   * Set false only when one fixed audio partition owns this Bob instance.
+   * Parameter setters remain safe because their coefficients are read atomically.
+   */
+  void setThreadSafe(bool enable) { _threadSafe = enable; }
+
   /** @return Current cutoff frequency in Hz */
   float getFreq() const { return Fbase_; }
 
@@ -219,6 +227,7 @@ private:
   #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
   std::atomic<bool> _bobLock{false};
   #endif
+  bool _threadSafe = true;
   int16_t prevOutput_ = 0;
 
   static const uint8_t kInterpolation = 2;
@@ -226,7 +235,6 @@ private:
   static constexpr float LUT_RANGE = 4.0f;
   static constexpr float LUT_SCALE = (LUT_SIZE - 1) / (2.0f * LUT_RANGE);  // Precomputed: 127.875
 
-  float tanhLUT_[LUT_SIZE];
   float alpha_;
   float z0_[4] = {0,0,0,0};
   float z1_[4] = {0,0,0,0};
@@ -245,14 +253,29 @@ private:
 
   /** Initialize tanh lookup table */
   void initTanhLUT() {
+    float* table = sharedTanhLUT();
+    bool& initialized = sharedTanhLUTInitialized();
+    if (initialized) return;
     for (int i = 0; i < LUT_SIZE; i++) {
       float x = ((float)i / (LUT_SIZE - 1)) * 2.0f * LUT_RANGE - LUT_RANGE;
-      tanhLUT_[i] = tanhf(x);
+      table[i] = tanhf(x);
     }
+    initialized = true;
+  }
+
+  static float* sharedTanhLUT() {
+    static float table[LUT_SIZE];
+    return table;
+  }
+
+  static bool& sharedTanhLUTInitialized() {
+    static bool initialized = false;
+    return initialized;
   }
 
   /** Lookup tanh with linear interpolation */
   inline float tanhLookup(float x) {
+    const float* tanhLUT = sharedTanhLUT();
     if (x >= LUT_RANGE) return 1.0f;
     if (x <= -LUT_RANGE) return -1.0f;
     float indexF = (x + LUT_RANGE) * LUT_SCALE;  // Multiplication instead of division
@@ -260,7 +283,7 @@ private:
     float frac = indexF - idx;
     if (idx < 0) idx = 0;
     if (idx >= LUT_SIZE - 1) idx = LUT_SIZE - 2;
-    return tanhLUT_[idx] + (tanhLUT_[idx + 1] - tanhLUT_[idx]) * frac;
+    return tanhLUT[idx] + (tanhLUT[idx + 1] - tanhLUT[idx]) * frac;
   }
 
   /** Fast inverse square root approximation (Quake-style)
