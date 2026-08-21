@@ -60,6 +60,24 @@ public:
     alpha_val = max((int32_t)10, (int32_t)((1.0f - pow((1.0f - cutVal), 0.2f)) * (int32_t)1024));
   }
 
+  /** Convert a normalized cutoff to EMA's integer coefficient.
+   * Intended for building a lookup table during setup(), not for audio-rate use.
+   */
+  static inline int16_t coefficientForCutoff(float cutoff_val) {
+    float cutVal = max(0.0f, min(1.0f, cutoff_val));
+    return (int16_t)max((int32_t)10,
+        min((int32_t)1024,
+            (int32_t)((1.0f - pow((1.0f - cutVal), 0.2f)) * 1024.0f)));
+  }
+
+  /** Set a precomputed filter coefficient without pow().
+   * @param coefficient 10-1024, normally from coefficientForCutoff()
+   */
+  inline void setCoefficient(int32_t coefficient) {
+    alpha_val = (int16_t)max((int32_t)10,
+                            min((int32_t)1024, coefficient));
+  }
+
   /** Calculate next lowpass filter sample
    * @param input Audio sample
    * @return Filtered sample
