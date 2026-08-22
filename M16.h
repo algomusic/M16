@@ -462,7 +462,7 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
     Serial.println("M16 is running");
   }
 
-  void i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+  void _i2s_write_samples_platform(int16_t leftSample, int16_t rightSample) {
     leftAudioOuputValue = leftSample;
     rightAudioOuputValue = rightSample;
     i2s_write_lr(leftSample, rightSample);
@@ -482,11 +482,18 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
   inline int  audioPartitionStride()  { return 1; }
   inline bool audioPartitionIsActive() { return false; }
   inline bool audioIsFinalizerCore()  { return true; }
+  bool audioBlockWrite(int32_t L, int32_t R);
+
+  [[deprecated("Use audioBlockWrite(left, right); direct legacy I2S writes are single-core only")]]
+  void i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+    audioBlockWrite(leftSample, rightSample);
+  }
+
   inline bool audioBlockWrite(int32_t L, int32_t R) {
     if (_audioPostProcessCallback != nullptr) {
       _audioPostProcessCallback(L, R);
     }
-    i2s_write_samples((int16_t)clip16(L), (int16_t)clip16(R));
+    _i2s_write_samples_platform((int16_t)clip16(L), (int16_t)clip16(R));
     return true;
   }
 #elif IS_ESP32()
@@ -769,7 +776,9 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
     return _audioDmaStarvationYields;
   }
 
-  bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+  // Platform writer used by audioBlockWrite().  The public i2s_write_samples()
+  // API below is retained only as a single-core compatibility shim.
+  bool _i2s_write_samples_platform(int16_t leftSample, int16_t rightSample) {
     // One output frame produced per call on every path below (external direct,
     // internal DAC, reorder-enqueue). On dual-core external both cores call this
     // for alternate frames, so the shared atomic advances at the frame rate.
@@ -873,6 +882,24 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
       return _i2s_write_samples_direct_external(leftSample, rightSample);
   }
 
+  /**
+   * Legacy compatibility wrapper.
+   *
+   * Direct per-frame writes from two ESP32 audio tasks are intentionally no
+   * longer supported.  Migrate sketches to audioBlockWrite(); in dedicated
+   * single-core mode this wrapper forwards there so old sketches continue to
+   * run while producing the same block-scheduled output.
+   */
+  bool audioBlockWrite(int32_t L, int32_t R);
+
+  [[deprecated("Use audioBlockWrite(left, right); direct legacy I2S writes are single-core only")]]
+  bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+    if (_blockSplitActive) {
+      return false;
+    }
+    return audioBlockWrite(leftSample, rightSample);
+  }
+
   // These handles can now be used for vTask things
   TaskHandle_t audioCallback1Handle = NULL;  // Core 0 audio task
   TaskHandle_t audioCallback2Handle = NULL;  // Core 1 audio task
@@ -923,8 +950,8 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
         if (_audioPostProcessCallback != nullptr) {
           _audioPostProcessCallback(leftSample, rightSample);
         }
-        return i2s_write_samples((int16_t)clip16(leftSample),
-                                 (int16_t)clip16(rightSample));
+        return _i2s_write_samples_platform((int16_t)clip16(leftSample),
+                                            (int16_t)clip16(rightSample));
       }
     #endif
 
@@ -1419,7 +1446,7 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
   auto_init_mutex(picoI2SMutex);  // Separate mutex for I2S writes
 
   /** Write audio samples - direct I2S write with mutex serialization */
-  void i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+  void _i2s_write_samples_platform(int16_t leftSample, int16_t rightSample) {
     int32_t outL = leftSample;
     int32_t outR = rightSample;
 
@@ -1440,6 +1467,17 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
     m16AdvanceAudioFrame(); // one output frame produced (both cores, serialized)
   }
 
+  static bool _picoBlockSplitActive = false;
+  bool audioBlockWrite(int32_t L, int32_t R);
+
+  [[deprecated("Use audioBlockWrite(left, right); direct legacy I2S writes are single-core only")]]
+  bool i2s_write_samples(int16_t leftSample, int16_t rightSample) {
+    if (_picoBlockSplitActive) {
+      return false;
+    }
+    return audioBlockWrite(leftSample, rightSample);
+  }
+
   // ---- Block-partitioned rendering ---------------------------------------
   // Core 1 is the permanent coordinator and sole I2S writer. Two block slots
   // allow Core 0 to render the next even-voice partition while Core 1 finalizes
@@ -1454,7 +1492,6 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
     PICO_BLOCK_FALLBACK
   };
 
-  static bool _picoBlockSplitActive = false;
   static constexpr uint8_t PICO_BLOCK_SLOTS = 2;
   static std::atomic<uint8_t> _picoBlockJobState[PICO_BLOCK_SLOTS];
   static std::atomic<uint32_t> _picoBlockJobStartFrame[PICO_BLOCK_SLOTS];
@@ -1516,7 +1553,7 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
       if (_audioPostProcessCallback != nullptr) {
         _audioPostProcessCallback(L, R);
       }
-      i2s_write_samples((int16_t)clip16(L), (int16_t)clip16(R));
+      _i2s_write_samples_platform((int16_t)clip16(L), (int16_t)clip16(R));
       return true;
     }
 
