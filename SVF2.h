@@ -56,17 +56,19 @@ public:
    */
   inline void setRes(float resonance) {
     float qFloat = min(0.96f, pow(max(0.0f, min(1.0f, resonance)), 0.3f));
-    qInt = (int32_t)(qFloat * 32768.0f);
+    int32_t newQInt = (int32_t)(qFloat * 32768.0f);
     // Resonance-dependent gain compensation to prevent clipping at high Q
     // At res=0: gainComp=1.0, at res=1: gainComp≈0.6 (gentler curve)
     float gainCompF = 1.0f / (1.0f + qFloat * 0.7f);
-    gainCompInt = (int32_t)(gainCompF * 32768.0f);
-    updateFeedback();
+    int32_t newGainCompInt = (int32_t)(gainCompF * 32768.0f);
+    publishCoefficients(loadF(), newQInt,
+                        feedbackForFrequency(newQInt, loadF()),
+                        newGainCompInt);
   }
 
   /** @return Current resonance value */
   inline float getRes() {
-    return qInt * (1.0f / 32768.0f);
+    return loadQ() * (1.0f / 32768.0f);
   }
 
   /** Set cutoff frequency in Hz
@@ -75,8 +77,11 @@ public:
   inline void setFreq(int freq_val) {
     freq = max(0, min((int)maxFreq, freq_val));
     float fFloat = min(0.96f, 2.0f * sin(3.1415927f * freq * SAMPLE_RATE_INV));
-    fInt = (int32_t)(fFloat * 32768.0f);
-    updateFeedback();
+    int32_t newFInt = (int32_t)(fFloat * 32768.0f);
+    int32_t currentQ = loadQ();
+    publishCoefficients(newFInt, currentQ,
+                        feedbackForFrequency(currentQ, newFInt),
+                        loadGainComp());
   }
 
   /** @return Current cutoff frequency in Hz */
@@ -86,7 +91,7 @@ public:
 
   /** @return Internal f coefficient */
   inline float getF() {
-    return fInt * (1.0f / 32768.0f);
+    return loadF() * (1.0f / 32768.0f);
   }
 
   /** Set cutoff as normalized value with non-linear mapping
@@ -95,12 +100,31 @@ public:
    */
   inline void setNormalisedCutoff(float cutoff_val) {
     _normalisedCutoff = max(0.0f, min(1.0f, cutoff_val));
-    // Minimum f of 0.001 (~20Hz) prevents filter from stalling at cutoff=0
-    float fFloat = max(0.001f, min(0.96f, pow(_normalisedCutoff, 2.2f)));
-    fInt = (int32_t)(fFloat * 32768.0f);
-    freq = (int32_t)(maxFreq * fFloat);
+    setNormalisedCutoffCoefficient(coefficientForNormalisedCutoff(_normalisedCutoff));
+  }
+
+  /** Precompute the fixed-point coefficient used by setNormalisedCutoff().
+   * Useful for control lookup tables that avoid pow() while audio is running.
+   */
+  static inline int32_t coefficientForNormalisedCutoff(float cutoff_val) {
+    float cutoff = max(0.0f, min(1.0f, cutoff_val));
+    float fFloat = max(0.001f, min(0.96f, pow(cutoff, 2.2f)));
+    return (int32_t)(fFloat * 32768.0f);
+  }
+
+  /** Apply a coefficient returned by coefficientForNormalisedCutoff().
+   * This is the inexpensive runtime half of the lookup-table API.
+   */
+  inline void setNormalisedCutoffCoefficient(int32_t coefficient) {
+    int32_t newFInt = coefficient;
+    if (newFInt < 32) newFInt = 32;
+    else if (newFInt > 31457) newFInt = 31457;
+    freq = (int32_t)(maxFreq * (newFInt * (1.0f / 32768.0f)));
+    int32_t currentQ = loadQ();
     // fb = q + q * (1.0 + f)  ->  fbInt = qInt + (qInt * (32768 + fInt)) >> 15
-    fbInt = qInt + ((int64_t)qInt * (32768 + fInt) >> 15);
+    int32_t newFeedback = currentQ +
+        ((int64_t)currentQ * (32768 + newFInt) >> 15);
+    publishCoefficients(newFInt, currentQ, newFeedback, loadGainComp());
   }
 
   /** Alias for setNormalisedCutoff for backwards compatibility */
@@ -145,6 +169,15 @@ public:
     return clip16(low);
   }
 
+  /** Calculate the next lowpass sample without acquiring the state lock.
+   * Use only when exactly one audio core owns this filter instance. */
+  inline int16_t nextLPFUnlocked(int32_t input) {
+    input = clip16(input);
+    calcFilter(input);
+    prevOutput_ = clip16(low);
+    return prevOutput_;
+  }
+
   /** Calculate next highpass sample
    * @param input Audio sample
    * @return Filtered sample
@@ -166,6 +199,15 @@ public:
   /** @return Current highpass output without advancing filter */
   inline int16_t currentHPF() {
     return clip16(high);
+  }
+
+  /** Calculate the next highpass sample without acquiring the state lock.
+   * Use only when exactly one audio core owns this filter instance. */
+  inline int16_t nextHPFUnlocked(int32_t input) {
+    input = clip16(input);
+    calcFilter(input);
+    prevOutput_ = clip16(high);
+    return prevOutput_;
   }
 
   /** Calculate next bandpass sample
@@ -313,6 +355,7 @@ public:
 private:
   #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
   std::atomic<bool> _svfLock{false};
+  std::atomic<uint32_t> _coefficientSequence{0};
   #endif
   int16_t prevOutput_ = 0;  // Last output for lock-miss fallback
 
@@ -344,10 +387,49 @@ private:
   int32_t dcOut = 0;
 
 
-  /** Update feedback coefficient when f or q changes */
-  inline void updateFeedback() {
-    // fb = q + q * (1.0 - f)  ->  fbInt = qInt + (qInt * (32768 - fInt)) >> 15
-    fbInt = qInt + ((int64_t)qInt * (32768 - fInt) >> 15);
+  static inline int32_t feedbackForFrequency(int32_t q, int32_t f) {
+    return q + ((int64_t)q * (32768 - f) >> 15);
+  }
+
+  inline int32_t loadF() const {
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    return __atomic_load_n(&fInt, __ATOMIC_RELAXED);
+    #else
+    return fInt;
+    #endif
+  }
+
+  inline int32_t loadQ() const {
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    return __atomic_load_n(&qInt, __ATOMIC_RELAXED);
+    #else
+    return qInt;
+    #endif
+  }
+
+  inline int32_t loadGainComp() const {
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    return __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
+    #else
+    return gainCompInt;
+    #endif
+  }
+
+  inline void publishCoefficients(int32_t f, int32_t q, int32_t feedback,
+                                  int32_t gainComp) {
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    _coefficientSequence.fetch_add(1, std::memory_order_acq_rel);
+    __atomic_store_n(&fInt, f, __ATOMIC_RELAXED);
+    __atomic_store_n(&qInt, q, __ATOMIC_RELAXED);
+    __atomic_store_n(&fbInt, feedback, __ATOMIC_RELAXED);
+    __atomic_store_n(&gainCompInt, gainComp, __ATOMIC_RELAXED);
+    _coefficientSequence.fetch_add(1, std::memory_order_release);
+    #else
+    fInt = f;
+    qInt = q;
+    fbInt = feedback;
+    gainCompInt = gainComp;
+    #endif
   }
 
   /** Integer-only core filter calculation
@@ -359,9 +441,16 @@ private:
     // This ensures we use a consistent set of coefficients for the entire sample
     int32_t cached_fInt, cached_fbInt, cached_gainCompInt;
     #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
-    cached_fInt = __atomic_load_n(&fInt, __ATOMIC_RELAXED);
-    cached_fbInt = __atomic_load_n(&fbInt, __ATOMIC_RELAXED);
-    cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
+    uint32_t sequenceBefore, sequenceAfter;
+    for (;;) {
+      sequenceBefore = _coefficientSequence.load(std::memory_order_acquire);
+      if (sequenceBefore & 1U) continue;
+      cached_fInt = __atomic_load_n(&fInt, __ATOMIC_RELAXED);
+      cached_fbInt = __atomic_load_n(&fbInt, __ATOMIC_RELAXED);
+      cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
+      sequenceAfter = _coefficientSequence.load(std::memory_order_acquire);
+      if (sequenceBefore == sequenceAfter) break;
+    }
     #else
     cached_fInt = fInt;
     cached_fbInt = fbInt;
