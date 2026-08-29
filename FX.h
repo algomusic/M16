@@ -627,6 +627,34 @@ class FX {
       });
     }
 
+    /** Half-rate stereo reverb without the FX state lock.
+     * Use only when one dedicated audio core exclusively owns this FX object.
+     * Call initReverbSafe() before audioStart() to keep allocation out of the
+     * real-time callback. */
+    inline void reverbStereoInterpUnlocked(int32_t audioInLeft, int32_t audioInRight,
+                                           int32_t &audioOutLeft, int32_t &audioOutRight) {
+      if (!reverbInitiated) initReverb(reverbSize);
+      int32_t outL;
+      int32_t outR;
+      reverbInterpToggle = !reverbInterpToggle;
+      if (reverbInterpToggle) {
+        processReverb(clip16(audioInLeft), clip16(audioInRight));
+        outL = clip16(((audioInLeft * (1024 - reverbMix)) >> 10) +
+                      ((revP1 * reverbMix) >> 10));
+        outR = clip16(((audioInRight * (1024 - reverbMix)) >> 10) +
+                      ((revP2 * reverbMix) >> 10));
+        reverbInterpPrevL = outL;
+        reverbInterpPrevR = outR;
+      } else {
+        outL = reverbInterpPrevL;
+        outR = reverbInterpPrevR;
+      }
+      reverbInterpSmoothL += (outL - reverbInterpSmoothL) >> 2;
+      reverbInterpSmoothR += (outR - reverbInterpSmoothR) >> 2;
+      audioOutLeft = reverbInterpSmoothL;
+      audioOutRight = reverbInterpSmoothR;
+    }
+
     /** Reset the interpolated reverb smoothing state.
     * Call when enabling reverb after it was disabled to avoid transients.
     * @seedL Initial value for left channel smoother
@@ -738,6 +766,14 @@ class FX {
       return reverbMix * 0.0009765625f;
     }
 
+    /** Report whether reverb is using the optimized power-of-two buffer path.
+     * Returns false before reverb has been initialized or when a large reverb
+     * size requires the legacy Del-based implementation.
+     */
+    inline bool reverbUsesOptimizedPath() const {
+      return reverbInitiated && useOptimizedReverb;
+    }
+
     /** Set dampening (high frequency absorption)
      *  @param damp 0.0-1.0, higher = more HF dampening (darker sound)
      */
@@ -819,12 +855,13 @@ class FX {
         initChorus();
       }
       M16_ATOMIC_GUARD_BLOCKING(_fxLock, {
-        // Both delay lines use the same triangle LFO. Inverting the right-hand
-        // modulation places it 180 degrees out of phase with the left, so the
-        // stereo image moves in opposite directions instead of pulsing as one.
+        // The delay lines use separate triangle oscillators sharing one table.
+        // The right modulation is inverted, while a small rate offset prevents
+        // their opposite-direction motion from repeating as a short pattern.
         float chorusLfoVal = chorusLfo.next() * MAX_16_INV;
+        float chorusLfoVal2 = chorusLfo2.next() * MAX_16_INV;
         chorusDelay.setTime(chorusDelayTime + chorusLfoVal * chorusLfoWidth);
-        chorusDelay2.setTime(chorusDelayTime2 - chorusLfoVal * chorusLfoWidth);
+        chorusDelay2.setTime(chorusDelayTime2 - chorusLfoVal2 * chorusLfoWidth);
         int32_t delVal = chorusDelay.next(audioInLeft);
         int32_t delVal2 = chorusDelay2.next(audioInRight);
         int32_t inVal = (audioInLeft * (chorusMixInput))>>10;
@@ -847,6 +884,33 @@ class FX {
         audioOutLeft  = ((audioInLeft  * (1024 - _chorusMixLevel)) >> 10) + ((wetL * _chorusMixLevel) >> 10);
         audioOutRight = ((audioInRight * (1024 - _chorusMixLevel)) >> 10) + ((wetR * _chorusMixLevel) >> 10);
       });
+    }
+
+    /** Stereo chorus without FX/delay/oscillator state locks.
+     * Use only when one dedicated audio core exclusively owns this FX object. */
+    inline void chorusStereoUnlocked(int32_t audioInLeft, int32_t audioInRight,
+                                     int32_t &audioOutLeft, int32_t &audioOutRight) {
+      if (!chorusInitiated) initChorus();
+      float chorusLfoVal = chorusLfo.nextUnlocked() * MAX_16_INV;
+      float chorusLfoVal2 = chorusLfo2.nextUnlocked() * MAX_16_INV;
+      chorusDelay.setTime(chorusDelayTime + chorusLfoVal * chorusLfoWidth);
+      chorusDelay2.setTime(chorusDelayTime2 - chorusLfoVal2 * chorusLfoWidth);
+      int32_t delVal = chorusDelay.nextUnlocked(audioInLeft);
+      int32_t delVal2 = chorusDelay2.nextUnlocked(audioInRight);
+      int32_t inVal = (audioInLeft * chorusMixInput) >> 10;
+      int32_t inVal2 = (audioInRight * chorusMixInput) >> 10;
+      delVal = (delVal * chorusMixDelay) >> 10;
+      delVal2 = (delVal2 * chorusMixDelay) >> 10;
+      int32_t wetL = clip16(((inVal + delVal) * chorusMixNorm) >> 10);
+      int32_t wetR = clip16(((inVal2 + delVal2) * chorusMixNorm) >> 10);
+      int32_t wetMid = (wetL + wetR) >> 1;
+      int32_t wetSide = ((wetL - wetR) >> 1) * _chorusSpread >> 10;
+      wetL = clip16(wetMid + wetSide);
+      wetR = clip16(wetMid - wetSide);
+      audioOutLeft = ((audioInLeft * (1024 - _chorusMixLevel)) >> 10) +
+                     ((wetL * _chorusMixLevel) >> 10);
+      audioOutRight = ((audioInRight * (1024 - _chorusMixLevel)) >> 10) +
+                      ((wetR * _chorusMixLevel) >> 10);
     }
 
     /** Set the chorus dry/wet mix level.
@@ -895,8 +959,19 @@ class FX {
     inline
     void setChorusRate(float rate) {
       if (!chorusInitiated) initChorus();
-      chorusLfoRate = rate;
-      chorusLfo.setFreq(chorusLfoRate);
+      chorusLfoRate = max(0.01f, rate);
+      applyChorusLfoRates();
+    }
+
+    /** Set the fixed rate difference between the stereo chorus LFOs.
+     * @amount 0.0 uses equal rates; 1.0 separates them by +/-5%.
+     * The default is 0.6, giving left/right rates of 0.97x and 1.03x.
+     */
+    inline
+    void setChorusStereoDetune(float amount) {
+      if (!chorusInitiated) initChorus();
+      chorusStereoDetune = constrain(amount, 0.0f, 1.0f);
+      applyChorusLfoRates();
     }
 
     /** Set the chorus feedback level
@@ -1022,12 +1097,13 @@ class FX {
     int chorusDelayTime2 = 28;
     float chorusLfoRate = 0.5; // Hz; default stereo chorus modulation rate
     float chorusLfoWidth = 0.8; // ms
+    float chorusStereoDetune = 0.6f; // 0-1; default gives 0.97x/1.03x stereo rates
     int chorusMixInput = 600; // 0 - 1024
     int chorusMixDelay = 800; // 0 - 1024
     int chorusMixNorm = 731; // normalization factor to prevent clipping (1024 * 1024 / (600 + 800))
     float chorusFeedback = 0.4; // 0.0 to 1.0
     int16_t * chorusLfoTable;
-    Osc chorusLfo;
+    Osc chorusLfo, chorusLfo2;
     Del chorusDelay, chorusDelay2;
     All allpass1, allpass2;
     bool reverb2Initiated = false;
@@ -1110,6 +1186,13 @@ class FX {
       } else {
         chorusMixNorm = 1024; // no scaling needed
       }
+    }
+
+    /** Publish independently detuned rates to the two stereo LFOs. */
+    inline void applyChorusLfoRates() {
+      const float detune = chorusStereoDetune * 0.05f;
+      chorusLfo.setFreq(max(0.01f, chorusLfoRate * (1.0f - detune)));
+      chorusLfo2.setFreq(max(0.01f, chorusLfoRate * (1.0f + detune)));
     }
 
     /** Set the reverb params */
@@ -1317,7 +1400,10 @@ class FX {
       #endif
       Osc::triGen(chorusLfoTable); // shared triangle LFO for both delay lines
       chorusLfo.setTable(chorusLfoTable);
-      chorusLfo.setFreq(chorusLfoRate);
+      chorusLfo2.setTable(chorusLfoTable);
+      chorusLfo.setPhase(0.0f);
+      chorusLfo2.setPhase(0.0f);
+      applyChorusLfoRates();
       chorusDelay.setMaxDelayTime(chorusDelayTime + 3);
       chorusDelay2.setMaxDelayTime(chorusDelayTime2 + 3);
       setChorusFeedback(chorusFeedback);
