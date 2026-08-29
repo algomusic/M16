@@ -288,12 +288,12 @@ public:
   inline
   int16_t next2() {
     int32_t sampVal;
-    uint32_t myPhase;
     int idx;
 
     // Fast path: atomic phase increment for thread-safe dual-core operation
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
+      uint32_t myPhase;
       // Seqlock read: same protocol as next() — guarantees consistent bandPtr+increment pair.
       uint32_t cachedIncrement;
       int16_t* cachedBandPtr;
@@ -457,7 +457,21 @@ public:
     if (newVal > 0) {
       spreadActive = true;
     } else spreadActive = false;
-    setFreq(getFreq());
+    // Refresh only the spread increments. Calling setFreq(getFreq()) here used
+    // to force this indirectly, but would defeat setFreq()'s idempotent path.
+    #if IS_ESP32() || IS_RP2040()
+    uint32_t currentIncrement =
+        __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+    #else
+    uint32_t currentIncrement = phase_increment_fractional;
+    #endif
+    if (spreadActive) {
+      phase_increment_fractional_s1 = (uint32_t)(currentIncrement * spread1);
+      phase_increment_fractional_s2 = (uint32_t)(currentIncrement * spread2);
+    } else {
+      phase_increment_fractional_s1 = currentIncrement;
+      phase_increment_fractional_s2 = currentIncrement;
+    }
 	}
 
   /** Set the spread value of each detuned Oscilator instance. Ranges > 0 
@@ -1395,7 +1409,6 @@ public:
 	inline
 	void setFreq(float freq) {
 		if (freq > 0) {
-      frequency = freq;
       // 16.16 fixed-point: phase_inc = (freq * TABLE_SIZE / SAMPLE_RATE) * 65536
       uint32_t newIncrement = (uint32_t)(freq * TABLE_SIZE * 65536.0f / SAMPLE_RATE);
 
@@ -1411,6 +1424,31 @@ public:
         }
       }
 
+      // Most control loops may present the same settled value repeatedly. If
+      // both published parts already describe this exact frequency, avoid all
+      // derived arithmetic and, on dual-core targets, avoid an unnecessary
+      // seqlock generation that can briefly make the audio reader retry.
+      #if IS_ESP32() || IS_RP2040()
+      uint32_t currentIncrement =
+          __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      int16_t* currentBandPtr = (int16_t*)__atomic_load_n(
+          (uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+      int16_t* pendingBandPtr = (int16_t*)__atomic_load_n(
+          (uintptr_t*)&_pendingBandPtr, __ATOMIC_RELAXED);
+      #else
+      uint32_t currentIncrement = phase_increment_fractional;
+      int16_t* currentBandPtr = bandPtr;
+      int16_t* pendingBandPtr = _pendingBandPtr;
+      #endif
+      bool bandAlreadyRequested = newBandPtr == currentBandPtr ||
+                                  newBandPtr == pendingBandPtr;
+      if (freq == frequency && newIncrement == currentIncrement &&
+          bandAlreadyRequested) {
+        return;
+      }
+
+      frequency = freq;
+
       // Seqlock write: mark odd (write in progress), store increment, mark even (stable).
       // next()/phMod() read the seqlock before and after loading the pair and retry if
       // the count changed — guaranteeing they always see a consistent increment.
@@ -1418,7 +1456,6 @@ public:
       // next()/phMod()) to prevent waveform discontinuities in FM cascade chains.
       #if IS_ESP32() || IS_RP2040()
         {
-          int16_t* currentBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
           if (newBandPtr != currentBandPtr) {
             if (currentBandPtr == nullptr) {
               // Initial setup before audio starts: apply immediately
