@@ -141,16 +141,28 @@ public:
 
   // ── Receive ──────────────────────────────────────────────────────────────
 
-  /** Read one MIDI event. Returns the status byte (channel stripped to 0)
-   *  or 0 if nothing is available. */
+  /** Read one complete MIDI event. Returns the status byte (channel stripped
+   *  to 0), or 0 if no complete event is available yet. Parsing is persistent:
+   *  running status, split UART arrivals, and interleaved Real-Time bytes are
+   *  handled without losing the surrounding channel message. */
   uint16_t read() {
-    while (srcAvail()) {
+    // Drain only bytes already available. An incomplete channel message stays
+    // in parser state until a later call, rather than blocking the audio/control
+    // loop or discarding data bytes that have not reached the UART yet.
+    while (srcAvail() && !eventQueueFull()) {
       int b = srcRead();
       if (b < 0) break;
-      if (b >= 248 && b <= 252) return b;
-      if (b >  127 && b <  240) return handleChannelRead((uint8_t)b);
+      parseByte((uint8_t)b);
     }
-    return 0;
+
+    MidiEvent event;
+    if (!eventPop(event)) return 0;
+    message[0] = event.status;
+    message[1] = event.data1;
+    message[2] = event.data2;
+    return (message[0] < 240)
+      ? (uint8_t)(message[0] & 0xF0)
+      : message[0];
   }
 
   uint8_t getStatus()  { return message[0] - (message[0] & 0x0F); }
@@ -219,12 +231,134 @@ public:
   }
 
 private:
+  struct MidiEvent {
+    uint8_t status;
+    uint8_t data1;
+    uint8_t data2;
+  };
+
   int      recievePin;
   int      transmitPin;
   uint8_t *message        = nullptr;
   unsigned long _prevClockTime = 0;
   float    _clockDeltas[7]     = {};  // 8-sample window (current + 7 stored)
   int16_t  _lastBPM            = 0;
+
+  // Persistent receive parser. MIDI running status remains valid until a
+  // System Common status arrives; Real-Time messages never disturb it.
+  uint8_t _runningStatus = 0;
+  uint8_t _parseStatus = 0;
+  uint8_t _parseData[2] = {};
+  uint8_t _parseDataCount = 0;
+  uint8_t _parseDataNeeded = 0;
+  uint8_t _systemDataRemaining = 0;
+  bool _insideSysEx = false;
+
+  // Completed events are separated from byte parsing so read() can consume a
+  // whole UART burst safely while still returning one public event at a time.
+  enum { EVENT_QUEUE_SIZE = 64 };
+  MidiEvent _eventQueue[EVENT_QUEUE_SIZE] = {};
+  uint8_t _eventRead = 0;
+  uint8_t _eventWrite = 0;
+
+  bool eventQueueFull() const {
+    return (uint8_t)((_eventWrite + 1) & (EVENT_QUEUE_SIZE - 1)) == _eventRead;
+  }
+
+  bool eventPop(MidiEvent &event) {
+    if (_eventRead == _eventWrite) return false;
+    event = _eventQueue[_eventRead];
+    _eventRead = (uint8_t)((_eventRead + 1) & (EVENT_QUEUE_SIZE - 1));
+    return true;
+  }
+
+  void eventPush(uint8_t status, uint8_t data1 = 0, uint8_t data2 = 0) {
+    // Collapse consecutive updates for the same controller, retaining the
+    // existing MIDI16 sweep-coalescing optimization with running status too.
+    if ((status & 0xF0) == 0xB0 && _eventRead != _eventWrite) {
+      uint8_t previous = (uint8_t)((_eventWrite - 1) & (EVENT_QUEUE_SIZE - 1));
+      MidiEvent &last = _eventQueue[previous];
+      if (last.status == status && last.data1 == data1) {
+        last.data2 = data2;
+        return;
+      }
+    }
+    if (eventQueueFull()) return;
+    _eventQueue[_eventWrite] = {status, data1, data2};
+    _eventWrite = (uint8_t)((_eventWrite + 1) & (EVENT_QUEUE_SIZE - 1));
+  }
+
+  void beginChannelMessage(uint8_t status) {
+    _runningStatus = status;
+    _parseStatus = status;
+    _parseDataCount = 0;
+    uint8_t type = status & 0xF0;
+    _parseDataNeeded = (type == 0xC0 || type == 0xD0) ? 1 : 2;
+  }
+
+  void parseByte(uint8_t value) {
+    // MIDI Real-Time bytes may appear anywhere, including between a status and
+    // its data. Report them without changing any parser or running-status state.
+    if (value >= 0xF8) {
+      eventPush(value);
+      return;
+    }
+
+    if (value & 0x80) {
+      if (value < 0xF0) {
+        _insideSysEx = false;
+        _systemDataRemaining = 0;
+        beginChannelMessage(value);
+        return;
+      }
+
+      // System Common cancels running status. MIDI16 does not expose these
+      // message types, but consuming their known data lengths keeps subsequent
+      // channel messages aligned.
+      _runningStatus = 0;
+      _parseStatus = 0;
+      _parseDataCount = 0;
+      _parseDataNeeded = 0;
+      if (value == 0xF0) {
+        _insideSysEx = true;
+        _systemDataRemaining = 0;
+      } else if (value == 0xF7) {
+        _insideSysEx = false;
+        _systemDataRemaining = 0;
+      } else {
+        _insideSysEx = false;
+        _systemDataRemaining = (value == 0xF2) ? 2 :
+                               ((value == 0xF1 || value == 0xF3) ? 1 : 0);
+      }
+      return;
+    }
+
+    if (_insideSysEx) return;
+    if (_systemDataRemaining > 0) {
+      --_systemDataRemaining;
+      return;
+    }
+
+    if (_parseStatus == 0) {
+      if (_runningStatus == 0) return;  // stray data byte
+      beginChannelMessage(_runningStatus);
+    }
+
+    _parseData[_parseDataCount++] = value;
+    if (_parseDataCount < _parseDataNeeded) return;
+
+    uint8_t status = _parseStatus;
+    uint8_t data1 = _parseData[0];
+    uint8_t data2 = (_parseDataNeeded == 2) ? _parseData[1] : 0;
+    if ((status & 0xF0) == 0x90 && data2 == 0)
+      status = (uint8_t)(0x80 | (status & 0x0F));
+    eventPush(status, data1, data2);
+
+    // Prepare for the next running-status message without requiring another
+    // status byte. A new explicit status will simply replace this state.
+    _parseStatus = _runningStatus;
+    _parseDataCount = 0;
+  }
 
   // ── Clock task internals (ESP32 only) ────────────────────────────────────
 
@@ -442,22 +576,6 @@ private:
     return Serial2.available();
   }
 
-  // Bounded read of one byte from the active source. Returns -1 on timeout so
-  // a truncated/noisy MIDI message cannot trap handleChannelRead forever.
-  int readByte() {
-    #if IS_ESP32()
-    if (_clockTaskActive) {
-      unsigned long t0 = millis();
-      while (!rxAvail()) {
-        if (millis() - t0 > 50) return -1;
-        taskYIELD();   // let clock task run to fill ring
-      }
-      return rxPop();
-    }
-    #endif
-    return Serial2.read();
-  }
-
   void sendChannelMessage(uint8_t status, uint8_t data1, uint8_t data2,
                           uint8_t length) {
     #if IS_ESP32()
@@ -483,51 +601,6 @@ private:
 
   void writeByte(uint8_t v) { Serial2.write(v); }
 
-  uint8_t handleChannelRead(uint8_t inByte) {
-    message[0] = inByte;
-    // Read data byte 1
-    int nextByte = readByte();
-    while (nextByte > 127) {
-      if (nextByte >= 248 && nextByte <= 252) return (uint8_t)nextByte;
-      nextByte = readByte();
-    }
-    if (nextByte < 0) return 0;
-    message[1] = (uint8_t)nextByte;
-
-    // Program Change and Channel Pressure contain only one data byte.
-    uint8_t messageType = message[0] & 0xF0;
-    if (messageType == 0xC0 || messageType == 0xD0) {
-      message[2] = 0;
-      return messageType;
-    }
-
-    // Read data byte 2
-    nextByte = readByte();
-    while (nextByte > 127) {
-      if (nextByte >= 248 && nextByte <= 252) return (uint8_t)nextByte;
-      nextByte = readByte();
-    }
-    if (nextByte < 0) return 0;
-    message[2] = (uint8_t)nextByte;
-
-    // CC coalescing: drain queued messages for the same channel+controller,
-    // keeping only the final value. Stops on an embedded RT byte.
-    if ((message[0] & 0xF0) == 0xB0) {
-      while (srcCount() >= 3 && (uint8_t)srcPeek() == message[0]) {
-        srcRead();                             // consume repeated status byte
-        uint8_t nc = (uint8_t)srcRead();
-        if (nc >= 248 && nc <= 252) break;     // RT byte — stop coalescing
-        uint8_t nv = (uint8_t)srcRead();
-        if (nc == message[1]) message[2] = nv;
-      }
-    }
-
-    if (message[0] >= 0x90 && message[0] <= 0x9F && message[2] == 0)
-      message[0] = 0x80 | (message[0] & 0x0F);  // note-on vel=0 → note-off
-    return (message[0] < 240)
-      ? (uint8_t)(message[0] - (message[0] & 0x0F))
-      : message[0];
-  }
 };
 
 #endif /* MIDI16_H_ */
