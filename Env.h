@@ -64,6 +64,19 @@ class Env {
       return envAttack;
     }
 
+    /** Set attack curvature from linear to quadratic ease-out.
+     *  0.0 = linear, 0.5 = gentle ease-out (default), 1.0 = the original
+     *  quadratic ease-out. Uses an inexpensive polynomial at audio rate.
+     */
+    void setAttackCurve(float curve) {
+      attackCurve = fmaxf(0.0f, fminf(1.0f, curve));
+    }
+
+    /** Return attack curvature in the range 0.0-1.0. */
+    float getAttackCurve() {
+      return attackCurve;
+    }
+
     /** Set envHold time in ms. */
     void setHold(float val) {
       if (val >= 0) envHold = val;
@@ -155,16 +168,17 @@ class Env {
       releaseSamples = jitReleaseMs * samplesPerMs;
       invReleaseSamples = (releaseSamples > 0.0f) ? (1.0f / releaseSamples) : 0.0f;
 
-      // Anchor the per-note clock to the current audio frame and clear any
-      // pending note-off. Publish the release flag with release ordering so the
-      // audio cores see startFrame/params before they see "not released".
-      startFrame = audioFrameCount();
+      // Publish a pending start after all note parameters are ready. The first
+      // evaluator anchors startFrame to its own audio frame, guaranteeing that
+      // the first evaluated attack sample begins at the exact starting level.
       #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
       releaseTriggered.store(false, std::memory_order_relaxed);
-      envState.store(1, std::memory_order_release); // attack
+      envState.store(1, std::memory_order_relaxed); // attack
+      startPendingState.store(1, std::memory_order_release);
       #else
       releaseTriggered = false;
       envState = 1; // attack
+      startPending = true;
       #endif
     }
 
@@ -340,6 +354,19 @@ class Env {
      */
     inline
     uint16_t evaluate() {
+      uint32_t frameNow = audioFrameCount();
+
+      // Begin the note on the first frame that actually evaluates it, rather
+      // than allowing loop/audio scheduling latency to skip the attack onset.
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      anchorPendingStart(frameNow);
+      #else
+      if (startPending) {
+        startFrame = frameNow;
+        startPending = false;
+      }
+      #endif
+
       #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
       int currState = envState.load(std::memory_order_acquire);
       bool released = releaseTriggered.load(std::memory_order_acquire);
@@ -348,7 +375,6 @@ class Env {
       bool released = releaseTriggered;
       #endif
 
-      uint32_t frameNow = audioFrameCount();
       const uint16_t peak = JIT_MAX_ENV_LEVEL;
       uint16_t currVal;
 
@@ -387,11 +413,10 @@ class Env {
           }
 
         if (attackSamples > 0.0f && elapsed < (uint32_t)attackSamples) {
-          // attack: ease-out (fast initial rise, smooth approach to peak),
-          // interpolated from attackStartLevel for click-free retrigger.
+          // Attack interpolated from attackStartLevel for click-free retrigger.
+          // attackCurve blends linear (0) with quadratic ease-out (1).
           float t = elapsed * invAttackSamples;
-          float inv = 1.0f - t;
-          t = 1.0f - inv * inv;
+          t = t + attackCurve * t * (1.0f - t);
           currVal = (uint16_t)(attackStartLevel + (peak - attackStartLevel) * t);
           currState = 1;
         }
@@ -469,6 +494,7 @@ class Env {
     uint16_t releaseStartLevel = 0;
     // Durations in milliseconds (converted to samples in start()).
     float envAttack = 0.0f, envHold = 0.0f, envDecay = 0.0f;
+    float attackCurve = 0.5f;
     float envRelease = 600.0f; // ms
     // Per-note durations in samples (computed in start()).
     float attackSamples = 0.0f, holdSamples = 0.0f, decaySamples = 0.0f, releaseSamples = 0.0f;
@@ -484,11 +510,41 @@ class Env {
     #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
     std::atomic<int> envState{0}; // complete = 0, attack = 1, hold = 2, decay = 3, sustain = 4, release = 5
     std::atomic<bool> releaseTriggered{false}; // asynchronous note-off latch (sustaining envelopes)
+    // 0 = idle/anchored, 1 = pending, 2 = one evaluator is anchoring.
+    std::atomic<uint8_t> startPendingState{0};
     #else
     int envState = 0;
     bool releaseTriggered = false;
+    bool startPending = false;
     #endif
     bool resetOnStart = false; // If true, start a zero-based attack (optionally transitioned)
+
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    inline void anchorPendingStart(uint32_t frameNow) {
+      for (;;) {
+        uint8_t state = startPendingState.load(std::memory_order_acquire);
+        if (state == 0) return;
+        if (state == 2) continue;
+
+        uint8_t expected = 1;
+        if (!startPendingState.compare_exchange_weak(
+                expected, 2, std::memory_order_acquire,
+                std::memory_order_relaxed)) {
+          continue;
+        }
+
+        startFrame = frameNow;
+
+        // A new start() may publish state 1 while this evaluator is anchoring.
+        // In that case the CAS deliberately fails and the loop anchors the new
+        // request as well instead of losing it.
+        expected = 2;
+        startPendingState.compare_exchange_strong(
+            expected, 0, std::memory_order_release,
+            std::memory_order_relaxed);
+      }
+    }
+    #endif
 
 };
 
