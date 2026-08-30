@@ -71,6 +71,11 @@ public:
     coefficientSource = SOURCE_CUTOFF;
   }
 
+  /** Return cutoff as normalized value */
+  inline float getCutoff() const {
+    return normalizedCutoff;
+  }
+
   /** Convert a normalized cutoff to EMA's integer coefficient.
    * Intended for building a lookup table during setup(), not for audio-rate use.
    */
