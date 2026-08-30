@@ -44,7 +44,10 @@ public:
     if (coefficientSource == SOURCE_FREQ && f == clampedFreq) return;
     f = clampedFreq;
     float cutVal = f * 0.0001;
-    alpha_val = max((int32_t)10, (int32_t)((1.0f - pow((1.0f - cutVal), 0.3f)) * 1024));
+    alpha_val.store(
+        (int16_t)max((int32_t)10,
+                     (int32_t)((1.0f - pow((1.0f - cutVal), 0.3f)) * 1024)),
+        std::memory_order_relaxed);
     coefficientSource = SOURCE_FREQ;
   }
 
@@ -61,7 +64,10 @@ public:
     if (coefficientSource == SOURCE_CUTOFF && cutVal == normalizedCutoff) return;
     normalizedCutoff = cutVal;
     f = max(40.0f, cutVal * 10000.0f);
-    alpha_val = max((int32_t)10, (int32_t)((1.0f - pow((1.0f - cutVal), 0.2f)) * (int32_t)1024));
+    alpha_val.store(
+        (int16_t)max((int32_t)10,
+                     (int32_t)((1.0f - pow((1.0f - cutVal), 0.2f)) * 1024.0f)),
+        std::memory_order_relaxed);
     coefficientSource = SOURCE_CUTOFF;
   }
 
@@ -81,13 +87,16 @@ public:
   inline void setCoefficient(int32_t coefficient) {
     int16_t clampedCoefficient = (int16_t)max((int32_t)10,
                                               min((int32_t)1024, coefficient));
-    if (coefficientSource == SOURCE_DIRECT && alpha_val == clampedCoefficient) return;
-    alpha_val = clampedCoefficient;
+    if (coefficientSource == SOURCE_DIRECT &&
+        alpha_val.load(std::memory_order_relaxed) == clampedCoefficient) return;
+    alpha_val.store(clampedCoefficient, std::memory_order_relaxed);
     coefficientSource = SOURCE_DIRECT;
   }
 
   /** @return Active fixed-point coefficient in the range 10-1024. */
-  inline int16_t getCoefficient() const { return alpha_val; }
+  inline int16_t getCoefficient() const {
+    return alpha_val.load(std::memory_order_relaxed);
+  }
 
   /** Calculate next lowpass filter sample
    * @param input Audio sample
@@ -95,7 +104,8 @@ public:
    */
   inline int16_t nextLPF(int32_t input) {
     // One-pole recurrence. alpha_val == 1024 naturally produces bypass.
-    outPrev += ((input - outPrev) * alpha_val) >> 10;
+    int16_t coefficient = alpha_val.load(std::memory_order_relaxed);
+    outPrev += ((input - outPrev) * coefficient) >> 10;
     return outPrev;
   }
 
@@ -112,7 +122,9 @@ public:
    * @return Filtered sample
    */
   inline int16_t nextHPF(int32_t input) {
-    outPrev = (((2048 - alpha_val) * (input - inPrev))>>11) + (((1024 - alpha_val) * outPrev)>>10);
+    int16_t coefficient = alpha_val.load(std::memory_order_relaxed);
+    outPrev = (((2048 - coefficient) * (input - inPrev)) >> 11) +
+              (((1024 - coefficient) * outPrev) >> 10);
     inPrev = input;
     return clip16(outPrev);
   }
@@ -129,13 +141,13 @@ private:
     SOURCE_DIRECT
   };
 
-  // Like other stateful filters, one EMA instance must be processed by one
-  // audio stream/core at a time; volatile would not make shared state safe.
+  // Filter history belongs to one audio stream/core. The coefficient is atomic
+  // so control code on another core may safely call the coefficient setters.
   int32_t outPrev = 0;
   int32_t inPrev = 0;
   float f = 10000.0f;
   float normalizedCutoff = 1.0f;
-  int16_t alpha_val = 1024;
+  std::atomic<int16_t> alpha_val{1024};
   uint8_t coefficientSource = SOURCE_DEFAULT;
 };
 
