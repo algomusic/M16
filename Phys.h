@@ -97,6 +97,10 @@ class Phys {
       pluckDampFilter.setCutoff(pluckDampCutoff);
     }
 
+    float getPluckDampCutoff() {
+      return pluckDampFilter.getCutoff();
+    }
+
     /** Set the waveguide damping filter cutoff.
     *  @cutoff Normalised value 0.0-1.0. 0.0 = bypass (no filtering).
     *  Higher values apply more low-pass filtering in the feedback loop,
@@ -106,6 +110,72 @@ class Phys {
       wgDampCutoff = cutoff < 0.0f ? 0.0f : (cutoff > 1.0f ? 1.0f : cutoff);
       wgDampFilterR.setCutoff(wgDampCutoff);
       wgDampFilterL.setCutoff(wgDampCutoff);
+    }
+
+    /** Set the frequency used by the two-argument pluck() overload.
+    *  Safe to call from control code while audio is running.
+    *  @param frequency Fundamental frequency in Hz. Values must be positive.
+    */
+    inline void setPluckFreq(float frequency) {
+      if (frequency <= 0.0f) return;
+      #if IS_ESP32() || IS_RP2040()
+      storedPluckFreq.store(frequency, std::memory_order_relaxed);
+      #else
+      storedPluckFreq = frequency;
+      #endif
+    }
+
+    /** Return the frequency used by the two-argument pluck() overload. */
+    inline float getPluckFreq() const {
+      #if IS_ESP32() || IS_RP2040()
+      return storedPluckFreq.load(std::memory_order_relaxed);
+      #else
+      return storedPluckFreq;
+      #endif
+    }
+
+    /** Request a clean Karplus-Strong delay state.
+    *  Safe to call from control code while audio is running. The audio owner
+    *  clears 64 entries per call and returns silence until the reset completes,
+    *  avoiding both concurrent access and a one-sample buffer-clear spike.
+    */
+    inline void resetPluck() {
+      #if IS_ESP32() || IS_RP2040()
+      pluckResetRequested.store(true, std::memory_order_release);
+      #else
+      pluckResetRequested = true;
+      #endif
+    }
+
+    /** Set the feedback deadband used to terminate inaudible integer tails.
+    *  Values at or below the threshold are written to the delay as zero.
+    *  Default 4; set to 0 to disable the deadband.
+    */
+    inline void setPluckSilenceThreshold(int threshold) {
+      if (threshold < 0) threshold = 0;
+      else if (threshold > MAX_16) threshold = MAX_16;
+      #if IS_ESP32() || IS_RP2040()
+      pluckSilenceThreshold.store((int16_t)threshold, std::memory_order_relaxed);
+      #else
+      pluckSilenceThreshold = (int16_t)threshold;
+      #endif
+    }
+
+    /** Return the current pluck feedback silence threshold. */
+    inline int getPluckSilenceThreshold() const {
+      #if IS_ESP32() || IS_RP2040()
+      return pluckSilenceThreshold.load(std::memory_order_relaxed);
+      #else
+      return pluckSilenceThreshold;
+      #endif
+    }
+
+    /** Karplus-Strong synthesis using the frequency set by setPluckFreq().
+    *  @param audioIn Excitation signal
+    *  @param depth Feedback level 0.0-1.0
+    */
+    inline int16_t pluck(int16_t audioIn, float depth) {
+      return pluck(audioIn, getPluckFreq(), depth);
     }
 
     /** Karplus-Strong plucked string synthesis
@@ -118,6 +188,18 @@ class Phys {
     int16_t pluck(int16_t audioIn, float pluckFreq, float depth) {
       if (!pluckBufferEstablished) initPluckBuffer();
     M16_ATOMIC_GUARD(_physLock, {
+      #if IS_ESP32() || IS_RP2040()
+      if (pluckResetRequested.exchange(false, std::memory_order_acq_rel)) {
+        beginPluckReset();
+      }
+      #else
+      if (pluckResetRequested) {
+        pluckResetRequested = false;
+        beginPluckReset();
+      }
+      #endif
+      if (pluckResetActive) clearPluckResetChunk();
+      if (!pluckResetActive) {
       // Pitch and decay normally remain fixed for many thousands of samples.
       // Cache their expensive float conversions instead of repeating a divide
       // and float feedback multiply at audio rate.
@@ -149,7 +231,11 @@ class Phys {
 
       // Linear interpolation for fractional delay
       int32_t out = pluckBuffer[readPos0] + (int32_t)((pluckBuffer[readPos1] - pluckBuffer[readPos0]) * frac);
-      int32_t avg = (out + prevPluckOutput) >> 1;
+      // Truncate symmetrically toward zero. Arithmetic right shift alone rounds
+      // negative odd values downward and can create a permanent negative tail.
+      int32_t averageSum = out + prevPluckOutput;
+      int32_t avg = averageSum >= 0
+          ? (averageSum >> 1) : -((-averageSum) >> 1);
       prevPluckOutput = out;
 
       // Inject excitation at pluckPosition along the delay line
@@ -166,9 +252,21 @@ class Phys {
       }
 
       // Write damped feedback at write position
-      int32_t feedback = ((int64_t)avg * cachedPluckDepthQ15) >> 15;
+      int64_t feedbackProduct = (int64_t)avg * cachedPluckDepthQ15;
+      int32_t feedback = feedbackProduct >= 0
+          ? (int32_t)(feedbackProduct >> 15)
+          : -(int32_t)((-feedbackProduct) >> 15);
       if (pluckDampCutoff > 0.0f) {
         feedback = pluckDampFilter.next(feedback);
+      }
+      #if IS_ESP32() || IS_RP2040()
+      int32_t silenceThreshold =
+          pluckSilenceThreshold.load(std::memory_order_relaxed);
+      #else
+      int32_t silenceThreshold = pluckSilenceThreshold;
+      #endif
+      if (feedback >= -silenceThreshold && feedback <= silenceThreshold) {
+        feedback = 0;
       }
       pluckBuffer[wPos] = clip16(feedback);
 
@@ -177,6 +275,7 @@ class Phys {
       float dry = (1.0f - pluckStiffMix) * out;
       float wet = pluckStiffMix * pluckAllpass.next(out);
       pluckCached = clip16(dry + wet);
+      }
       });
       return pluckCached;
     }
@@ -310,6 +409,18 @@ class Phys {
     float cachedPluckDelayLen = 2.0f;
     float cachedPluckDepth = -1.0f;
     int32_t cachedPluckDepthQ15 = 0;
+    static constexpr int16_t PLUCK_RESET_CHUNK_SIZE = 64;
+    int16_t pluckResetIndex = PLUCK_BUFFER_SIZE;
+    bool pluckResetActive = false;
+    #if IS_ESP32() || IS_RP2040()
+    std::atomic<float> storedPluckFreq{440.0f};
+    std::atomic<bool> pluckResetRequested{false};
+    std::atomic<int16_t> pluckSilenceThreshold{4};
+    #else
+    float storedPluckFreq = 440.0f;
+    bool pluckResetRequested = false;
+    int16_t pluckSilenceThreshold = 4;
+    #endif
 
     // Waveguide state
     const static int16_t WG_BUFFER_SIZE = 1500;
@@ -332,6 +443,23 @@ class Phys {
         pluckBuffer[i] = 0;
       }
       pluckBufferEstablished = true;
+    }
+
+    void beginPluckReset() {
+      pluckResetIndex = 0;
+      pluckResetActive = true;
+      pluck_buffer_write_index = 0.0f;
+      prevPluckOutput = 0;
+      pluckCached = 0;
+      pluckDampFilter.reset();
+    }
+
+    void clearPluckResetChunk() {
+      int end = pluckResetIndex + PLUCK_RESET_CHUNK_SIZE;
+      if (end > PLUCK_BUFFER_SIZE) end = PLUCK_BUFFER_SIZE;
+      for (int i = pluckResetIndex; i < end; i++) pluckBuffer[i] = 0;
+      pluckResetIndex = end;
+      if (pluckResetIndex >= PLUCK_BUFFER_SIZE) pluckResetActive = false;
     }
 
     void initWgBuffers() {
