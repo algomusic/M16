@@ -18,18 +18,17 @@ class EMA {
 
 public:
   /** Default constructor */
-  EMA() {}
+  EMA() = default;
 
   /** Constructor with initial alpha
-   * @param newAlpha Filter coefficient 0.0-1.0
+   * @param newAlpha EMA coefficient 0.0-1.0: low values smooth more, 1.0 is bypass
    */
-  EMA(float newAlpha) {
-    newAlpha = max((int32_t)0, min((int32_t)1024, (int32_t)(newAlpha * 1024)));
-    alpha_val = max(10.0f, (1024.0f - newAlpha));
+  explicit EMA(float newAlpha) {
+    setCoefficient((int32_t)(clamp01(newAlpha) * 1024.0f));
   }
 
   /** Set resonance - no-op for compatibility with other M16 filters */
-  inline void setRes(float resonance) {}
+  inline void setRes(float resonance) { (void)resonance; }
 
   /** Reset filter state to zero - useful for consistent attack transients */
   inline void reset() {
@@ -41,13 +40,16 @@ public:
    * @param freqVal Frequency 40-10000 Hz
    */
   inline void setFreq(int32_t freq_val) {
-    f = max((int32_t)40, min((int32_t)10000, freq_val));
+    int32_t clampedFreq = max((int32_t)40, min((int32_t)10000, freq_val));
+    if (coefficientSource == SOURCE_FREQ && f == clampedFreq) return;
+    f = clampedFreq;
     float cutVal = f * 0.0001;
     alpha_val = max((int32_t)10, (int32_t)((1.0f - pow((1.0f - cutVal), 0.3f)) * 1024));
+    coefficientSource = SOURCE_FREQ;
   }
 
   /** @return Current cutoff frequency in Hz */
-  inline float getFreq() {
+  inline float getFreq() const {
     return f;
   }
 
@@ -55,16 +57,19 @@ public:
    * @param cutoffVal 0.0-1.0 maps to approx 40-10000 Hz
    */
   inline void setCutoff(float cutoff_val) {
-    f = max(40.0f, min(10000.0f, cutoff_val * 10000));
-    float cutVal = max(0.0f, min(1.0f, cutoff_val));
+    float cutVal = clamp01(cutoff_val);
+    if (coefficientSource == SOURCE_CUTOFF && cutVal == normalizedCutoff) return;
+    normalizedCutoff = cutVal;
+    f = max(40.0f, cutVal * 10000.0f);
     alpha_val = max((int32_t)10, (int32_t)((1.0f - pow((1.0f - cutVal), 0.2f)) * (int32_t)1024));
+    coefficientSource = SOURCE_CUTOFF;
   }
 
   /** Convert a normalized cutoff to EMA's integer coefficient.
    * Intended for building a lookup table during setup(), not for audio-rate use.
    */
   static inline int16_t coefficientForCutoff(float cutoff_val) {
-    float cutVal = max(0.0f, min(1.0f, cutoff_val));
+    float cutVal = clamp01(cutoff_val);
     return (int16_t)max((int32_t)10,
         min((int32_t)1024,
             (int32_t)((1.0f - pow((1.0f - cutVal), 0.2f)) * 1024.0f)));
@@ -74,20 +79,23 @@ public:
    * @param coefficient 10-1024, normally from coefficientForCutoff()
    */
   inline void setCoefficient(int32_t coefficient) {
-    alpha_val = (int16_t)max((int32_t)10,
-                            min((int32_t)1024, coefficient));
+    int16_t clampedCoefficient = (int16_t)max((int32_t)10,
+                                              min((int32_t)1024, coefficient));
+    if (coefficientSource == SOURCE_DIRECT && alpha_val == clampedCoefficient) return;
+    alpha_val = clampedCoefficient;
+    coefficientSource = SOURCE_DIRECT;
   }
+
+  /** @return Active fixed-point coefficient in the range 10-1024. */
+  inline int16_t getCoefficient() const { return alpha_val; }
 
   /** Calculate next lowpass filter sample
    * @param input Audio sample
    * @return Filtered sample
    */
   inline int16_t nextLPF(int32_t input) {
-    if (f <= 10000) {
-      outPrev = ((input * alpha_val)>>10) + ((outPrev * (1024 - alpha_val))>>10);
-    } else {
-      outPrev = input;
-    }
+    // One-pole recurrence. alpha_val == 1024 naturally produces bypass.
+    outPrev += ((input - outPrev) * alpha_val) >> 10;
     return outPrev;
   }
 
@@ -110,11 +118,25 @@ public:
   }
 
 private:
-  // volatile: ensure cross-core visibility on dual-core ESP32 (no CPU overhead)
-  volatile int32_t outPrev = 0;
-  volatile int32_t inPrev = 0;
-  volatile float f = 10000;
+  static inline float clamp01(float value) {
+    return max(0.0f, min(1.0f, value));
+  }
+
+  enum : uint8_t {
+    SOURCE_DEFAULT,
+    SOURCE_FREQ,
+    SOURCE_CUTOFF,
+    SOURCE_DIRECT
+  };
+
+  // Like other stateful filters, one EMA instance must be processed by one
+  // audio stream/core at a time; volatile would not make shared state safe.
+  int32_t outPrev = 0;
+  int32_t inPrev = 0;
+  float f = 10000.0f;
+  float normalizedCutoff = 1.0f;
   int16_t alpha_val = 1024;
+  uint8_t coefficientSource = SOURCE_DEFAULT;
 };
 
 #endif /* EMA_H_ */
