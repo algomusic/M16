@@ -2,9 +2,10 @@
 #include "M16.h" 
 #include "Osc.h"
 #include "FX.h"
+#include "Gain.h"
 
 Osc osc, lfo;
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000);
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 unsigned long lfoTime = msNow;
@@ -53,10 +54,10 @@ void loop() {
 void audioUpdate() {
   // mono version
   // int32_t oscVal = osc.next();
-  // int32_t leftVal = (effects.chorus(oscVal) * vol)>>10;
+  // int32_t leftVal = outputGain.next(effects.chorus(oscVal));
   // int32_t rightVal = leftVal;
   // stereo version
-  int32_t oscVal = (osc.next() * vol)>>10;
+  int32_t oscVal = outputGain.next(osc.next());
   int32_t leftVal, rightVal;
   effects.chorusStereo(oscVal, oscVal, leftVal, rightVal);
   //

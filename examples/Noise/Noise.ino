@@ -2,13 +2,14 @@
 #include "M16.h"
 #include "Osc.h"
 #include "Env.h"
+#include "Gain.h"
 
 Osc whiteOsc, pinkOsc, brownOsc, crackleOsc;
 Env ampEnvW, ampEnvP, ampEnvB, ampEnvC; // envelopes
 
 // handle control rate updates for envelope and notes
 unsigned long msNow, stepTime, envTime = millis();
-int vol = 1000; // 0 - 1023, 10 bit // keep to max 50% for MAX98357 which sums both channels to mono.
+Gain outputGain(1000); // reduce if a mono DAC sums the stereo channels
 byte color = 0;
 int envDelta = 4;
 int stepDelta = 2000;
@@ -73,7 +74,7 @@ void audioUpdate() {
   int32_t pinkVal = (pinkOsc.next() * ampEnvP.getValue())>>16;
   int32_t brownVal = (brownOsc.next() * ampEnvB.getValue())>>16;
   int32_t crackleVal = (crackleOsc.next() * ampEnvC.getValue())>>16;
-  int32_t leftVal = ((whiteVal + pinkVal + brownVal + crackleVal) * vol)>>10; // master volume
+  int32_t leftVal = outputGain.next(whiteVal + pinkVal + brownVal + crackleVal);
   int32_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

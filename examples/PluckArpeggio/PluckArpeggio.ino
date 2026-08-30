@@ -5,6 +5,7 @@
 #include "Arp.h"
 #include "SVF.h"
 #include "Phys.h"
+#include "Gain.h"
 
 Osc aOsc1;
 Env ampEnv1;
@@ -12,10 +13,10 @@ Arp arp1;
 SVF exciterFilter;
 SVF dampeningFilter;
 Phys phys1;
+Gain outputGain(1000);
 int bpm = 120;
 int stepDelta = 1000;
 unsigned long msNow, stepTime;
-int16_t vol = 1000; // 0 - 1024, 10 bit
 float feedback = 0.9;
 
 void setup() {
@@ -51,7 +52,7 @@ void loop() {
     Serial.println(pitch);
     aOsc1.setPitch(pitch);
     feedback = floatMap(pitch, 48, 88, 0.96, 0.995);
-    vol = 600 + rand(400);
+    outputGain.setLevel(600 + rand(400));
     dampeningFilter.setFreq(rand(3000) + 1000);
     ampEnv1.start();
   }
@@ -63,8 +64,8 @@ void loop() {
 * Read the envelope per audio sample with getValue() for a smooth pluck excitation.
 */
 void audioUpdate() {
-  int32_t leftVal = (dampeningFilter.nextLPF(phys1.pluck((exciterFilter.nextLPF(aOsc1.next()) * ampEnv1.getValue()) >> 16, aOsc1.getFreq(), feedback)) * vol)>>10;
-  // int32_t leftVal = (dampeningFilter.nextLPF(phys1.waveguide((exciterFilter.nextLPF(aOsc1.next()) * ampEnv1.getValue()) >> 16, aOsc1.getFreq(), feedback)) * vol)>>10;
+  int32_t leftVal = outputGain.next(dampeningFilter.nextLPF(phys1.pluck((exciterFilter.nextLPF(aOsc1.next()) * ampEnv1.getValue()) >> 16, aOsc1.getFreq(), feedback)));
+  // int32_t leftVal = outputGain.next(dampeningFilter.nextLPF(phys1.waveguide((exciterFilter.nextLPF(aOsc1.next()) * ampEnv1.getValue()) >> 16, aOsc1.getFreq(), feedback)));
   int32_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

@@ -3,11 +3,12 @@
 // the pitch of a triangle wave oscillator.
 #include "M16.h"
 #include "Osc.h"
+#include "Gain.h"
 
 Osc triOsc; // audio oscillator
 Osc shOsc; // sample and hold modulator
 
-int vol = 800; // 0 - 1024, 10 bit
+Gain outputGain(800);
 int basePitch = 48; // base MIDI pitch
 int pitchRange = 24; // semitone range of S&H modulation
 float shRate = 4.0; // S&H rate in Hz - frequency
@@ -41,6 +42,6 @@ void loop() {
 
 void audioUpdate() {
   shOsc.next(); // advance S&H phase
-  int32_t sample = (triOsc.next() * vol) >> 10;
+  int32_t sample = outputGain.next(triOsc.next());
   audioBlockWrite(sample, sample);
 }

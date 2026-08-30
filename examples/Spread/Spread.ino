@@ -5,10 +5,11 @@
 #include "M16.h" 
 #include "Osc.h"
 #include "SVF.h"
+#include "Gain.h"
 
 Osc aOsc1;
 SVF filter;
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000);
 unsigned long msNow, pitchTime;
 // int noteCnt = 0;
 int pitchDelta = 1000;
@@ -49,7 +50,7 @@ void loop() {
 * Always finish with audioBlockWrite()
 */
 void audioUpdate() {
-  int32_t leftVal = (filter.nextLPF(aOsc1.next()) * vol)>>10;
+  int32_t leftVal = outputGain.next(filter.nextLPF(aOsc1.next()));
   int32_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

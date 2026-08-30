@@ -17,6 +17,7 @@
 #include "Env.h"
 #include "SVF.h"
 #include "Del.h"
+#include "Gain.h"
 
 WaveTable sineWave;
 WaveTable sawtoothWave;
@@ -24,6 +25,7 @@ Osc osc1;
 Env ampEnv1;
 SVF filter1;
 Del delay1(500); // max delay time in ms
+Gain outputGain;
 unsigned long msNow = millis();
 unsigned long envTime = msNow;
 unsigned long glideTime = msNow;
@@ -38,7 +40,6 @@ float windowSize = 0;
 float nextFreq = 440;
 int outPitch = 60;
 int pitchClass [] = {0, 2, 4, 5, 7, 9, 11};
-int volume = 127; // 0 - 127
 bool notePlaying = false;
 
 #include <Adafruit_TinyUSB.h>
@@ -63,7 +64,7 @@ void handleNoteOff(byte channel, byte pitch, byte velocity) {
 }
 
 void handleCC(byte channel, byte controller, byte value) {
-  volume = value;
+  outputGain.setLevel((value * 1024) / 127);
 }
 
 
@@ -138,7 +139,7 @@ void audioUpdate() {
   // nextWTrans args: second wave, amount of second wave, duel window?, invert second wave?
   int32_t leftVal = (filter1.nextLPF(osc1.nextWTrans(sawtoothWave, windowSize, false, false)) * ampEnv1.getValue()) >> 16;
   leftVal = (leftVal + delay1.next(leftVal)) >> 1;
-  leftVal = (leftVal * volume) >> 7;
+  leftVal = outputGain.next(leftVal);
   int32_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

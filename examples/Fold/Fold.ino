@@ -2,10 +2,11 @@
 #include "M16.h" 
 #include "Osc.h"
 #include "FX.h"
+#include "Gain.h"
 
 Osc osc1;
 FX effects1;
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000);
 float foldAmnt = 0.0;
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
@@ -46,7 +47,7 @@ void loop() {
 * Always finish with audioBlockWrite()
 */
 void audioUpdate() {
-  int16_t leftVal = (effects1.waveFold(osc1.next(), foldAmnt) * vol)>>10;
+  int16_t leftVal = outputGain.next(effects1.waveFold(osc1.next(), foldAmnt));
   int16_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

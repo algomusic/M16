@@ -17,7 +17,6 @@ int32_t currEnvValue = 0;
 unsigned long msNow = millis();
 unsigned long stepTime = msNow;
 unsigned long envTime = msNow;
-int16_t vol = 1000; // 0 - 1024, 10 bit
 float feedback = 0.9;
 float pitch = 48;
 int stepDelta = 500;
@@ -46,7 +45,6 @@ void loop() {
     pitch = clip(pitch + gaussRandNumb(24, 2) - 12, 36, 68); 
     Serial.println(pitch);
     aOsc.setPitch(pitch);
-    vol = 200 + rand(800);
     aOsc.setPhase(0);
     distLevel = rand(10) + 1;
     Serial.println(distLevel);

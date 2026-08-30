@@ -6,11 +6,12 @@
 #include "M16.h" 
 #include "Osc.h"
 #include "Env.h"
+#include "Gain.h"
 
 WaveTable wavetable; // one wavetable shared by both oscillators
 Osc aOsc1, modOsc;
 Env modEnv;
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000);
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 float modIndex = 0.5;
@@ -66,7 +67,7 @@ void loop() {
 */
 void audioUpdate() {
   float modVal = modIndex * modEnv.getValue() * MAX_16_INV;
-  int32_t leftVal = (aOsc1.phMod(modOsc, modVal) * vol)>>10; // no filtering
+  int32_t leftVal = outputGain.next(aOsc1.phMod(modOsc, modVal)); // no filtering
   int32_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

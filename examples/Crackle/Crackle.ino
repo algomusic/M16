@@ -1,10 +1,11 @@
 // M16 Noise Crackle example
 // Crackle charracter is randomly varied every 5 seconds
-#include "M16.h" 
+#include "M16.h"
 #include "Osc.h"
+#include "Gain.h"
 
 Osc aOsc1;
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000);
 unsigned long msNow = millis();
 unsigned long changeTime = msNow;
 int changeDelta = 5000;
@@ -34,7 +35,7 @@ void loop() {
 * Always finish with audioBlockWrite()
 */
 void audioUpdate() {
-  int32_t leftVal = (aOsc1.next() * vol)>>10;
+  int32_t leftVal = outputGain.next(aOsc1.next());
   int32_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

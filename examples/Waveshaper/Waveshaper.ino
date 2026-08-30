@@ -3,10 +3,11 @@
 #include "M16.h" 
 #include "Osc.h"
 #include "FX.h"
+#include "Gain.h"
 
 Osc aOsc1, lfo1;
 FX effect1;
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000);
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 unsigned long mixTime = msNow;
@@ -64,7 +65,7 @@ void loop() {
 * Always finish with audioBlockWrite()
 */
 void audioUpdate() {
-  int32_t leftVal = (effect1.waveShaper(aOsc1.next(), shapeMixVal) * vol)>>10;
+  int32_t leftVal = outputGain.next(effect1.waveShaper(aOsc1.next(), shapeMixVal));
   int32_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

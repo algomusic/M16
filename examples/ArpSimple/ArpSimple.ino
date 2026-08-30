@@ -2,9 +2,10 @@
 #include "M16.h" 
 #include "Osc.h"
 #include "Arp.h"
+#include "Gain.h"
 
 Osc osc1;
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000);
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 int noteDelta = 250;
@@ -41,7 +42,7 @@ void loop() {
 * Always finish with audioBlockWrite()
 */
 void audioUpdate() {
-  int16_t leftVal = (osc1.next() * vol)>>10;
+  int16_t leftVal = outputGain.next(osc1.next());
   int16_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

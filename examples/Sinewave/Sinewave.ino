@@ -1,12 +1,13 @@
 // M16 Sinewave example
 #include "M16.h" 
 #include "Osc.h"
+#include "Gain.h"
 
 Osc aOsc1; // declare an instance of the oscillator class
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000); // 0 = silent, 1024 = full level
 unsigned long msNow = millis(); // current time since starting in milliseconds
 unsigned long pitchTime = msNow; // time for the next pitch update
-int pitchDelta = 1000; // time between pitch updates
+unsigned long pitchDelta = 1000; // time between pitch updates
 
 void setup() {
   Serial.begin(115200);
@@ -21,7 +22,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if ((unsigned long)(msNow - pitchTime) >= (unsigned long)pitchDelta) {
     pitchTime += pitchDelta;
     int pitch = random(48) + 36;
     Serial.println(pitch);
@@ -34,7 +35,7 @@ void loop() {
 * Always finish with audioBlockWrite()
 */
 void audioUpdate() {
-  int32_t leftVal = (aOsc1.next() * vol)>>10;
+  int32_t leftVal = outputGain.next(aOsc1.next());
   int32_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

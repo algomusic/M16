@@ -1,11 +1,12 @@
 // M16 Panning example
-#include "M16.h" 
+#include "M16.h"
 #include "Osc.h"
 #include "Env.h"
+#include "Gain.h"
 
 Osc osc1;
 Env ampEnv1;
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000);
 float panPos = 0.5;
 int16_t panLevelL = panLeft(panPos) * 1024; // 0 - 1024
 int16_t panLevelR = panRight(panPos) * 1024;
@@ -58,7 +59,7 @@ void loop() {
 * Always finish with audioBlockWrite()
 */
 void audioUpdate() {
-  int16_t leftVal = (((osc1.next() * ampEnv1.getValue())>>16) * vol)>>10;
+  int16_t leftVal = outputGain.next((osc1.next() * ampEnv1.getValue()) >> 16);
   int16_t rightVal = leftVal;
   leftVal = (leftVal * panLevelL)>>10;
   rightVal = (rightVal * panLevelR)>>10;
