@@ -290,7 +290,6 @@ class FX {
       float sample = sample_in * MAX_16_INV * amount;
       float absSampIn = abs(sample);
       float clippedSampIn = (sample > 0) ? 1.0f : -1.0f;
-      float clippedSampIn16 = (sample_in > 0) ? MAX_16 : MIN_16;
       float clipOut = 0;
       float thresh = 0.33; //10922; //MAX_16 * 0.33;
       
