@@ -10,7 +10,7 @@ unsigned long msNow = millis();
 unsigned long onTime = msNow;
 unsigned long offTime = msNow;
 unsigned long tempoTime = msNow;
-int onDelta = 1000; // time between note on messages
+unsigned long onDelta = 1000; // time between note on messages
 bool sounding = false;
 uint8_t midiPitch = 0;
 uint8_t chan = 0;
@@ -100,7 +100,7 @@ void loop() {
   }
 
   // Send MIDI channel messages
-  if ((unsigned long)(msNow - onTime) >= onDelta) {
+  if (msNow - onTime >= onDelta) {
       onTime += onDelta;
     offTime = msNow + 250;
     midiPitch = rand(60) + 30;
@@ -130,9 +130,17 @@ void loop() {
   // MIDI clock send is handled by the clock task via setClockSendBpm()
   // Call midi.setClockSendBpm(bpm) at any time to change tempo
   //  tempo change 
-  if ((unsigned long)(msNow - tempoTime) >= 5000) {
+  if (msNow - tempoTime >= 5000) {
       tempoTime += 5000;
+      #if IS_ESP32()
       midi.setClockSendBpm(random(100) + 60);
+      #endif
       Serial.println("Tempo is " + String(midi.getBpm()));
   }
 }
+
+#if IS_TEENSY4()
+// The Teensy AudioStream backend links an audio callback whenever M16.h is
+// included. This MIDI-only test does not start audio, so provide an inert one.
+void audioUpdate() {}
+#endif

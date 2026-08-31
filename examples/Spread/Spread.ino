@@ -12,14 +12,14 @@ SVF filter;
 Gain outputGain(1000);
 unsigned long msNow, pitchTime;
 // int noteCnt = 0;
-int pitchDelta = 1000;
+unsigned long pitchDelta = 1000;
 
 void setup() {
   Serial.begin(115200);
   aOsc1.sawGen(); // fill the internal osc wavetable
   aOsc1.setPitch(69);
   filter.setFreq(5000);
-  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
 }
@@ -27,7 +27,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
     pitchTime += pitchDelta;
     if (random(2) == 0) {
       float detSpread = random(1000) * 0.00001;

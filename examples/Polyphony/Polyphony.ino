@@ -6,7 +6,7 @@
 #include "FX.h"
 
 WaveTable wavetable; // one wavetable shared by every voice
-const int poly = 16; // change polyphony as desired, each MCU type will handle particular amounts
+const int poly = 4; // change polyphony as desired, each MCU type will handle particular amounts
 Osc osc[poly]; // an array of oscillators
 Env env[poly];
 SVF filter[poly];
@@ -15,8 +15,8 @@ FX effect1;
 unsigned long msNow = millis();
 unsigned long noteTime = msNow;
 unsigned long envTime = msNow;
-int noteDelta = 250;
-int envDelta = 4;
+const unsigned long noteDelta = 250;
+const unsigned long envDelta = 4;
 int scale [] = {0, 2, 4, 0, 7, 9, 0, 0, 0, 0, 0};
 
 #if IS_CAPABLE()
@@ -69,7 +69,7 @@ void loop() {
 
   msNow = millis();
 
-  if ((unsigned long)(msNow - noteTime) >= noteDelta) {
+  if (msNow - noteTime >= noteDelta) {
       noteTime += noteDelta;
     for (int i=0; i<poly; i++){
       if (random(10) < 5) {
@@ -81,7 +81,7 @@ void loop() {
     }
   }
 
-  if ((unsigned long)(msNow - envTime) >= envDelta) {
+  if (msNow - envTime >= envDelta) {
       envTime += envDelta;
     for (int i=0; i<poly; i++) {
       env[i].next();

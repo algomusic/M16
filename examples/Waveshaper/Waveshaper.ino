@@ -11,8 +11,8 @@ Gain outputGain(1000);
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 unsigned long mixTime = msNow;
-int pitchDelta = 2000;
-int mixDelta = 32;
+unsigned long pitchDelta = 2000;
+unsigned long mixDelta = 32;
 
 int16_t waveShapeTable [TABLE_SIZE]; // empty wave shaping table
 float stepInc = (MAX_16 * 2.0 - 1) / TABLE_SIZE;
@@ -44,7 +44,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
     pitchTime += pitchDelta; 
     int pitch = 36 + random(24);
     Serial.println(pitch);
@@ -53,7 +53,7 @@ void loop() {
   }
 
   #if IS_ESP32() || IS_RP2040() // 8266 can't manage waveshaping morphing
-    if ((unsigned long)(msNow - mixTime) >= mixDelta) {
+    if (msNow - mixTime >= mixDelta) {
       mixTime += mixDelta;
       shapeMixVal = lfo1.atTimeNormal(msNow);
     }

@@ -7,7 +7,7 @@ Comb comb(100, 0.5, 1, 0.5); // delay, input, feedforward, feedback
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 int16_t impulse = 0;
-int pitchDelta = 1000;
+unsigned long pitchDelta = 1000;
 
 void setup() {
   Serial.begin(115200);
@@ -20,7 +20,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
       pitchTime += pitchDelta;
     impulse = MAX_16;
   }

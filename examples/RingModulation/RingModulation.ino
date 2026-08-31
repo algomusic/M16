@@ -6,13 +6,13 @@ Osc osc1, osc2;
 unsigned long msNow = millis();
 unsigned long modTime = msNow;
 float freqRatio = 0;
-int modDelta = 10;
+unsigned long modDelta = 10;
 
 void setup() {
   Serial.begin(115200);
   osc1.sqrGen(); // fill osc wavtetable
   osc2.triGen(); // fill
-  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
 }
@@ -20,7 +20,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - modTime) >= modDelta) {
+  if (msNow - modTime >= modDelta) {
     modTime += modDelta;
     float freq1 = mtof(60);
     osc1.setFreq(freq1);

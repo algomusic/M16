@@ -7,7 +7,7 @@ Osc osc1;
 Env ampEnv;
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
-int pitchDelta = 1000;
+unsigned long pitchDelta = 1000;
 int8_t pitchClass [] = {0,2,4,7,9}; // major pentatonic
 
 void setup() {
@@ -26,7 +26,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
     pitchTime += pitchDelta;
     int pitch = pitchQuantize(random(24) + 58, pitchClass, 0);
     Serial.println(pitch);

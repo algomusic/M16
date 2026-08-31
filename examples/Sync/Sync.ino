@@ -16,8 +16,8 @@ Sync audioSync(15, 33); // in and out GPIO pins
 Osc aOsc1;
 Env ampEnv;
 unsigned long pitchTime = millis();
-int readPulseDelta = 2;
-int writePulseDelta = 2;
+unsigned long readPulseDelta = 2;
+unsigned long writePulseDelta = 2;
 
 int prevVal = 0;
 unsigned long msNow, readPulseTime, writePulseTime;
@@ -44,7 +44,7 @@ void loop() {
   msNow = millis();
 
   // read sync
-  if ((unsigned long)(msNow - readPulseTime) >= readPulseDelta) {
+  if (msNow - readPulseTime >= readPulseDelta) {
     // Sync pulse is about 4ms, so delta between reads should no longer than that 
     readPulseTime += readPulseDelta;
     if(audioSync.receivePulse(msNow)){
@@ -58,7 +58,7 @@ void loop() {
   }
 
   // write sync
-  if ((unsigned long)(msNow - writePulseTime) >= writePulseDelta) {
+  if (msNow - writePulseTime >= writePulseDelta) {
       writePulseTime += writePulseDelta;
     if (audioSync.pulseOnTime(msNow)) {
       audioSync.startPulse();

@@ -6,15 +6,15 @@
 Osc aOsc1;
 Env ampEnv;
 unsigned long msNow, changeTime, envTime;
-int changeDelta = 1000;
-int envDelta = 4;
+unsigned long changeDelta = 1000;
+unsigned long envDelta = 4;
 
 void setup() {
   Serial.begin(115200);
   aOsc1.noiseGen(1); // fill the wavetable with a specified grain size
   aOsc1.setNoise(true);
   ampEnv.setRelease(1000);
-  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
 }
@@ -22,7 +22,7 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if ((unsigned long)(msNow - changeTime) >= changeDelta) {
+  if (msNow - changeTime >= changeDelta) {
     changeTime += changeDelta;
     int grain = random(1000)+1;
     aOsc1.noiseGen(grain);
@@ -30,7 +30,7 @@ void loop() {
     ampEnv.start();
   }
 
-  if ((unsigned long)(msNow - envTime) >= envDelta) {
+  if (msNow - envTime >= envDelta) {
     envTime += envDelta; 
     ampEnv.next();
   }

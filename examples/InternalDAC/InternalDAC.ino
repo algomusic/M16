@@ -7,19 +7,24 @@
 
 #include "M16.h"
 #include "Osc.h"
+#include "Gain.h"
 
 Osc aOsc1;
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000);
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
-int pitchDelta = 1000;
+unsigned long pitchDelta = 1000;
 
 void setup() {
   Serial.begin(115200);
   delay(200);
   aOsc1.sinGen();
   aOsc1.setPitch(69);
-  useInternalDAC(); // enable internal DAC output, call before audioStart()
+  #if IS_ESP32()
+    useInternalDAC(); // classic ESP32 internal DAC; unsupported chips fall back safely
+  #else
+    Serial.println("Internal DAC is unavailable; using the platform I2S output");
+  #endif
   audioStart();
 }
 
@@ -27,7 +32,7 @@ void loop() {
   // audioLoop(); // required for internal DAC mode
   msNow = millis();
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
     pitchTime += pitchDelta;
     int pitch = random(48) + 36;
     Serial.println(pitch);
@@ -36,7 +41,7 @@ void loop() {
 }
 
 void audioUpdate() {
-  int32_t leftVal = (aOsc1.next() * vol) >> 10;
+  int32_t leftVal = outputGain.next(aOsc1.next());
   int32_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

@@ -22,7 +22,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - pitchTime) >= (unsigned long)pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
     pitchTime += pitchDelta;
     int pitch = random(48) + 36;
     Serial.println(pitch);

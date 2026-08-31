@@ -11,7 +11,7 @@ Osc lfo;
 unsigned long msNow, windowTime;
 float windowSize = 0;
 bool expanding = true;
-int windowDelta = 10;
+unsigned long windowDelta = 10;
 
 void setup() {
   Serial.begin(115200);
@@ -32,7 +32,7 @@ void setup() {
 void loop() { 
   msNow = millis();
 
-  if ((unsigned long)(msNow - windowTime) >= windowDelta) {
+  if (msNow - windowTime >= windowDelta) {
     windowTime += windowDelta;
     int lfoVal = lfo.atTime(msNow);
     // windowSize = lfoVal / (float)MAX_16 / 2.0f + 0.5f;

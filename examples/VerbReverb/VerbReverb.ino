@@ -14,8 +14,8 @@ Verb reverb;
 unsigned long msNow = millis();
 unsigned long noteTime = msNow;
 unsigned long envTime = msNow;
-int noteDelta = 500;
-int envDelta = 4;
+unsigned long noteDelta = 500;
+unsigned long envDelta = 4;
 
 int scale[] = {0, 2, 4, 7, 9, 0, 0, 0, 0, 0, 0, 0};
 
@@ -37,7 +37,7 @@ void setup() {
   reverb.setReverbMix(0.6);     // 0.0-1.0, wet/dry balance
   // reverb.setDampening(0.4); // 0.0 - 1.0, high frequency dampening
   // seti2sPins(7, 8, 9, 41); // bck, ws, data_out, data_in // change ESP32 defaults
-  useInternalDAC(); // enable internal DAC output, call before audioStart()
+  // useInternalDAC(); // classic ESP32 only; external I2S is portable
   audioStart();
 }
 
@@ -45,7 +45,7 @@ void loop() {
   msNow = millis();
 
   // Trigger notes
-  if ((unsigned long)(msNow - noteTime) >= noteDelta) {
+  if (msNow - noteTime >= noteDelta) {
     noteTime += noteDelta;
     int pitch = pitchQuantize(random(36, 72), scale, 0);
     osc.setPitch(pitch);
@@ -54,7 +54,7 @@ void loop() {
   }
 
   // Update envelope
-  if ((unsigned long)(msNow - envTime) >= envDelta) {
+  if (msNow - envTime >= envDelta) {
     envTime += envDelta;
     env.next();
   }
@@ -66,8 +66,7 @@ void audioUpdate() {
 
   // Apply Freeverb-style reverb (stereo output)
   int32_t leftVal, rightVal;
-  // reverb.reverbStereo(sample, sample, leftVal, rightVal);
+  reverb.reverbStereo(sample, sample, leftVal, rightVal);
 
-  // i2s_write_samples(leftVal, rightVal);
-  audioBlockWrite(sample, sample);
+  audioBlockWrite(leftVal, rightVal);
 }

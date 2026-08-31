@@ -12,8 +12,8 @@ unsigned long msNow = millis();
 unsigned long stepTime = msNow;
 unsigned long envTime = msNow;
 
-int stepDelta = 250;
-int envDelta = 4;
+unsigned long stepDelta = 250;
+unsigned long envDelta = 4;
 int stepCnt = 0;
 int pent [] = {0, 2, 4, 7, 9};
 const int voices = 4; // change to alter texture and adjust for different CPU capabilities
@@ -80,7 +80,7 @@ void loop() {
 
   msNow = millis();
  
-  if ((unsigned long)(msNow - stepTime) >= stepDelta) {
+  if (msNow - stepTime >= stepDelta) {
       stepTime += stepDelta;
     if (stepCnt%64 == 0) seqGen();
     for (int i=0; i<voices; i++) {
@@ -94,7 +94,7 @@ void loop() {
     stepCnt++;
   }
 
-  if ((unsigned long)(msNow - envTime) >= envDelta) {
+  if (msNow - envTime >= envDelta) {
       envTime += envDelta;
     for (int i=0; i<voices; i++) {
       ampEnvs[i].next();

@@ -11,9 +11,9 @@ unsigned long pitchTime = msNow;
 unsigned long lfoTime = msNow;
 float lfoRate = 0.1; // hz
 float pitch = 60;
-int pitchDelta = 3000;
+unsigned long pitchDelta = 3000;
 FX effects;
-int lfoDelta = 51;
+unsigned long lfoDelta = 51;
 
 void setup() {
   Serial.begin(115200);
@@ -22,7 +22,7 @@ void setup() {
   osc.setPitch(pitch);
   lfo.triGen(); // fill the sawTable
   lfo.setFreq(lfoRate);
-  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   effects.setChorusMix(1.0); 
   audioStart();
@@ -31,7 +31,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
     pitchTime += pitchDelta;
     pitch = random(24) + 36;
     Serial.println(pitch);
@@ -39,7 +39,7 @@ void loop() {
   }
 
   // vary the chorus depth
-  if ((unsigned long)(msNow - lfoTime) >= lfoDelta) {
+  if (msNow - lfoTime >= lfoDelta) {
     lfoTime += lfoDelta;
     osc.slewFreq(mtof(pitch), 0.2); // pitch glide
     float lfoVal = lfo.atTimeNormal(msNow);

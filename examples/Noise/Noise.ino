@@ -11,8 +11,8 @@ Env ampEnvW, ampEnvP, ampEnvB, ampEnvC; // envelopes
 unsigned long msNow, stepTime, envTime = millis();
 Gain outputGain(1000); // reduce if a mono DAC sums the stereo channels
 byte color = 0;
-int envDelta = 4;
-int stepDelta = 2000;
+unsigned long envDelta = 4;
+unsigned long stepDelta = 2000;
 
 void setup() {
   Serial.begin(115200);
@@ -30,7 +30,7 @@ void setup() {
   ampEnvP.setRelease(2000);
   ampEnvB.setRelease(2000);
   ampEnvC.setRelease(2000);
-  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
 }
@@ -38,7 +38,7 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if ((unsigned long)(msNow - stepTime) >= stepDelta) {
+  if (msNow - stepTime >= stepDelta) {
     stepTime += stepDelta; 
     if (color == 0) {
       ampEnvW.start();
@@ -59,7 +59,7 @@ void loop() {
     color = (color + 1) % 4;
   }
 
-  if ((unsigned long)(msNow - envTime) >= envDelta) {
+  if (msNow - envTime >= envDelta) {
       envTime += envDelta; 
     ampEnvW.next();
     ampEnvP.next();

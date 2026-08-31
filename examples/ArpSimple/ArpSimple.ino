@@ -8,7 +8,7 @@ Osc osc1;
 Gain outputGain(1000);
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
-int noteDelta = 250;
+unsigned long noteDelta = 250;
 int arpPitches [] = {64, 60, 67, 69};
 Arp arp1(arpPitches, 4, 2, ARP_UP_DOWN); // ARP_ORDER, ARP_UP, ARP_DOWN, ARP_UP_DOWN
 // Arp arp1;
@@ -29,7 +29,7 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if ((unsigned long)(msNow - pitchTime) >= noteDelta) {
+  if (msNow - pitchTime >= noteDelta) {
       pitchTime += noteDelta;
     int pitch = arp1.next();
     Serial.println(pitch);

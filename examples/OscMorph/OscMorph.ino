@@ -2,24 +2,25 @@
 // Waveform morphing can be a bit noisy, explore Window Transform as an alternative
 #include "M16.h"
 #include "Osc.h"
+#include "Gain.h"
 
 WaveTable triTable; // one shareable wavetable with hidden memory management
 Osc aOsc1;
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000);
 float morphVal = 0;
 bool morphUp = true;
 unsigned long msNow = millis();
 unsigned long noteTime = msNow;
 unsigned long morphTime = msNow;
-int noteDelta = 5000;
-int morphDelta = 32;
+unsigned long noteDelta = 5000;
+unsigned long morphDelta = 32;
 
 void setup() {
   Serial.begin(115200);
   aOsc1.sinGen(); // fill the internal wavetable
   triTable.triGen(); // allocate and fill the shared wavetable
   aOsc1.setPitch(60);
-  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
 }
@@ -27,13 +28,13 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - noteTime) >= noteDelta) {
+  if (msNow - noteTime >= noteDelta) {
     noteTime += noteDelta;
     int pitch = random(24) + 36;
     aOsc1.setPitch(pitch);
   }
 
-  if ((unsigned long)(msNow - morphTime) >= morphDelta) {
+  if (msNow - morphTime >= morphDelta) {
     morphTime += morphDelta;
     if (morphUp) {
       morphVal += 0.01;
@@ -56,7 +57,7 @@ void loop() {
 * Always finish with audioBlockWrite()
 */
 void audioUpdate() {
-  int16_t leftVal = (aOsc1.nextMorph(triTable, morphVal) * vol)>>10;
+  int16_t leftVal = outputGain.next(aOsc1.nextMorph(triTable, morphVal));
   int16_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

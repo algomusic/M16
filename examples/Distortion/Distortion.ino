@@ -19,8 +19,8 @@ unsigned long stepTime = msNow;
 unsigned long envTime = msNow;
 float feedback = 0.9;
 float pitch = 48;
-int stepDelta = 500;
-int envDelta = 1;
+unsigned long stepDelta = 500;
+unsigned long envDelta = 1;
 int distLevel = 0;
 
 void setup() {
@@ -29,7 +29,6 @@ void setup() {
   ampEnv.setAttack(0);
   ampEnv.setRelease(800);
   aOsc.triGen();
-  int newSet [] = {48, 52, 55, 58, 60, 64};
   aOsc.setPitch(pitch);
   filter.setFreq(3500);
   // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
@@ -40,7 +39,7 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if ((unsigned long)(msNow - stepTime) >= stepDelta) {
+  if (msNow - stepTime >= stepDelta) {
       stepTime += stepDelta;
     pitch = clip(pitch + gaussRandNumb(24, 2) - 12, 36, 68); 
     Serial.println(pitch);
@@ -51,7 +50,7 @@ void loop() {
     ampEnv.start();
   }
 
-  if ((unsigned long)(msNow - envTime) >= envDelta) {
+  if (msNow - envTime >= envDelta) {
     envTime += envDelta;
     currEnvValue = ampEnv.next();
   }

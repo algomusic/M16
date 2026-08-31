@@ -45,7 +45,7 @@ uint32_t lastTrigger = 0;
 
 void setup() {
     Serial.begin(115200);
-    seti2sPins(38, 39, 40, 41);
+    seti2sPins(16, 17, 18, 21);
     // useInternalDAC(); // for ESP32s that have it
     // samp.setNearZeroSmooth(true);  // default threshold 1024, useful to smooth some clicks in internalDAC
     audioStart();

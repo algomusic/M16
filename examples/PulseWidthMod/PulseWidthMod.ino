@@ -10,8 +10,8 @@ Gain outputGain(500);
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 unsigned long widthTime = msNow;
-int pitchDelta = 12000;
-int lfoReadRate = 29; // update delta time in millis
+unsigned long pitchDelta = 12000;
+unsigned long lfoReadRate = 29; // update delta time in millis
 float pVal = 0.5;
   
 void setup() {
@@ -22,7 +22,7 @@ void setup() {
   filter.setFreq(1500);
   LFO1.setFreq(0.1); 
   aOsc1.setPulseWidth(0.25);
-  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
 }
@@ -30,14 +30,14 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
     pitchTime += pitchDelta;
     int pitch = random(24) + 36;
     Serial.println(pitch);
     aOsc1.setPitch(pitch);
   }
   
-  if ((unsigned long)(msNow - widthTime) >= lfoReadRate) {
+  if (msNow - widthTime >= lfoReadRate) {
     widthTime += lfoReadRate;
     // Compute the LFO value to modulate the duty cycle amount (freqency) by
     // = osc val / osc range * depth * val range reduction + offset (to make unipolar)

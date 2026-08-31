@@ -8,13 +8,13 @@ Osc aOsc1;
 Gain outputGain(1000);
 unsigned long msNow = millis();
 unsigned long changeTime = msNow;
-int changeDelta = 5000;
+unsigned long changeDelta = 5000;
 
 void setup() {
   Serial.begin(115200);
   aOsc1.crackleGen(); // fill the wavetable
   aOsc1.setCrackle(true, 1000); // 0 - MAX_16
-  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
 }
@@ -22,7 +22,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - changeTime) >= changeDelta) {
+  if (msNow - changeTime >= changeDelta) {
     changeTime += changeDelta;
     int16_t cAmnt = random(MAX_16);
     aOsc1.setCrackle(true, cAmnt); // 0 - MAX_16

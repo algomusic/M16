@@ -15,7 +15,7 @@ SVF dampeningFilter;
 Phys phys1;
 Gain outputGain(1000);
 int bpm = 120;
-int stepDelta = 1000;
+unsigned long stepDelta = 1000;
 unsigned long msNow, stepTime;
 float feedback = 0.9;
 
@@ -38,7 +38,7 @@ void setup() {
   exciterFilter.setFreq(SAMPLE_RATE / 2); // at the Nyquist to avoid aliasing
   dampeningFilter.setFreq(10000);
   stepTime = millis();
-  seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
 }
@@ -46,7 +46,7 @@ void setup() {
 void loop() {
   msNow = millis();
   
-  if ((unsigned long)(msNow - stepTime) >= stepDelta) {
+  if (msNow - stepTime >= stepDelta) {
     stepTime += stepDelta; 
     int pitch = arp1.next(); 
     Serial.println(pitch);

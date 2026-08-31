@@ -7,7 +7,7 @@
 Del delay1(500); // max delay time in ms
 Osc osc1;
 Env ampEnv1;
-int noteDelta = 1000;
+unsigned long noteDelta = 1000;
 
 unsigned long msNow, noteTime, envTime, delTime;
 int scale [] = {0, 2, 4, 5, 7, 9, 0, 0, 0, 0, 0};
@@ -23,7 +23,7 @@ void setup() {
   osc1.triGen(); // fill the osc wavetable
   osc1.setPitch(60);
   ampEnv1.setAttack(10);
-  // seti2sPins(38, 39, 40, 41); // bck, ws, data_out, data_in // change ESP32 defaults
+  // seti2sPins(16, 17, 18, 21); // bck, ws, data_out, data_in // change ESP32 defaults
   // useInternalDAC(); // enable internal DAC output, call before audioStart()
   audioStart();
 }
@@ -35,7 +35,7 @@ void loop() {
   
   msNow = millis();
 
-  if ((unsigned long)(msNow - noteTime) >= noteDelta) {
+  if (msNow - noteTime >= noteDelta) {
       noteTime += noteDelta;
     osc1.setPitch(pitchQuantize(random(25) + 48, scale, 0));
     delay1.setFiltered(random(5));

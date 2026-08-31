@@ -20,7 +20,7 @@ float carrierFreq = 220.0;  // A3
 float modRatio = 1.0;  // Modulator frequency ratio (modFreq = carrierFreq * modRatio)
 // loop params
 unsigned long msNow, pitchTime;
-int pitchDelta = 1000; //ms
+unsigned long pitchDelta = 1000; //ms
 
 void setup() {
   Serial.begin(115200);
@@ -34,7 +34,7 @@ void setup() {
   // Set up modulator with sine wave
   modulator.sinGen();
   modulator.setFreq(carrierFreq * modRatio);
-  // seti2sPins(38, 39, 40, 41);
+  // seti2sPins(16, 17, 18, 21);
   // useInternalDAC();
   audioStart();
 
@@ -47,7 +47,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
     pitchTime += pitchDelta;
     int pitch = rand(48) + 36;
     carrier.setPitch(pitch);

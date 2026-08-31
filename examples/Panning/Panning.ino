@@ -13,8 +13,8 @@ int16_t panLevelR = panRight(panPos) * 1024;
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 unsigned long envTime = msNow;
-int pitchDelta = 1000;
-int envDelta = 4;
+unsigned long pitchDelta = 1000;
+unsigned long envDelta = 4;
 int8_t sweep = 2; // 0 to left, 1 to right, 2 no sweep
 
 void setup() {
@@ -22,7 +22,7 @@ void setup() {
   delay(200);
   osc1.triGen(); // fill the internal wavetable
   osc1.setPitch(69);
-  // seti2sPins(38, 39, 40, 41); // bck, ws, data_out, data_in // change defaults
+  // seti2sPins(16, 17, 18, 21); // bck, ws, data_out, data_in // change defaults
   // useInternalDAC();
   audioStart();
 }
@@ -30,7 +30,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - envTime) >= envDelta) {
+  if (msNow - envTime >= envDelta) {
       envTime += envDelta; 
     ampEnv1.next();
     if (sweep < 2) {
@@ -41,7 +41,7 @@ void loop() {
     }
   }
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
     pitchTime += pitchDelta;
     int pitch = random(24) + 58;
     osc1.setPitch(pitch);

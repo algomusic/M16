@@ -22,7 +22,7 @@ void setup() {
   // shOsc.setNoise(true); // optional is using noise
   shOsc.setSandH(true);
   shOsc.setFreq(shRate);
-  seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
 }

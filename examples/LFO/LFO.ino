@@ -1,14 +1,15 @@
 // M16 LFO example
 #include "M16.h" 
 #include "Osc.h"
+#include "Gain.h"
 
 Osc osc1, lfo1; // declare instances of the oscillator class
-int16_t vol = 1000; // 0 - 1024, 10 bit
+Gain outputGain(1000);
 unsigned long msNow = millis(); // current time since starting in milliseconds
 unsigned long pitchTime = msNow; // time for the next pitch update
 unsigned long lfoTime = msNow; // time for the next pitch update
-int pitchDelta = 2000; // time between pitch updates
-int lfoDelta = 4;
+unsigned long pitchDelta = 2000; // time between pitch updates
+unsigned long lfoDelta = 4;
 int pitch = 69;
 float lfoRate = 3.0; // Hz
 float lfoDepth = 0.05; // 0 - 1+
@@ -20,7 +21,7 @@ void setup() {
   lfo1.sinGen();
   osc1.setPitch(pitch); // MIDI pitch
   lfo1.setFreq(lfoRate); // Htz
-  seti2sPins(38, 39, 40, 41); // bck, ws, data_out, data_in // change defaults
+  seti2sPins(16, 17, 18, 21); // bck, ws, data_out, data_in // change defaults
   // useInternalDAC();
   audioStart();
 }
@@ -28,14 +29,14 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - lfoTime) >= lfoDelta) {
+  if (msNow - lfoTime >= lfoDelta) {
     lfoTime += lfoDelta;
     float lfoVal = lfo1.atTimeNormal(msNow);
     // Serial.println(lfoVal);
     osc1.setPitch(pitch * (1 + (lfoVal - 0.5) * lfoDepth));
   }
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
     pitchTime += pitchDelta;
     pitch = random(48) + 36;
     osc1.setPitch(pitch);
@@ -51,7 +52,7 @@ void loop() {
 * Always finish with audioBlockWrite()
 */
 void audioUpdate() {
-  int32_t leftVal = (osc1.next() * vol)>>10;
+  int32_t leftVal = outputGain.next(osc1.next());
   int32_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }

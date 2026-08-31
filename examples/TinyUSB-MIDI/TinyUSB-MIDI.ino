@@ -12,6 +12,19 @@
 //  Press RST on ESP after loading
 // After resetting the Arduino IDE port will need to be resablished to see print statements in the Serial Monitor
 
+#if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32S3)
+
+#include <Arduino.h>
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("TinyUSB-MIDI requires an ESP32-S2 or ESP32-S3 USB target");
+}
+
+void loop() {}
+
+#else
+
 #include "M16.h"
 #include "Osc.h"
 #include "Env.h"
@@ -32,10 +45,10 @@ unsigned long glideTime = msNow;
 unsigned long noteOnTime = msNow;
 unsigned long noteOffTime = msNow;
 unsigned long ccTime = msNow;
-int noteDelta = 500;
-int ccDelta = 800;
-int envDelta = 4;
-int glideDelta = 21;
+unsigned long noteDelta = 500;
+unsigned long ccDelta = 800;
+unsigned long envDelta = 4;
+unsigned long glideDelta = 21;
 float windowSize = 0;
 float nextFreq = 440;
 int outPitch = 60;
@@ -81,7 +94,7 @@ void setup() {
   delay1.setTime(375); // ms
   delay1.setLevel(0.8); // 0.0 - 1.0
   delay1.setFeedback(true); // bool
-  // seti2sPins(38, 39, 40, 41); // BCK, WS, DOUT, DIN
+  // seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
   // midi
@@ -99,7 +112,7 @@ void loop() {
 
   msNow = millis();
 
-  if ((unsigned long)(msNow - noteOnTime) >= noteDelta) {
+  if (msNow - noteOnTime >= noteDelta) {
     noteOnTime += noteDelta;
     noteOffTime = noteOnTime + 100;
     notePlaying = true;
@@ -113,19 +126,19 @@ void loop() {
     notePlaying = false;
   }
 
-  if ((unsigned long)(msNow - ccTime) >= ccDelta) {
+  if (msNow - ccTime >= ccDelta) {
     ccTime += ccDelta;
     int ccVal = rand(127);
     MIDI.sendControlChange(7, ccVal, 1); // CC, value, chan
     Serial.print(" Sent CC 7 value: ");Serial.print(ccVal);Serial.println();
   }
    
-  if ((unsigned long)(msNow - envTime) >= envDelta) {
+  if (msNow - envTime >= envDelta) {
     envTime += envDelta;
     ampEnv1.next();
   }
 
-  if ((unsigned long)(msNow - glideTime) >= glideDelta) {
+  if (msNow - glideTime >= glideDelta) {
     glideTime += glideDelta;
     osc1.slewFreq(nextFreq, 0.8);
   }
@@ -143,3 +156,5 @@ void audioUpdate() {
   int32_t rightVal = leftVal;
   audioBlockWrite(leftVal, rightVal);
 }
+
+#endif

@@ -11,8 +11,8 @@ float foldAmnt = 0.0;
 unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 unsigned long foldTime = msNow;
-int pitchDelta = 10000; // ms
-int foldDelta = 50; // ms
+unsigned long pitchDelta = 10000; // ms
+unsigned long foldDelta = 50; // ms
 
 void setup() {
   Serial.begin(115200);
@@ -27,7 +27,7 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
     pitchTime += pitchDelta;
     int pitch = random(24) + 36;
     Serial.println(pitch);
@@ -35,7 +35,7 @@ void loop() {
     foldAmnt = 1.0;
   }
 
-  if ((unsigned long)(msNow - foldTime) >= foldDelta) {
+  if (msNow - foldTime >= foldDelta) {
     foldTime += foldDelta;
     foldAmnt += 0.05;
     if (foldAmnt > 15) foldAmnt = 1.0;

@@ -8,7 +8,7 @@
 BBD delay1;
 Osc osc1;
 Env ampEnv1;
-int noteDelta = 600;
+unsigned long noteDelta = 600;
 
 unsigned long msNow, noteTime, envTime, sweepTime;
 int scale[] = {0, 3, 5, 7, 10}; // minor pentatonic
@@ -32,7 +32,7 @@ void setup() {
   ampEnv1.setDecay(150);
   ampEnv1.setSustain(0);
 
-  // seti2sPins(38, 39, 40, 41); // change ESP32 defaults if needed
+  // seti2sPins(16, 17, 18, 21); // change ESP32 defaults if needed
   // useInternalDAC();
   audioStart();
 }
@@ -45,7 +45,7 @@ void loop() {
   msNow = millis();
 
   // trigger notes
-  if ((unsigned long)(msNow - noteTime) >= noteDelta) {
+  if (msNow - noteTime >= noteDelta) {
     noteTime += noteDelta;
     int pitch = pitchQuantize(random(20) + 50, scale, 0);
     osc1.setPitch(pitch);
@@ -62,7 +62,7 @@ void loop() {
 
   // slowly sweep scan rate
   // lower scan rate = longer delay + darker sound
-  if ((unsigned long)(msNow - sweepTime) >= 50) {
+  if (msNow - sweepTime >= 50) {
     sweepTime += 50;
     scanRate += scanDir * 0.005;
     if (scanRate <= 0.1) { scanDir = 1; scanRate = 0.1; }

@@ -18,8 +18,8 @@ Bob lpf;
 unsigned long msNow = millis();
 unsigned long lfoTime = msNow;
 unsigned long pitchTime = msNow;
-int lfoDelta = 24;
-int pitchDelta = 4000;
+const unsigned long lfoDelta = 24;
+const unsigned long pitchDelta = 4000;
 
 void setup() {
   Serial.begin(115200);
@@ -38,13 +38,13 @@ void setup() {
 void loop() {
   msNow = millis();
 
-  if ((unsigned long)(msNow - lfoTime) >= lfoDelta) {
+  if (msNow - lfoTime >= lfoDelta) {
       lfoTime += lfoDelta;
     lpf.setCutoff(lfo1.atTimeNormal(msNow));
     lpf.setRes(lfo2.atTimeNormal(msNow));
   }
 
-  if ((unsigned long)(msNow - pitchTime) >= pitchDelta) {
+  if (msNow - pitchTime >= pitchDelta) {
       pitchTime += pitchDelta;
     float pitch = round(rand(24) + 24);
     osc1.setPitch(pitch);
