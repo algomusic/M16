@@ -29,7 +29,7 @@ class Verb {
 
 public:
   /** Constructor */
-  Verb() : initialized(false), highQuality(true), usePSRAM(true), wetMix(512), dryMix(512),
+  Verb() : initialized(false), highQuality(true), usePSRAM(true), wetMix(724), dryMix(724),
            roomSize(952), damping(410), dampCoeff(871), stereoWidth(922),
            numCombs(8), numAllpass(4) {  // damping 410 = 0.4, dampCoeff = 717 + ((1024-410)*307)>>10 = 871
     // Initialize buffer pointers to null
@@ -207,12 +207,13 @@ public:
 
   /** Set wet/dry mix
    *  @param mix 0.0 = fully dry, 1.0 = fully wet
-   *  Uses power curve to reduce wet at lower values while preserving higher range
+   *  Uses a constant-power curve so the perceived level does not dip near
+   *  the middle of the crossfade.
    */
   void setMix(float mix) {
     mix = max(0.0f, min(1.0f, mix));
-    wetMix = (int16_t)(mix * 1024.0f);
-    dryMix = (int16_t)((1.0f - mix) * 1024.0f);
+    wetMix = (int16_t)(sqrtf(mix) * 1024.0f + 0.5f);
+    dryMix = (int16_t)(sqrtf(1.0f - mix) * 1024.0f + 0.5f);
   }
 
   /** Set reverb mix - alias for setMix */
@@ -241,9 +242,7 @@ public:
     // Process through allpass filters in series
     int32_t wet = processAllpassFilters(combSum);
 
-    // Mix dry and wet
-    int32_t output = ((audioIn * dryMix) >> 10) + ((wet * wetMix) >> 10);
-    return clip16(output);
+    return mixOutput(audioIn, wet);
   }
 
   /** Process stereo input
@@ -280,9 +279,8 @@ public:
       wetR -= (stereoOffset * stereoWidth) >> 10;
     }
 
-    // Mix dry and wet
-    audioOutLeft = clip16(((audioInLeft * dryMix) >> 10) + ((wetL * wetMix) >> 10));
-    audioOutRight = clip16(((audioInRight * dryMix) >> 10) + ((wetR * wetMix) >> 10));
+    audioOutLeft = mixOutput(audioInLeft, wetL);
+    audioOutRight = mixOutput(audioInRight, wetR);
   }
 
   /** Check if initialized */
@@ -322,6 +320,14 @@ private:
   uint16_t allpassBufMask;
   uint16_t allpassDelay[VERB_MAX_ALLPASS];
   uint16_t allpassWritePos[VERB_MAX_ALLPASS];
+
+  /** Apply the precomputed constant-power wet/dry gains. */
+  inline int16_t mixOutput(int32_t dry, int32_t wet) {
+    int64_t mixed = (int64_t)dry * dryMix + (int64_t)wet * wetMix;
+    // Symmetric rounding avoids the small negative bias of a signed shift.
+    mixed += (mixed >= 0) ? 512 : -512;
+    return clip16((int32_t)(mixed / 1024));
+  }
 
   /** Process all comb filters in parallel - optimized version */
   inline int32_t processCombFilters(int32_t input) {
