@@ -14,6 +14,9 @@
 #ifndef EMA_H_
 #define EMA_H_
 
+#include <atomic>
+#include <stdint.h>
+
 class EMA {
 
 public:
