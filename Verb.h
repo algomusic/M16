@@ -29,8 +29,8 @@ class Verb {
 
 public:
   /** Constructor */
-  Verb() : initialized(false), highQuality(true), wetMix(512), dryMix(512),
-           roomSize(952), damping(410), dampCoeff(871), stereoWidth(922), usePSRAM(true),
+  Verb() : initialized(false), highQuality(true), usePSRAM(true), wetMix(512), dryMix(512),
+           roomSize(952), damping(410), dampCoeff(871), stereoWidth(922),
            numCombs(8), numAllpass(4) {  // damping 410 = 0.4, dampCoeff = 717 + ((1024-410)*307)>>10 = 871
     // Initialize buffer pointers to null
     for (int i = 0; i < VERB_MAX_COMBS; i++) combBuf[i] = nullptr;
