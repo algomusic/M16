@@ -34,7 +34,7 @@ class Arp {
     * @param octaves the base range for the arpeggiator
     * @param arp_direction the playback order
     */
-    Arp(int * values, int number_values, int octaves, int arp_direction):arpSize(number_values), octaveRange(octaves), arpDirection(arp_direction) {
+    Arp(int * values, int number_values, int octaves, int arp_direction):arpSize(number_values), arpDirection(arp_direction), octaveRange(octaves) {
       for (int i=0; i<arpSize; i++) {
           initValues[i] = values[i];
           sortedValues[i] = values[i];
