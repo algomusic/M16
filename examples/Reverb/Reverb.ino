@@ -38,10 +38,11 @@ void setup() {
   #else // ESP32 and RP2040
     effect1.setReverbSize(16); // quality and memory >= 1
   #endif
-  effect1.setReverbLength(0.8); // 0.0 - 1.0
+  effect1.setReverbLength(0.7); // 0.0 - 1.0
   verb.setReverbLength(0.95); // 0.0 - 1.0
   effect1.setReverbMix(0.4); // 0.0 - 1.0
-  verb.setReverbMix(0.6); // 0.0 - 1.0
+  verb.setReverbMix(0.7); // 0.0 - 1.0
+  verb.setDampening(0.3); // 0.0 - 1.0
   // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
   // setSampleRate(22050);
   // useInternalDAC(); // enable internal DAC output, call before audioStart()
