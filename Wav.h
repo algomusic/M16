@@ -1297,10 +1297,12 @@ private:
    * @return position of chunk, or -1 if not found
    */
   int findChunkStart(const uint8_t* header, size_t headerSize, const char* chunkId, int startPos) {
-    for (int i = startPos; i < headerSize - 8; i++) {
+    if (header == nullptr || chunkId == nullptr || headerSize < 8) return -1;
+    size_t first = (startPos > 0) ? (size_t)startPos : 0;
+    for (size_t i = first; i + 8 <= headerSize; i++) {
       if (header[i] == chunkId[0] && header[i+1] == chunkId[1] &&
           header[i+2] == chunkId[2] && header[i+3] == chunkId[3]) {
-        return i;
+        return (int)i;
       }
     }
     return -1;
