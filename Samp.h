@@ -510,7 +510,6 @@ public:
 
     // Cache envelope state
     uint32_t localEnvPhase = envPhase;
-    uint32_t localEnvInc = envPhaseIncrement;
     bool localEnvEnabled = envelopeOn && sharedEnvInitialized;
     bool localEnvComplete = envComplete;
     bool localEnvOn = localEnvEnabled && !localEnvComplete;
