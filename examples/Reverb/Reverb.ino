@@ -4,11 +4,13 @@
 #include "Env.h"
 #include "SVF.h"
 #include "FX.h"
+#include "Verb.h"
 
 Osc osc1;
 Env ampEnv1;
 SVF filter1;
 FX effect1;
+Verb verb;
 
 unsigned long msNow = millis();
 unsigned long noteTime = msNow;
@@ -37,7 +39,9 @@ void setup() {
     effect1.setReverbSize(16); // quality and memory >= 1
   #endif
   effect1.setReverbLength(0.8); // 0.0 - 1.0
+  verb.setReverbLength(0.95); // 0.0 - 1.0
   effect1.setReverbMix(0.4); // 0.0 - 1.0
+  verb.setReverbMix(0.6); // 0.0 - 1.0
   // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
   // setSampleRate(22050);
   // useInternalDAC(); // enable internal DAC output, call before audioStart()
@@ -73,11 +77,13 @@ void audioUpdate() {
   #if IS_ESP8266()
     int16_t oscVal = (osc1.next() * ampEnv1.getValue())>>16;
     effect1.reverbStereo(oscVal, oscVal, leftVal, rightVal);
-  #else // ESP32 and RP2040
+  #else // ESP32 and RP2040 and Teensy
     int32_t oscVal = filter1.nextLPF((osc1.next() * ampEnv1.getValue())>>14);
     effect1.reverbStereo(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
-    // try reverbStereo2 is a smoother reverb that requires more processing power
+    // Try reverbStereo2 is a smoother reverb that requires more processing power
     // effect1.reverbStereo2(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
+    // Try Freeverb
+    // verb.reverbStereo(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
   #endif
   audioBlockWrite(leftVal, rightVal);
   // i2s_write_samples(oscVal, oscVal);
