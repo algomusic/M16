@@ -7,13 +7,13 @@ Always include `M16.h` in your sketch and add an `audioUpdate()` function that e
 
 Default output connections to I2S DAC boards are:
 
-ESP8266 - GPIO 15 -> BCLK, GPIO 3 (RX) -> DOUT, and GPIO 2 -> LRCLK (WS) (no i2s Input support)
+- ESP8266 - GPIO 15 -> BCLK, GPIO 3 (RX) -> DOUT, and GPIO 2 -> LRCLK (WS) (no i2s Input support)
 
-ESP32 - GPIO 38 -> BCLK, GPIO 39 -> DOUT, GPIO 40 -> LRCLK (WS), and GPIO 18 -> DIN
+- ESP32 - GPIO 38 -> BCLK, GPIO 39 -> DOUT, GPIO 40 -> LRCLK (WS), and GPIO 18 -> DIN
 
-Pi Pico 2 - GPIO 16 -> BCLK, GPIO 18 -> DOUT, GPIO 17 -> LRCLK (WS), and GPIO 19 -> DIN
+- Pi Pico 2 - GPIO 16 -> BCLK, GPIO 18 -> DOUT, GPIO 17 -> LRCLK (WS), and GPIO 19 -> DIN
 
-Teensy 4 - GPIO 21 -> BCLK, GPIO 7 -> DOUT, and GPIO 20 -> LRCLK (WS), and GPIO 8 -> DIN
+- Teensy 4 - GPIO 21 -> BCLK, GPIO 7 -> DOUT, and GPIO 20 -> LRCLK (WS), and GPIO 8 -> DIN
 
 Some I2S DAC boards often require other terminals to be grounded.
 
