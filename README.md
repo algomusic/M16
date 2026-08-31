@@ -25,6 +25,8 @@ control object to be enabled and its line or microphone input selected. Teensy I
 
 M16 prioritises audio processing and may not play well with other libraries where timing is critical, such as wifi, and file i/o. The temporary stopping of audio during these tasks may help coordination between them.
 
+API documentation is the the [M16 Wiki](https://github.com/algomusic/M16/wiki).
+
 Designed for use with the Arduino IDE.
 
 M16 is inspired by the 8-bit Mozzi audio library by Tim Barrass 2012
