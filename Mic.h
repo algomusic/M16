@@ -27,15 +27,13 @@ class Mic {
     */
     inline
     int16_t nextLeft() {
-      if (mBufIndex == 0) {
+      int frameCount = samples_read / 2;
+      if (leftBufIndex >= frameCount) {
         readMic();
+        frameCount = samples_read / 2;
       }
-      int16_t val = inputBuf[mBufIndex * 2];
-      mBufIndex++;
-      if (mBufIndex >= samples_read/2) {
-        mBufIndex = 0;
-      }
-      return val;
+      if (samples_read < 2) return 0;
+      return (int16_t)inputBuf[leftBufIndex++ * 2];
     }
 
     /** 
@@ -43,15 +41,41 @@ class Mic {
     */
     inline
     int16_t nextRight() {
-      if (mBufIndex == 0) {
+      int frameCount = samples_read / 2;
+      if (rightBufIndex >= frameCount) {
         readMic();
+        frameCount = samples_read / 2;
       }
-      int16_t val = inputBuf[mBufIndex * 2 + 1];
-      mBufIndex++;
-      if (mBufIndex >= samples_read/2) {
-        mBufIndex = 0;
+      if (samples_read < 2) return 0;
+      return (int16_t)inputBuf[rightBufIndex++ * 2 + 1];
+    }
+
+    /** Read one synchronized stereo input frame.
+     *  This is preferable to separate channel calls when both inputs are used.
+     */
+    inline
+    void nextStereo(int16_t& left, int16_t& right) {
+      int frameCount = samples_read / 2;
+      if (leftBufIndex >= frameCount || rightBufIndex >= frameCount) {
+        readMic();
+        frameCount = samples_read / 2;
       }
-      return val;
+      if (frameCount <= 0) {
+        left = 0;
+        right = 0;
+        return;
+      }
+
+      int frame = max(leftBufIndex, rightBufIndex);
+      if (frame >= frameCount) {
+        left = 0;
+        right = 0;
+        return;
+      }
+      left = (int16_t)inputBuf[frame * 2];
+      right = (int16_t)inputBuf[frame * 2 + 1];
+      leftBufIndex = frame + 1;
+      rightBufIndex = frame + 1;
     }
 
 
@@ -60,11 +84,16 @@ class Mic {
     int micGain = 32; // 0 - 64
     static const int16_t bufferLen = 256; // buffer size in samples
     uint16_t inputBuf[bufferLen];
-    int mBufIndex = 0;
+    int leftBufIndex = 0;
+    int rightBufIndex = 0;
+    uint32_t teensyInputSequence = 0;
 
     #if IS_ESP8266()
       void readMic() {
         // Mic class not yet implemented for ESP8266
+        samples_read = 0;
+        leftBufIndex = 0;
+        rightBufIndex = 0;
       }
     #elif IS_ESP32()
       inline
@@ -75,6 +104,10 @@ class Mic {
         esp_err_t result = i2s_channel_read(rx_handle, inputBuf, bufferLen * sizeof(uint16_t), &bytesIn, portMAX_DELAY);
         if (result == ESP_OK && bytesIn > 0) {
           samples_read = bytesIn / 2; // stereo 16 bit samples
+          leftBufIndex = 0;
+          rightBufIndex = 0;
+        } else {
+          samples_read = 0;
         }
       }
     #elif IS_RP2040()
@@ -109,7 +142,22 @@ class Mic {
           samples_read++;
         }
         samples_read *= 2;  // Convert to total samples (L+R)
+        leftBufIndex = 0;
+        rightBufIndex = 0;
       }
+    #elif IS_TEENSY4()
+      inline
+      void readMic() {
+        size_t framesRead = 0;
+        bool received = m16TeensyReadInputBlock(
+            (int16_t*)inputBuf, bufferLen / 2,
+            teensyInputSequence, framesRead);
+        samples_read = received ? (int)(framesRead * 2) : 0;
+        leftBufIndex = 0;
+        rightBufIndex = 0;
+      }
+    #else
+      inline void readMic() { samples_read = 0; }
     #endif
 };
 
