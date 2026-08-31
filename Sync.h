@@ -26,12 +26,10 @@ class Sync {
 public:
 
   /** Constructor */
-  Sync() {
-    Sync(45, 46);  // 45 & 46 for sProject board v3
-  }
+  Sync() : Sync(45, 46) {}  // 45 & 46 for sProject board v3
 
   /** Constructor */
-  Sync(int inPin, int outPin):receivePin(inPin), transmitPin(outPin) {
+  Sync(int inPin, int outPin):transmitPin(outPin), receivePin(inPin) {
     pinMode(receivePin, INPUT_PULLUP); // sync in
     pinMode(transmitPin, OUTPUT); // sync out
   }
@@ -72,7 +70,7 @@ public:
 
   /** Check if its time to end the out pulse */
   bool pulseOffTime(unsigned long currMs) {
-    if (pulseOutIsOn & currMs - pulseStartTime > 4) {
+    if (pulseOutIsOn && currMs - pulseStartTime > 4UL) {
       return true;
     } else {
       return false;
@@ -123,8 +121,8 @@ private:
   uint8_t transmitPin, receivePin;
   bool pulseOutIsOn = false;
   uint8_t PPQN = 2;
-  int16_t pulseOutDelta = 250;
-  int16_t beatOutDelta = 500;
+  unsigned long pulseOutDelta = 250;
+  unsigned long beatOutDelta = 500;
   float outBpm = 120;
   unsigned long pulseStartTime = 0;
   int16_t * pulseInDeltas = new int16_t[4]; 
