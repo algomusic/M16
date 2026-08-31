@@ -499,9 +499,9 @@ class FX {
         initReverb(reverbSize);
       }
       M16_ATOMIC_GUARD(_fxLock, {
-        processReverb(audioIn, audioIn);
-        // Each mono wet branch contributes half, so their sum has unity gain.
-        reverbCached = clip16(((audioIn * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>11) + ((revP2 * reverbMix)>>11));
+        int16_t dry = clip16(audioIn);
+        processReverb(dry, dry);
+        reverbCached = mixReverbChannel(dry, (revWetL + revWetR) / 2);
       });
       return reverbCached;
     }
@@ -550,8 +550,8 @@ class FX {
       audioOutRight = reverbCacheR;
       M16_ATOMIC_GUARD(_fxLock, {
         processReverb(clip16(audioInLeft), clip16(audioInRight));
-        audioOutLeft = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>10));
-        audioOutRight = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>10));
+        audioOutLeft = mixReverbChannel(audioInLeft, revWetL);
+        audioOutRight = mixReverbChannel(audioInRight, revWetR);
         reverbCacheL = audioOutLeft;
         reverbCacheR = audioOutRight;
       });
@@ -608,8 +608,8 @@ class FX {
         if (reverbInterpToggle) {
           // Process reverb this sample
           processReverb(clip16(audioInLeft), clip16(audioInRight));
-          outL = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>10));
-          outR = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>10));
+          outL = mixReverbChannel(audioInLeft, revWetL);
+          outR = mixReverbChannel(audioInRight, revWetR);
           reverbInterpPrevL = outL;
           reverbInterpPrevR = outR;
         } else {
@@ -638,10 +638,8 @@ class FX {
       reverbInterpToggle = !reverbInterpToggle;
       if (reverbInterpToggle) {
         processReverb(clip16(audioInLeft), clip16(audioInRight));
-        outL = clip16(((audioInLeft * (1024 - reverbMix)) >> 10) +
-                      ((revP1 * reverbMix) >> 10));
-        outR = clip16(((audioInRight * (1024 - reverbMix)) >> 10) +
-                      ((revP2 * reverbMix) >> 10));
+        outL = mixReverbChannel(audioInLeft, revWetL);
+        outR = mixReverbChannel(audioInRight, revWetR);
         reverbInterpPrevL = outL;
         reverbInterpPrevR = outR;
       } else {
@@ -708,11 +706,13 @@ class FX {
         reverb2Toggle = !reverb2Toggle;
         int32_t outL; int32_t outR;
         if (reverb2Toggle) {
-          int32_t summedMono = (audioInLeft + audioInRight) >> 1;
+          int32_t dryL = clip16(audioInLeft);
+          int32_t dryR = clip16(audioInRight);
+          int32_t summedMono = (dryL + dryR) / 2;
           int32_t ap = allpass2.next(allpass1.next(summedMono));
-          processReverb((audioInLeft + ap) >> 1, clip16(audioInRight + ap) >> 1);
-          outL = clip16(((audioInLeft * (1024 - reverbMix))>>10) + ((revP1 * reverbMix)>>10));
-          outR = clip16(((audioInRight * (1024 - reverbMix))>>10) + ((revP2 * reverbMix)>>10));
+          processReverb(clip16((dryL + ap) / 2), clip16((dryR + ap) / 2));
+          outL = mixReverbChannel(dryL, revWetL);
+          outR = mixReverbChannel(dryR, revWetR);
           reverbCacheL = outL;
           reverbCacheR = outR;
         } else {
@@ -1042,6 +1042,19 @@ class FX {
 
 
   private:
+    /** Mix a clipped dry signal with the normalized, delay-only reverb tap.
+     * Keeping both endpoints within the 16-bit range makes this a unity-gain
+     * crossfade; the final clip is then only a defensive guard.
+     */
+    inline int16_t mixReverbChannel(int32_t dryInput, int32_t wetInput) {
+      int32_t dry = clip16(dryInput);
+      int32_t wet = clip16(wetInput);
+      int32_t mixed = dry * (1024 - reverbMix) + wet * reverbMix;
+      // Symmetric rounding avoids the negative bias of a signed right shift.
+      mixed += (mixed >= 0) ? 512 : -512;
+      return clip16(mixed / 1024);
+    }
+
     /** Fast approximation of e^(-x) for x >= 0
     * Uses (1 - x/n)^n approximation, accurate for 0 <= x <= 4
     */
@@ -1085,6 +1098,7 @@ class FX {
     bool useOptimizedReverb = false;  // Flag to use optimized path
 
     int32_t revD1, revD2, revD3, revD4, revP1, revP2, revP3, revP4, revP5, revP6, revM3, revM4, revM5, revM6;
+    int32_t revWetL = 0, revWetR = 0;
     int16_t * shapeTable;
     int shapeTableSize = 0;
     float waveShaperStepInc = MAX_16 * 2.0 * TABLE_SIZE_INV;
@@ -1270,7 +1284,10 @@ class FX {
     /** Compute reverb - optimized version with inlined buffer operations */
     inline void processReverb(int16_t audioInLeft, int16_t audioInRight) {
       if (useOptimizedReverb) {
-        if (!revBuf1 || !revBuf2 || !revBuf3 || !revBuf4) return;
+        if (!revBuf1 || !revBuf2 || !revBuf3 || !revBuf4) {
+          revWetL = revWetR = 0;
+          return;
+        }
         // Fast path: inlined circular buffer operations with bitwise AND wrap
         uint16_t wp = revWritePos;
 
@@ -1305,6 +1322,13 @@ class FX {
         d2 = revFilterStore2;
         d3 = revFilterStore3;
         d4 = revFilterStore4;
+
+        // Reverb output is delay-only.  The old output taps were inL+d1 and
+        // inR+d2, which added the dry signal twice at intermediate mix values
+        // and could drive the public output clipper. Averaging two tanks per
+        // channel also keeps the wet endpoint at unity gain.
+        revWetL = (d1 + d3) / 2;
+        revWetR = (d2 + d4) / 2;
 
         // Mixing matrix (Hadamard-style diffusion)
         revP1 = inL + d1;
@@ -1359,6 +1383,9 @@ class FX {
         revFilterStore4 += ((d4 - revFilterStore4) * reverbDampCoeff + 512) >> 10;
         d1 = revFilterStore1; d2 = revFilterStore2;
         d3 = revFilterStore3; d4 = revFilterStore4;
+
+        revWetL = (d1 + d3) / 2;
+        revWetR = (d2 + d4) / 2;
 
         // Mixing matrix (Hadamard-style diffusion)
         revP1 = inL + d1; revP2 = inR + d2;
