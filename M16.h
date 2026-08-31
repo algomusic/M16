@@ -17,14 +17,28 @@
 
 #include "Arduino.h"
 
+#if defined(__IMXRT1062__)
+  // Teensy 4 core declares these in wiring.h (there is no public extmem.h in
+  // current Teensyduino releases), so keep the dependency at the ABI boundary.
+  extern "C" {
+    extern unsigned char external_psram_size;
+    void* extmem_malloc(size_t size);
+    void extmem_free(void* ptr);
+  }
+#endif
+
 // based on "Hardware_defines.h" in Mozzi
 #define IS_ESP8266() (defined(ESP8266))
 #define IS_ESP32() (defined(ESP32))
 #define IS_ESP32S2() (defined(CONFIG_IDF_TARGET_ESP32S2))
 #define IS_ESP32C3() (defined(CONFIG_IDF_TARGET_ESP32C3))
 #define IS_RP2040() (defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_RP2035) || defined(ARDUINO_ARCH_RP2350))
+// Teensy 4.x boards use the NXP i.MX RT1062 MCU.  This is supplied by the
+// Teensy core for Teensy 4.0/4.1 and Teensy MicroMod, so no board selection
+// changes are needed in sketches.
+#define IS_TEENSY4() (defined(__IMXRT1062__))
 // IS_CAPABLE() groups platforms with sufficient CPU/memory for complex DSP (filters, reverb, etc.)
-#define IS_CAPABLE() (IS_ESP32() || IS_RP2040())
+#define IS_CAPABLE() (IS_ESP32() || IS_RP2040() || IS_TEENSY4())
 
 /* Thread-safety helpers for explicitly enabled dual-core ESP32 rendering.
 * ESP32 defaults to one dedicated audio task. After setIsDualCore(true),
@@ -273,7 +287,14 @@ inline void m16AdvanceAudioFrame() { _m16AudioFrameCount++; }
 * Retaining audioLoop() in Pico-family sketches provides Pico compatibility.
 */
 void setIsDualCore(bool dualCore) { 
-  isDualCore = dualCore;
+  // Teensy 4 is single-core. Keep the API source-compatible, but do not let
+  // a sketch accidentally select a non-existent second audio core.
+  #if IS_TEENSY4()
+    (void)dualCore;
+    isDualCore = false;
+  #else
+    isDualCore = dualCore;
+  #endif
 }
 
 // TABLE_SIZE can be overridden by defining it in your sketch BEFORE including M16.h
@@ -338,6 +359,12 @@ inline bool isPSRAMAvailable() {
         Serial.println("  Status: No PSRAM available");
       }
       Serial.println("-----------------------------");
+    #elif IS_TEENSY4()
+      // Teensy 4.1 (and compatible RT1062 boards) exposes PSRAM through the
+      // core's extmem allocator. external_psram_size is zero when no chip is
+      // present; the allocator itself supplies the usable free pool.
+      g_psramTotal = (size_t)external_psram_size * 1024UL * 1024UL;
+      g_psramAvailable = (external_psram_size > 0);
     #endif
     g_psramChecked = true;
   }
@@ -350,6 +377,12 @@ inline bool isPSRAMAvailable() {
 inline size_t getFreePSRAM() {
   #if IS_ESP32()
     return ESP.getFreePsram();
+  #elif IS_TEENSY4()
+    // The Teensy core exposes extmem_free(void*) (a deallocator), not a free
+    // byte-count query. Report the detected pool size as the portable value;
+    // extmem_malloc() remains the authority for allocation success.
+    return (external_psram_size > 0) ?
+           (size_t)external_psram_size * 1024UL * 1024UL : 0;
   #else
     return 0;
   #endif
@@ -404,6 +437,17 @@ inline void* psramAllocSafe(size_t size, const char* description = nullptr) {
       Serial.print("KB, ");
       Serial.print(ESP.getFreePsram() / 1024);
       Serial.println("KB remaining)");
+    }
+    return ptr;
+  #elif IS_TEENSY4()
+    if (!isPSRAMAvailable()) return nullptr;
+    // extmem_malloc() is the Teensy-core PSRAM allocator. Do not apply the
+    // ESP32 heap headroom rule here: extmem_free() already reports the pool
+    // managed by the core and allocations are bounded by that pool.
+    void* ptr = extmem_malloc(size);
+    if (!ptr && description) {
+      Serial.print("Teensy PSRAM alloc failed: ");
+      Serial.println(description);
     }
     return ptr;
   #else
@@ -527,7 +571,7 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
   }
 
   static const i2s_port_t i2s_num = I2S_NUM_0;
-  int i2sPinsOut [] = {16, 17, 18, 21}; // bck, ws, dout, din
+  int i2sPinsOut [] = {38, 39, 40, 18}; // bck, ws, dout, din
 
   i2s_chan_handle_t tx_handle = NULL;
   i2s_chan_handle_t rx_handle = NULL;
@@ -1382,6 +1426,185 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
     Serial.println("M16 is running");
   }
   */
+#elif IS_TEENSY4()
+  // Teensy 4.x backend.  The PJRC Audio library owns the I2S DMA and invokes
+  // this source in fixed-size audio blocks; M16 remains source-compatible with
+  // sketches that call audioUpdate() and audioBlockWrite() per sample.
+  // Audio.h is the Teensy Audio library's public entry point. M16 uses only
+  // its AudioStream/AudioConnection/AudioMemory/AudioOutputI2S facilities;
+  // the library's optional player sources are compiled by Arduino whenever
+  // the Audio library is selected, so their SdFat dependency must be resolved
+  // at the IDE installation level.
+  #include <Audio.h>
+
+  void audioUpdate();
+
+  #ifndef M16_TEENSY_AUDIO_MEMORY
+    #define M16_TEENSY_AUDIO_MEMORY 16
+  #endif
+
+  class M16TeensySource : public AudioStream {
+  public:
+    M16TeensySource() : AudioStream(0, nullptr) {}
+    virtual void update(void);
+  };
+
+  static M16TeensySource _m16TeensySource;
+  static AudioOutputI2S _m16TeensyI2S;
+  static AudioConnection _m16TeensyPatchL(_m16TeensySource, 0, _m16TeensyI2S, 0);
+  static AudioConnection _m16TeensyPatchR(_m16TeensySource, 1, _m16TeensyI2S, 1);
+  static audio_block_t* _m16TeensyBlockL = nullptr;
+  static audio_block_t* _m16TeensyBlockR = nullptr;
+  static uint16_t _m16TeensyWritePos = 0;
+  static bool _m16TeensyStarted = false;
+
+  // Optional Teensy I2S input. AudioInputI2S is constructed only when
+  // audioInputStart() is called, so output-only sketches do not consume an
+  // input DMA channel or additional AudioStream processing time. The capture
+  // sink copies each incoming block into fixed storage and immediately
+  // releases the PJRC blocks, preventing an unread input queue from exhausting
+  // AudioMemory. M16TeensySource reads the preceding completed block, giving a
+  // deterministic one-block (~2.9 ms) input latency.
+  static int16_t _m16TeensyInputL[AUDIO_BLOCK_SAMPLES] = {0};
+  static int16_t _m16TeensyInputR[AUDIO_BLOCK_SAMPLES] = {0};
+  static volatile uint32_t _m16TeensyInputSequence = 0;
+  static bool _m16TeensyInputEnabled = false;
+
+  class M16TeensyInputCapture : public AudioStream {
+  public:
+    M16TeensyInputCapture() : AudioStream(2, inputQueueArray) {}
+
+    virtual void update(void) {
+      audio_block_t* left = receiveReadOnly(0);
+      audio_block_t* right = receiveReadOnly(1);
+
+      if (left != nullptr || right != nullptr) {
+        for (uint16_t i = 0; i < AUDIO_BLOCK_SAMPLES; ++i) {
+          _m16TeensyInputL[i] = (left != nullptr) ? left->data[i] : 0;
+          _m16TeensyInputR[i] = (right != nullptr) ? right->data[i] : 0;
+        }
+        _m16TeensyInputSequence++;
+      }
+
+      if (left != nullptr) release(left);
+      if (right != nullptr) release(right);
+    }
+
+  private:
+    audio_block_t* inputQueueArray[2];
+  };
+
+  /** Copy the newest synchronized Teensy input block into an interleaved
+   *  destination. Each caller retains its own sequence value, allowing more
+   *  than one Mic instance to read the same input without consuming it.
+   */
+  inline bool m16TeensyReadInputBlock(int16_t* destination,
+                                      size_t maxFrames,
+                                      uint32_t& previousSequence,
+                                      size_t& framesRead) {
+    framesRead = 0;
+    if (!_m16TeensyInputEnabled || destination == nullptr || maxFrames == 0) {
+      return false;
+    }
+
+    uint32_t sequence = _m16TeensyInputSequence;
+    if (sequence == previousSequence) return false;
+
+    size_t frames = min(maxFrames, (size_t)AUDIO_BLOCK_SAMPLES);
+    for (size_t i = 0; i < frames; ++i) {
+      destination[i * 2] = _m16TeensyInputL[i];
+      destination[i * 2 + 1] = _m16TeensyInputR[i];
+    }
+    previousSequence = sequence;
+    framesRead = frames;
+    return true;
+  }
+
+  inline int audioPartitionOffset() { return 0; }
+  inline int audioPartitionStride() { return 1; }
+  inline bool audioPartitionIsActive() { return false; }
+  inline bool audioIsFinalizerCore() { return true; }
+  inline void audioLoop() {}
+
+  inline bool audioBlockWrite(int32_t L, int32_t R) {
+    if (_m16TeensyBlockL == nullptr || _m16TeensyBlockR == nullptr ||
+        _m16TeensyWritePos >= AUDIO_BLOCK_SAMPLES) {
+      return false;
+    }
+    if (_audioPostProcessCallback != nullptr) {
+      _audioPostProcessCallback(L, R);
+    }
+    _m16TeensyBlockL->data[_m16TeensyWritePos] = (int16_t)clip16(L);
+    _m16TeensyBlockR->data[_m16TeensyWritePos] = (int16_t)clip16(R);
+    _m16TeensyWritePos++;
+    leftAudioOuputValue = L;
+    rightAudioOuputValue = R;
+    m16AdvanceAudioFrame();
+    return true;
+  }
+
+  [[deprecated("Use audioBlockWrite(left, right) on Teensy")]]
+  inline bool i2s_write_samples(int16_t L, int16_t R) {
+    return audioBlockWrite(L, R);
+  }
+
+  inline void M16TeensySource::update(void) {
+    audio_block_t* left = allocate();
+    audio_block_t* right = allocate();
+    if (left == nullptr || right == nullptr) {
+      if (left) release(left);
+      if (right) release(right);
+      return;
+    }
+    _m16TeensyBlockL = left;
+    _m16TeensyBlockR = right;
+    _m16TeensyWritePos = 0;
+    for (uint16_t i = 0; i < AUDIO_BLOCK_SAMPLES; ++i) {
+      audioUpdate();
+      // A malformed/conditional sketch can omit audioBlockWrite(); emit
+      // silence for that frame instead of leaking stale block contents.
+      if (_m16TeensyWritePos <= i) {
+        left->data[i] = 0;
+        right->data[i] = 0;
+        _m16TeensyWritePos = i + 1;
+        m16AdvanceAudioFrame();
+      }
+    }
+    _m16TeensyBlockL = nullptr;
+    _m16TeensyBlockR = nullptr;
+    transmit(left, 0);
+    transmit(right, 1);
+    release(left);
+    release(right);
+  }
+
+  inline void audioStart() {
+    if (_m16TeensyStarted) return;
+    AudioMemory(M16_TEENSY_AUDIO_MEMORY);
+    _m16TeensyStarted = true;
+    Serial.println("M16 is running (Teensy 4 Audio/I2S)");
+  }
+
+  inline void seti2sPins(int bck, int ws, int dout, int din) {
+    (void)bck; (void)ws; (void)dout; (void)din;
+    Serial.println("Teensy Audio I2S uses board/library pin routing; seti2sPins() ignored");
+  }
+
+  inline void audioInputStart() {
+    if (_m16TeensyInputEnabled) return;
+
+    // Function-local statics defer allocation and DMA setup until requested.
+    static AudioInputI2S input;
+    static M16TeensyInputCapture capture;
+    static AudioConnection inputPatchL(input, 0, capture, 0);
+    static AudioConnection inputPatchR(input, 1, capture, 1);
+    (void)inputPatchL;
+    (void)inputPatchR;
+
+    _m16TeensyInputEnabled = true;
+    Serial.println("M16 Teensy I2S input active (DIN=8, LRCLK=20, BCLK=21)");
+  }
+
 #elif IS_RP2040()
   // Raspberry Pi Pico / Pico 2 (RP2040/RP2350)
   // Dual-core audio support. RP2350 uses a dedicated interrupt-driven block
@@ -1873,6 +2096,10 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
       Serial.print("Sample rate set to ");
       Serial.print(newRate);
       Serial.println(" Hz (call before audioStart)");
+    #elif IS_TEENSY4()
+      if (newRate != 44100) {
+        Serial.println("Warning: Teensy AudioOutputI2S uses its 44.1 kHz audio clock; requested rate is not applied");
+      }
     #endif
   }
 
@@ -2173,10 +2400,17 @@ float chaosRand(float range) {
     #define _M16_CORE_ID() 0
   #endif
 
-  static uint32_t _prng_s0[_M16_PRNG_CORES] = {0x9E3779B9, 0x12345678};
-  static uint32_t _prng_s1[_M16_PRNG_CORES] = {0x243F6A88, 0xFEDCBA98};
-  static uint32_t _prng_s2[_M16_PRNG_CORES] = {0xB7E15162, 0xABCDEF01};
-  static uint32_t _prng_s3[_M16_PRNG_CORES] = {0xC0DEC0DE, 0x87654321};
+  #if _M16_PRNG_CORES == 1
+    static uint32_t _prng_s0[1] = {0x9E3779B9};
+    static uint32_t _prng_s1[1] = {0x243F6A88};
+    static uint32_t _prng_s2[1] = {0xB7E15162};
+    static uint32_t _prng_s3[1] = {0xC0DEC0DE};
+  #else
+    static uint32_t _prng_s0[_M16_PRNG_CORES] = {0x9E3779B9, 0x12345678};
+    static uint32_t _prng_s1[_M16_PRNG_CORES] = {0x243F6A88, 0xFEDCBA98};
+    static uint32_t _prng_s2[_M16_PRNG_CORES] = {0xB7E15162, 0xABCDEF01};
+    static uint32_t _prng_s3[_M16_PRNG_CORES] = {0xC0DEC0DE, 0x87654321};
+  #endif
 
   // Rotate left helper
   inline uint32_t rotl(const uint32_t x, int k) {
