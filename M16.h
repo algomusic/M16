@@ -1,7 +1,7 @@
 /*
  * M16.h
  *
- * M16 is a 16-bit audio synthesis library for ESP8266 and ESP32 microprocessors using I2S audio DACs/ADCs.
+ * M16 is a 16-bit audio synthesis library for ESP8266, ESP32, Pi Pico and Teensy 4 microprocessors using I2S audio DACs/ADCs.
  *
  * by Andrew R. Brown 2021
  *
