@@ -207,7 +207,7 @@ public:
   /** Fill the delay with silence */
   void empty() {
     if (!delayBuffer) return; 
-    for(int i=0; i<delayBufferSize_samples; i++) {
+    for(unsigned int i=0; i<delayBufferSize_samples; i++) {
       delayBuffer[i] = 0; // zero out the buffer
     }
     writePos = 0;
@@ -238,6 +238,26 @@ public:
     return result;
   }
 
+  /** Process one sample without acquiring the delay-state lock.
+   * Use only when exactly one audio core owns this delay instance. Control-rate
+   * parameter setters may still update naturally aligned target values.
+   */
+  inline int16_t nextUnlocked(int32_t inValue) {
+    int32_t outValue = 0;
+    if (delayTime_samples > 0) {
+      outValue = read();
+      if (outValue > MAX_16) outValue = MAX_16;
+      if (outValue < MIN_16) outValue = MIN_16;
+    }
+    if (delayFeedback) {
+      inValue += (outValue * feedbackLevel + 512) >> 10;
+    }
+    if (inValue > MAX_16) inValue = MAX_16;
+    if (inValue < MIN_16) inValue = MIN_16;
+    write(inValue);
+    return (int16_t)outValue;
+  }
+
   /** Read the buffer at the delayTime without incrementing read/write index */
   inline
 	int16_t read() {
@@ -253,7 +273,9 @@ public:
     int outValue = 0;
     int readPos = writePos - delayTime_samples + pos;
     if (readPos < 0) readPos += delayBufferSize_samples;
-    if (readPos >= delayBufferSize_samples) readPos -= delayBufferSize_samples;
+    if (readPos >= (int)delayBufferSize_samples) {
+      readPos -= (int)delayBufferSize_samples;
+    }
     outValue = min(MAX_16, max(MIN_16, (int)delayBuffer[readPos]));
     if(filtered > 0) {
       if (filtered == 1) {
