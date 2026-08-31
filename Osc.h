@@ -1903,7 +1903,8 @@ public:
   * Using Paul Kellet's refined method
   */
   static void pinkNoiseGen(int16_t * theTable) {
-    float b0, b1, b2, b3, b4, b5, b6;
+    float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f, b3 = 0.0f;
+    float b4 = 0.0f, b5 = 0.0f, b6 = 0.0f;
     for (int i=0; i<FULL_TABLE_SIZE; i++) {
       float white = (audioRand(5000) - 2500) * 0.001; // 20000, 10000
       b0 = 0.99886 * b0 + white * 0.0555179;
@@ -1924,7 +1925,8 @@ public:
   */
   void pinkNoiseGen() {
     allocateWavetable();
-    float b0, b1, b2, b3, b4, b5, b6;
+    float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f, b3 = 0.0f;
+    float b4 = 0.0f, b5 = 0.0f, b6 = 0.0f;
     for (int i=0; i<FULL_TABLE_SIZE; i++) {
       float white = (audioRand(5000) - 2500) * 0.001; // 20000, 10000
       b0 = 0.99886 * b0 + white * 0.0555179;
