@@ -18,38 +18,54 @@
 #include "Arduino.h"
 #include <atomic>
 #include <cstdint>
-#include <type_traits>
+#include <cstring>
 
-// One control producer, one audio consumer. Slots remain immutable until the
-// consumer releases them. Audio takes the newest complete state in bounded
-// time; monotonic trigger serials in the payload preserve pending note intent.
-// If full, the producer retains its latest target and retries on its next pass.
-template <typename T, uint32_t Capacity = 4>
+// One control producer, one audio consumer. Caller owns storage for capacity
+// payloads of payloadSize bytes for the entire queue lifetime. Payloads must be
+// trivially copyable; pointers do not transfer ownership of their pointees.
+// Audio takes the newest complete state without waiting or allocating.
 class AudioSnapshotQueue {
-  static_assert(Capacity >= 2 && (Capacity & (Capacity - 1)) == 0,
-                "Snapshot capacity must be a power of two");
-  static_assert(std::is_trivially_copyable<T>::value,
-                "Snapshot payload must not own resources");
 public:
-  bool publish(const T& value) {
+  AudioSnapshotQueue(void* storage, size_t payloadSize, uint32_t capacity = 4)
+      : storage_(static_cast<unsigned char*>(storage)),
+        payloadSize_(payloadSize), capacity_(capacity) {
+    if (!storage_ || !payloadSize_ || capacity_ < 2 ||
+        (capacity_ & (capacity_ - 1)) != 0 ||
+        capacity_ > UINT32_MAX / 2 || payloadSize_ > SIZE_MAX / capacity_) {
+      storage_ = nullptr;
+    }
+  }
+
+  bool isValid() const { return storage_ != nullptr; }
+
+  // On full/invalid/null input, return false; producer retains target and retries.
+  bool publish(const void* value) {
+    if (!isValid() || !value) return false;
     uint32_t write = written_.load(std::memory_order_relaxed);
-    if (write - released_.load(std::memory_order_acquire) >= Capacity) return false;
-    slots_[write & (Capacity - 1)] = value;
+    if (write - released_.load(std::memory_order_acquire) >= capacity_) return false;
+    std::memcpy(storage_ + (write & (capacity_ - 1)) * payloadSize_,
+                value, payloadSize_);
     written_.store(write + 1, std::memory_order_release);
     return true;
   }
 
-  bool consumeLatest(T& value) {
+  // Output must hold payloadSize bytes and must not overlap queue storage.
+  bool consumeLatest(void* value) {
+    if (!isValid() || !value) return false;
     uint32_t read = released_.load(std::memory_order_relaxed);
     uint32_t write = written_.load(std::memory_order_acquire);
     if (read == write) return false;
-    value = slots_[(write - 1) & (Capacity - 1)];
+    std::memcpy(value,
+                storage_ + ((write - 1) & (capacity_ - 1)) * payloadSize_,
+                payloadSize_);
     released_.store(write, std::memory_order_release);
     return true;
   }
 
 private:
-  T slots_[Capacity]{};
+  unsigned char* storage_;
+  size_t payloadSize_;
+  uint32_t capacity_;
   std::atomic<uint32_t> written_{0};
   std::atomic<uint32_t> released_{0};
 };
