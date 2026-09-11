@@ -61,9 +61,10 @@ class All {
 
       // Calculate output: y[n] = -g*x[n] + x[n-d] + g*y[n-d]
       // With rounding (+512) to reduce quantization noise
-      int32_t output = ((-feedbackLevel * input + 512) >> 10)
+      const int16_t feedback = feedbackLevel;
+      int32_t output = ((-feedback * input + 512) >> 10)
                      + delX
-                     + ((feedbackLevel * delY + 512) >> 10);
+                     + ((feedback * delY + 512) >> 10);
       output = clip16(output);
 
       // Store the output in the output buffer
@@ -194,7 +195,11 @@ class All {
     uint16_t bufferMask = 0;  // For fast modulo with power-of-2 buffer
     float delayTime = 1; // in ms
     uint16_t delayTime_samples = 0;
-    int16_t feedbackLevel = 700; // 0-1024
+    #if IS_ESP32() || IS_RP2040()
+    std::atomic<int16_t> feedbackLevel{700};
+    #else
+    int16_t feedbackLevel = 700;
+    #endif
     int16_t* inputBuffer = nullptr;
     int16_t* outputBuffer = nullptr;
     uint16_t bufferWriteIndex = 0;
