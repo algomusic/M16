@@ -16,6 +16,43 @@
 #define M16_H_
 
 #include "Arduino.h"
+#include <atomic>
+#include <cstdint>
+#include <type_traits>
+
+// One control producer, one audio consumer. Slots remain immutable until the
+// consumer releases them. Audio takes the newest complete state in bounded
+// time; monotonic trigger serials in the payload preserve pending note intent.
+// If full, the producer retains its latest target and retries on its next pass.
+template <typename T, uint32_t Capacity = 4>
+class AudioSnapshotQueue {
+  static_assert(Capacity >= 2 && (Capacity & (Capacity - 1)) == 0,
+                "Snapshot capacity must be a power of two");
+  static_assert(std::is_trivially_copyable<T>::value,
+                "Snapshot payload must not own resources");
+public:
+  bool publish(const T& value) {
+    uint32_t write = written_.load(std::memory_order_relaxed);
+    if (write - released_.load(std::memory_order_acquire) >= Capacity) return false;
+    slots_[write & (Capacity - 1)] = value;
+    written_.store(write + 1, std::memory_order_release);
+    return true;
+  }
+
+  bool consumeLatest(T& value) {
+    uint32_t read = released_.load(std::memory_order_relaxed);
+    uint32_t write = written_.load(std::memory_order_acquire);
+    if (read == write) return false;
+    value = slots_[(write - 1) & (Capacity - 1)];
+    released_.store(write, std::memory_order_release);
+    return true;
+  }
+
+private:
+  T slots_[Capacity]{};
+  std::atomic<uint32_t> written_{0};
+  std::atomic<uint32_t> released_{0};
+};
 
 #if defined(__IMXRT1062__)
   // Teensy 4 core declares these in wiring.h (there is no public extmem.h in
