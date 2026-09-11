@@ -36,16 +36,36 @@ private:
 
   uint32_t phase = 0;
   uint32_t scanRate = 32768;        // Fixed-point 16.16: 65536 = 1.0, supports up to 3.0
-  uint32_t _targetScanRate = 32768; // Slew target set by setScanRate()/setTime()
+  #if IS_ESP32() || IS_RP2040()
+  std::atomic<uint32_t> _targetScanRate{32768};
+  #else
+  uint32_t _targetScanRate = 32768;
+  #endif
   static const uint32_t SCAN_RATE_SLEW = 32; // Fixed-point units/sample (~42ms full-range slew)
   uint16_t bufferIndex = 0;
 
   int16_t delayLevel = 1024;
+  #if IS_ESP32() || IS_RP2040()
+  std::atomic<int16_t> _targetDelayLevel{1024};
+  #else
   int16_t _targetDelayLevel = 1024;
-  int16_t delayMix = 1024;       // 0=dry, 1024=wet; wet default preserves old API
+  #endif
+  #if IS_ESP32() || IS_RP2040()
+  std::atomic<int16_t> delayMix{1024};
+  #else
+  int16_t delayMix = 1024;
+  #endif
   int16_t feedbackLevel = 512;
+  #if IS_ESP32() || IS_RP2040()
+  std::atomic<int16_t> _targetFeedbackLevel{512};
+  #else
   int16_t _targetFeedbackLevel = 512;
+  #endif
+  #if IS_ESP32() || IS_RP2040()
+  std::atomic<bool> delayFeedback{false};
+  #else
   bool delayFeedback = false;
+  #endif
   static const int16_t LEVEL_SLEW = 4; // Units/sample for level/feedback slew (~6ms full range)
 
   int16_t prevOutValue = 0;
@@ -55,7 +75,11 @@ private:
   uint16_t smoothCoeff = 8192;  // Smoothing coefficient (higher = more smoothing)
   int32_t inputAccum = 0;
   uint8_t inputCount = 0;
-  byte filtered = 1; 
+  #if IS_ESP32() || IS_RP2040()
+  std::atomic<byte> filtered{1};
+  #else
+  byte filtered = 1;
+  #endif
 
   // Base delay at scanRate 1.0: 4096 / 44100 * 1000 = 92.88ms
   static constexpr float BASE_DELAY_MS = (float)BUFFER_SIZE / 44100.0f * 1000.0f;
@@ -146,8 +170,7 @@ public:
     msDur = max(minDelay, msDur);
     float rate = BASE_DELAY_MS / msDur;
     rate = max(0.01f, min(3.0f, rate));  // Allow up to 3x scan rate for short delays
-    _targetScanRate = (uint32_t)(rate * 65536.0f);
-    if (_targetScanRate < 655) _targetScanRate = 655;
+    _targetScanRate = max((uint32_t)655, (uint32_t)(rate * 65536.0f));
   }
 
   /** @return Current delay time in milliseconds */
@@ -163,8 +186,7 @@ public:
    */
   void setScanRate(float rate) {
     rate = max(0.01f, min(3.0f, rate));  // Allow up to 3x for short delays
-    _targetScanRate = (uint32_t)(rate * 65536.0f);
-    if (_targetScanRate < 655) _targetScanRate = 655;
+    _targetScanRate = max((uint32_t)655, (uint32_t)(rate * 65536.0f));
   }
 
   /** @return Current scan rate (0.01 to 1.0) */
@@ -249,199 +271,48 @@ public:
    * @return Delayed output sample
    */
   inline int16_t next(int32_t inValue) {
-    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
-    M16_ATOMIC_GUARD_BLOCKING(_bbdLock, {
-      // Slew all hot parameters to avoid buffer-seam clicks on adjustment
-      if (scanRate != _targetScanRate) {
-        if (_targetScanRate > scanRate) {
-          uint32_t d = _targetScanRate - scanRate;
-          scanRate += (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
-        } else {
-          uint32_t d = scanRate - _targetScanRate;
-          scanRate -= (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
-        }
-        uint32_t rfs = scanRate < 65536U ? scanRate : 65536U;
-        smoothCoeff = (uint16_t)(2048U + ((rfs * 6144U) >> 16));
-      }
-      if (delayLevel != _targetDelayLevel) {
-        int16_t d = _targetDelayLevel - delayLevel;
-        delayLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
-      }
-      if (feedbackLevel != _targetFeedbackLevel) {
-        int16_t d = _targetFeedbackLevel - feedbackLevel;
-        feedbackLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
-      }
-      // Accumulate inputs for anti-aliasing at low scan rates
-      inputAccum += inValue;
-      inputCount++;
-      uint32_t prevPhase = phase;
-      phase += scanRate;
-      // Calculate how many buffer positions we advanced (supports rate > 1.0)
-      uint16_t prevPos = prevPhase >> 16;
-      uint16_t currPos = phase >> 16;
-      // Handle wrap-around
-      if (phase >= (BUFFER_SIZE << 16)) {
-        phase -= (BUFFER_SIZE << 16);
-        currPos = (currPos >= BUFFER_SIZE) ? currPos - BUFFER_SIZE : currPos;
-      }
-      // Calculate steps (handling wrap-around)
-      int16_t steps = currPos - prevPos;
-      if (steps < 0) steps += BUFFER_SIZE;  // Wrapped around
-      if (steps > 0) {
-        // Read from buffer
-        int32_t outValue = delayBuffer[bufferIndex];
-        // Output low-pass filtering
-        if (filtered > 0) {
-          if (filtered == 1) {
-            outValue = (outValue * 3 + prevOutValue) >> 2;
-          } else if (filtered == 2) {
-            outValue = (outValue + prevOutValue) >> 1;
-          } else if (filtered == 3) {
-            outValue = (outValue + prevOutValue * 3) >> 2;
-          } else {
-            outValue = (outValue + prevOutValue * 7) >> 3;
-          }
-          prevOutValue = outValue;
-        }
-        holdValue = (outValue * delayLevel) >> 10;
-        // Average accumulated inputs
-        int32_t writeValue;
-        if (inputCount > 0) {
-          writeValue = inputAccum / inputCount;
-          inputAccum = 0;
-          inputCount = 0;
-        } else {
-          writeValue = inValue;
-        }
-        // Apply feedback with slight gain reduction
-        if (delayFeedback) {
-          writeValue = writeValue + ((holdValue * feedbackLevel) >> 10);
-          writeValue = (writeValue * 251) >> 8;
-        }
-        // Soft saturation and write to buffer
-        writeValue = softSaturate(writeValue);
-        delayBuffer[bufferIndex] = writeValue;
-        // Advance buffer by number of steps (enables shorter delays at rate > 1.0)
-        bufferIndex = (bufferIndex + steps) & BUFFER_MASK;
-      }
-      // Smooth output every sample to reduce staircase buzz
-      // One-pole lowpass with rate-proportional smoothing (more at longer delays)
-      smoothedOut += ((holdValue - smoothedOut) * smoothCoeff) >> 15;
-      lastResult = (int16_t)smoothedOut;
-    });
+    #if IS_ESP32() || IS_RP2040()
+    int16_t output = 0;
+    M16_ATOMIC_GUARD_BLOCKING(_bbdLock, { output = nextUnlocked(inValue); });
+    return output;
     #else
-    // Slew all hot parameters to avoid buffer-seam clicks on adjustment
-    if (scanRate != _targetScanRate) {
-      if (_targetScanRate > scanRate) {
-        uint32_t d = _targetScanRate - scanRate;
-        scanRate += (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
-      } else {
-        uint32_t d = scanRate - _targetScanRate;
-        scanRate -= (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
-      }
-      uint32_t rfs = scanRate < 65536U ? scanRate : 65536U;
-      smoothCoeff = (uint16_t)(2048U + ((rfs * 6144U) >> 16));
-    }
-    if (delayLevel != _targetDelayLevel) {
-      int16_t d = _targetDelayLevel - delayLevel;
-      delayLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
-    }
-    if (feedbackLevel != _targetFeedbackLevel) {
-      int16_t d = _targetFeedbackLevel - feedbackLevel;
-      feedbackLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
-    }
-    // Accumulate inputs for anti-aliasing at low scan rates
-    inputAccum += inValue;
-    inputCount++;
-    uint32_t prevPhase = phase;
-    phase += scanRate;
-    // Calculate how many buffer positions we advanced (supports rate > 1.0)
-    uint16_t prevPos = prevPhase >> 16;
-    uint16_t currPos = phase >> 16;
-    // Handle wrap-around
-    if (phase >= (BUFFER_SIZE << 16)) {
-      phase -= (BUFFER_SIZE << 16);
-      currPos = (currPos >= BUFFER_SIZE) ? currPos - BUFFER_SIZE : currPos;
-    }
-    // Calculate steps (handling wrap-around)
-    int16_t steps = currPos - prevPos;
-    if (steps < 0) steps += BUFFER_SIZE;  // Wrapped around
-    if (steps > 0) {
-      // Read from buffer
-      int32_t outValue = delayBuffer[bufferIndex];
-      // Output low-pass filtering
-      if (filtered > 0) {
-        if (filtered == 1) {
-          outValue = (outValue * 3 + prevOutValue) >> 2;
-        } else if (filtered == 2) {
-          outValue = (outValue + prevOutValue) >> 1;
-        } else if (filtered == 3) {
-          outValue = (outValue + prevOutValue * 3) >> 2;
-        } else {
-          outValue = (outValue + prevOutValue * 7) >> 3;
-        }
-        prevOutValue = outValue;
-      }
-      holdValue = (outValue * delayLevel) >> 10;
-      // Average accumulated inputs
-      int32_t writeValue;
-      if (inputCount > 0) {
-        writeValue = inputAccum / inputCount;
-        inputAccum = 0;
-        inputCount = 0;
-      } else {
-        writeValue = inValue;
-      }
-      // Apply feedback with slight gain reduction
-      if (delayFeedback) {
-        writeValue = writeValue + ((holdValue * feedbackLevel) >> 10);
-        writeValue = (writeValue * 251) >> 8;
-      }
-      // Soft saturation and write to buffer
-      writeValue = softSaturate(writeValue);
-      delayBuffer[bufferIndex] = writeValue;
-      // Advance buffer by number of steps (enables shorter delays at rate > 1.0)
-      bufferIndex = (bufferIndex + steps) & BUFFER_MASK;
-    }
-    // Smooth output every sample to reduce staircase buzz
-    // One-pole lowpass with rate-proportional smoothing (more at longer delays)
-    smoothedOut += ((holdValue - smoothedOut) * smoothCoeff) >> 15;
-    lastResult = (int16_t)smoothedOut;
+    return nextUnlocked(inValue);
     #endif
-    // Preserve the original wet-only output exactly at the default setting.
-    if (delayMix >= 1024) return lastResult;
-    if (delayMix <= 0) return clip16(inValue);
-    return clip16(((inValue * (1024 - delayMix)) >> 10)
-                + ((lastResult * delayMix) >> 10));
   }
 
   /** Process one sample without acquiring the BBD state lock.
    * Use only when exactly one audio core owns and advances this instance, such
    * as a master delay inside the post-combine callback. Parameter targets may
-   * still be changed at control rate; naturally aligned target reads/writes are
-   * atomic on supported 32-bit platforms.
+   * still be changed at control rate; targets use atomic publication on dual-core targets and each render call
+   * snapshots them once before processing.
    * @param inValue Input sample
    * @return Delayed output sample
    */
   inline int16_t nextUnlocked(int32_t inValue) {
+    const uint32_t render__targetScanRate = _targetScanRate;
+    const int16_t render__targetDelayLevel = _targetDelayLevel;
+    const int16_t render_delayMix = delayMix;
+    const int16_t render__targetFeedbackLevel = _targetFeedbackLevel;
+    const bool render_delayFeedback = delayFeedback;
+    const byte render_filtered = filtered;
     // Slew all hot parameters to avoid buffer-seam clicks on adjustment.
-    if (scanRate != _targetScanRate) {
-      if (_targetScanRate > scanRate) {
-        uint32_t d = _targetScanRate - scanRate;
+    if (scanRate != render__targetScanRate) {
+      if (render__targetScanRate > scanRate) {
+        uint32_t d = render__targetScanRate - scanRate;
         scanRate += (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
       } else {
-        uint32_t d = scanRate - _targetScanRate;
+        uint32_t d = scanRate - render__targetScanRate;
         scanRate -= (d < SCAN_RATE_SLEW) ? d : SCAN_RATE_SLEW;
       }
       uint32_t rfs = scanRate < 65536U ? scanRate : 65536U;
       smoothCoeff = (uint16_t)(2048U + ((rfs * 6144U) >> 16));
     }
-    if (delayLevel != _targetDelayLevel) {
-      int16_t d = _targetDelayLevel - delayLevel;
+    if (delayLevel != render__targetDelayLevel) {
+      int16_t d = render__targetDelayLevel - delayLevel;
       delayLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
     }
-    if (feedbackLevel != _targetFeedbackLevel) {
-      int16_t d = _targetFeedbackLevel - feedbackLevel;
+    if (feedbackLevel != render__targetFeedbackLevel) {
+      int16_t d = render__targetFeedbackLevel - feedbackLevel;
       feedbackLevel += (d > LEVEL_SLEW) ? LEVEL_SLEW : (d < -LEVEL_SLEW) ? -LEVEL_SLEW : d;
     }
 
@@ -461,12 +332,12 @@ public:
 
     if (steps > 0) {
       int32_t outValue = delayBuffer[bufferIndex];
-      if (filtered > 0) {
-        if (filtered == 1) {
+      if (render_filtered > 0) {
+        if (render_filtered == 1) {
           outValue = (outValue * 3 + prevOutValue) >> 2;
-        } else if (filtered == 2) {
+        } else if (render_filtered == 2) {
           outValue = (outValue + prevOutValue) >> 1;
-        } else if (filtered == 3) {
+        } else if (render_filtered == 3) {
           outValue = (outValue + prevOutValue * 3) >> 2;
         } else {
           outValue = (outValue + prevOutValue * 7) >> 3;
@@ -483,7 +354,7 @@ public:
       } else {
         writeValue = inValue;
       }
-      if (delayFeedback) {
+      if (render_delayFeedback) {
         writeValue += (holdValue * feedbackLevel) >> 10;
         writeValue = (writeValue * 251) >> 8;
       }
@@ -493,10 +364,10 @@ public:
 
     smoothedOut += ((holdValue - smoothedOut) * smoothCoeff) >> 15;
     lastResult = (int16_t)smoothedOut;
-    if (delayMix >= 1024) return lastResult;
-    if (delayMix <= 0) return clip16(inValue);
-    return clip16(((inValue * (1024 - delayMix)) >> 10)
-                + ((lastResult * delayMix) >> 10));
+    if (render_delayMix >= 1024) return lastResult;
+    if (render_delayMix <= 0) return clip16(inValue);
+    return clip16(((inValue * (1024 - render_delayMix)) >> 10)
+                + ((lastResult * render_delayMix) >> 10));
   }
 
   /** @return Current hold value */
