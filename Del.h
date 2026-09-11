@@ -25,7 +25,11 @@ private:
   unsigned int writePos = 0;
   float delayTime_ms = 0.0f;
   unsigned int delayTime_samples = 0;
-  int16_t delayLevel = 1024; // 0 to 1024
+  #if IS_ESP32() || IS_RP2040()
+  std::atomic<int16_t> delayLevel{1024};
+  #else
+  int16_t delayLevel = 1024;
+  #endif
   float maxDelayTime_ms = 0;
   unsigned int delayBufferSize_samples = 0;
   bool delayFeedback = false;
