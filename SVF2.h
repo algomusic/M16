@@ -30,6 +30,14 @@
 class SVF2 {
 
 public:
+  uint32_t coefficientReadFallbackCount() const {
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    return _coefficientReadFallbacks.load(std::memory_order_relaxed);
+    #else
+    return 0;
+    #endif
+  }
+
   /** Constructor */
   SVF2() {
     reset();
@@ -74,14 +82,23 @@ public:
   /** Set cutoff frequency in Hz
    * @param freq_val 0 to ~10kHz
    */
+  static inline int32_t coefficientForFrequency(int hz) {
+    hz = max(0, min((int)(SAMPLE_RATE * 0.195f), hz));
+    float f = min(0.96f, 2.0f * sin(3.1415927f * hz * SAMPLE_RATE_INV));
+    return (int32_t)(f * 32768.0f);
+  }
+
+  // Apply precomputed Hz coefficients without changing to the normalized
+  // cutoff API's different resonance mapping. Calculation may run in loop().
+  inline void setFrequencyCoefficient(int hz, int32_t coefficient) {
+    freq = max(0, min((int)(SAMPLE_RATE * 0.195f), hz));
+    int32_t f = max((int32_t)0, min((int32_t)31457, coefficient));
+    int32_t q = loadQ();
+    publishCoefficients(f, q, feedbackForFrequency(q, f), loadGainComp());
+  }
+
   inline void setFreq(int freq_val) {
-    freq = max(0, min((int)maxFreq, freq_val));
-    float fFloat = min(0.96f, 2.0f * sin(3.1415927f * freq * SAMPLE_RATE_INV));
-    int32_t newFInt = (int32_t)(fFloat * 32768.0f);
-    int32_t currentQ = loadQ();
-    publishCoefficients(newFInt, currentQ,
-                        feedbackForFrequency(currentQ, newFInt),
-                        loadGainComp());
+    setFrequencyCoefficient(freq_val, coefficientForFrequency(freq_val));
   }
 
   /** @return Current cutoff frequency in Hz */
@@ -356,6 +373,8 @@ private:
   #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
   std::atomic<bool> _svfLock{false};
   std::atomic<uint32_t> _coefficientSequence{0};
+  std::atomic<uint32_t> _coefficientReadFallbacks{0};
+  int32_t _renderF = 0, _renderFeedback = 0, _renderGain = 32768;
   #endif
   int16_t prevOutput_ = 0;  // Last output for lock-miss fallback
 
@@ -441,16 +460,28 @@ private:
     // This ensures we use a consistent set of coefficients for the entire sample
     int32_t cached_fInt, cached_fbInt, cached_gainCompInt;
     #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
-    uint32_t sequenceBefore, sequenceAfter;
-    for (;;) {
-      sequenceBefore = _coefficientSequence.load(std::memory_order_acquire);
-      if (sequenceBefore & 1U) continue;
-      cached_fInt = __atomic_load_n(&fInt, __ATOMIC_RELAXED);
-      cached_fbInt = __atomic_load_n(&fbInt, __ATOMIC_RELAXED);
-      cached_gainCompInt = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
-      sequenceAfter = _coefficientSequence.load(std::memory_order_acquire);
-      if (sequenceBefore == sequenceAfter) break;
+    // calcFilter is serialized by the normal API's state lock, or exclusively
+    // owned by the caller of an Unlocked method. Keep its last coherent tuple.
+    bool accepted = false;
+    for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+      uint32_t before = _coefficientSequence.load(std::memory_order_acquire);
+      if (before & 1U) continue;
+      int32_t f = __atomic_load_n(&fInt, __ATOMIC_RELAXED);
+      int32_t feedback = __atomic_load_n(&fbInt, __ATOMIC_RELAXED);
+      int32_t gain = __atomic_load_n(&gainCompInt, __ATOMIC_RELAXED);
+      std::atomic_thread_fence(std::memory_order_acquire);
+      if (before == _coefficientSequence.load(std::memory_order_acquire)) {
+        _renderF = f;
+        _renderFeedback = feedback;
+        _renderGain = gain;
+        accepted = true;
+        break;
+      }
     }
+    if (!accepted) _coefficientReadFallbacks.fetch_add(1, std::memory_order_relaxed);
+    cached_fInt = _renderF;
+    cached_fbInt = _renderFeedback;
+    cached_gainCompInt = _renderGain;
     #else
     cached_fInt = fInt;
     cached_fbInt = fbInt;
