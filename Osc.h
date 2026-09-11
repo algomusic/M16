@@ -77,6 +77,15 @@ class Osc {
 
 public:
 
+  /** Diagnostic: bounded reads that reused this core's previous snapshot. */
+  uint32_t frequencyReadFallbackCount() const {
+    #if IS_ESP32() || IS_RP2040()
+    return _frequencyReadFallbacks.load(std::memory_order_relaxed);
+    #else
+    return 0;
+    #endif
+  }
+
   /** Constructor.
 	* Has no table specified - make sure to use setTable() after initialising
 	*/
@@ -121,18 +130,10 @@ public:
 
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
-      // Seqlock read: retry if setFreq() is mid-update (odd seq) or the seq changed
-      // between our two loads — guarantees a consistent bandPtr+increment pair.
+      // Bounded coherent read; reuse the previous snapshot if a writer is busy.
       uint32_t cachedIncrement;
       int16_t* cachedBandPtr;
-      uint32_t _seqBefore, _seqAfter;
-      do {
-        _seqBefore = _freqSeq.load(std::memory_order_acquire);
-        if (_seqBefore & 1) continue;  // write in progress — spin until stable
-        cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
-        cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
-        _seqAfter = _freqSeq.load(std::memory_order_acquire);
-      } while (_seqAfter != _seqBefore);
+      readFrequencySnapshot(cachedIncrement, cachedBandPtr);
 
       // Safety check: if bandPtr is null or increment is zero, return silence
       if (cachedBandPtr == nullptr || cachedIncrement == 0) {
@@ -215,16 +216,7 @@ public:
     #if IS_ESP32() || IS_RP2040()
     uint32_t cachedIncrement;
     int16_t* cachedBandPtr;
-    uint32_t seqBefore, seqAfter;
-    do {
-      seqBefore = _freqSeq.load(std::memory_order_acquire);
-      if (seqBefore & 1u) continue;
-      cachedIncrement = __atomic_load_n(&phase_increment_fractional,
-                                         __ATOMIC_RELAXED);
-      cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr,
-                                                __ATOMIC_RELAXED);
-      seqAfter = _freqSeq.load(std::memory_order_acquire);
-    } while (seqAfter != seqBefore);
+    readFrequencySnapshot(cachedIncrement, cachedBandPtr);
     #else
     uint32_t cachedIncrement = phase_increment_fractional;
     int16_t* cachedBandPtr = bandPtr;
@@ -294,17 +286,10 @@ public:
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
       uint32_t myPhase;
-      // Seqlock read: same protocol as next() — guarantees consistent bandPtr+increment pair.
+      // Same bounded snapshot protocol as next().
       uint32_t cachedIncrement;
       int16_t* cachedBandPtr;
-      uint32_t _seqBefore, _seqAfter;
-      do {
-        _seqBefore = _freqSeq.load(std::memory_order_acquire);
-        if (_seqBefore & 1) continue;
-        cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
-        cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
-        _seqAfter = _freqSeq.load(std::memory_order_acquire);
-      } while (_seqAfter != _seqBefore);
+      readFrequencySnapshot(cachedIncrement, cachedBandPtr);
       float cachedFreq = frequency;  // Used for band selection decision
 
       // Safety check: if bandPtr is null or increment is zero, return silence
@@ -719,8 +704,7 @@ public:
     if (modIndex > dMax) modIndex = dMax;
 
     // Calculate phase offset in 16.16 format
-    int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
-    modOffset <<= 8; // Scale to 16.16 format
+    uint32_t modOffset = floatPhaseOffset(modulator, modIndex);
 
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
@@ -812,8 +796,7 @@ public:
     if (modIndexScaled > dMaxScaled) modIndexScaled = dMaxScaled;
 
     // modOffset = modulator * modIndex * 8.0f, pre-scaled by 256
-    int32_t modOffset = ((int32_t)modulator * modIndexScaled) >> 8;
-    modOffset <<= 8; // Scale to 16.16 format
+    uint32_t modOffset = integerPhaseOffset(modulator, modIndexScaled);
 
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
@@ -865,22 +848,12 @@ public:
     int32_t dMaxScaled = _cachedDepthMaxScaled;
     if (modIndexScaled > dMaxScaled) modIndexScaled = dMaxScaled;
 
-    int32_t modOffset = ((int32_t)modulator * modIndexScaled) >> 8;
-    modOffset <<= 8;
+    uint32_t modOffset = integerPhaseOffset(modulator, modIndexScaled);
 
     #if IS_ESP32() || IS_RP2040()
     uint32_t cachedIncrement;
     int16_t* cachedBandPtr;
-    uint32_t seqBefore, seqAfter;
-    do {
-      seqBefore = _freqSeq.load(std::memory_order_acquire);
-      if (seqBefore & 1u) continue;
-      cachedIncrement = __atomic_load_n(&phase_increment_fractional,
-                                         __ATOMIC_RELAXED);
-      cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr,
-                                                __ATOMIC_RELAXED);
-      seqAfter = _freqSeq.load(std::memory_order_acquire);
-    } while (seqAfter != seqBefore);
+    readFrequencySnapshot(cachedIncrement, cachedBandPtr);
     #else
     uint32_t cachedIncrement = phase_increment_fractional;
     int16_t* cachedBandPtr = bandPtr;
@@ -926,8 +899,7 @@ public:
     float dMax = _cachedDepthMax;
     if (modIndex > dMax) modIndex = dMax;
 
-    int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
-    modOffset <<= 8;
+    uint32_t modOffset = floatPhaseOffset(modulator, modIndex);
 
     #if IS_ESP32() || IS_RP2040()
     {
@@ -1011,8 +983,7 @@ public:
     float dMax = _cachedDepthMax;
     if (modIndex > dMax) modIndex = dMax;
 
-    int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
-    modOffset <<= 8;
+    uint32_t modOffset = floatPhaseOffset(modulator, modIndex);
 
     // Advance phase and compute modulated phase position
     #if IS_ESP32() || IS_RP2040()
@@ -1202,7 +1173,7 @@ public:
     if (!_cmRatioSet) {
       float modFreq = modOsc.getFreq();
       if (modFreq < 1.0f) modFreq = 1.0f;
-      int32_t dMaxScaled = (int32_t)((9000.0f / modFreq) * 2048.0f);
+      int32_t dMaxScaled = scaledDepthLimit(9000.0f / modFreq);
       if (modIndexScaled > dMaxScaled) modIndexScaled = dMaxScaled;
     }
     #if IS_ESP32() || IS_RP2040()
@@ -1224,7 +1195,7 @@ public:
     if (!_cmRatioSet) {
       float modFreq = modOsc.getFreq();
       if (modFreq < 1.0f) modFreq = 1.0f;
-      int32_t dMaxScaled = (int32_t)((9000.0f / modFreq) * 2048.0f);
+      int32_t dMaxScaled = scaledDepthLimit(9000.0f / modFreq);
       if (modIndexScaled > dMaxScaled) modIndexScaled = dMaxScaled;
     }
     return phModIntUnlocked(modOsc.nextUnlocked(), modIndexScaled);
@@ -1241,8 +1212,7 @@ public:
     if (modIndex > dMax) modIndex = dMax;
 
     // Calculate phase offset in 16.16 format
-    int32_t modOffset = (int32_t)((float)modulator * modIndex * 8.0f);
-    modOffset <<= 8; // Scale to 16.16 format
+    uint32_t modOffset = floatPhaseOffset(modulator, modIndex);
 
     #if IS_ESP32() || IS_RP2040()
     if (!pulseWidthOn && !isNoise && !isCrackle) {
@@ -1450,8 +1420,8 @@ public:
       frequency = freq;
 
       // Seqlock write: mark odd (write in progress), store increment, mark even (stable).
-      // next()/phMod() read the seqlock before and after loading the pair and retry if
-      // the count changed — guaranteeing they always see a consistent increment.
+      // Snapshot readers attempt twice and retain their previous valid tuple if
+      // this publication is interrupted; they never wait for the control task.
       // Band changes are deferred to the oscillator's next zero crossing (applied in
       // next()/phMod()) to prevent waveform discontinuities in FM cascade chains.
       #if IS_ESP32() || IS_RP2040()
@@ -1466,10 +1436,9 @@ public:
             }
           }
         }
-        uint32_t _seq = _freqSeq.load(std::memory_order_relaxed);
-        _freqSeq.store(_seq + 1, std::memory_order_release);  // odd = write in progress
+        _freqSeq.fetch_add(1, std::memory_order_acq_rel);  // odd: payload cannot move before this
         __atomic_store_n(&phase_increment_fractional, newIncrement, __ATOMIC_RELAXED);
-        _freqSeq.store(_seq + 2, std::memory_order_release);  // even = stable
+        _freqSeq.fetch_add(1, std::memory_order_release);  // even = stable
       #else
         bandPtr = newBandPtr;
         phase_increment_fractional = newIncrement;
@@ -1498,7 +1467,7 @@ public:
       if (!_antiAliasDisabled) {
         float dMax = 9000.0f / (freq * _cmRatio);
         _cachedDepthMax = dMax;
-        _cachedDepthMaxScaled = (int32_t)(dMax * 2048.0f);
+        _cachedDepthMaxScaled = scaledDepthLimit(dMax);
       }
     }
 	}
@@ -1527,7 +1496,7 @@ public:
       if (!_antiAliasDisabled) {
         float dMax = 9000.0f / (frequency * ratio);
         _cachedDepthMax = dMax;
-        _cachedDepthMaxScaled = (int32_t)(dMax * 2048.0f);
+        _cachedDepthMaxScaled = scaledDepthLimit(dMax);
       }
     }
   }
@@ -1989,14 +1958,66 @@ private:
     }
   }
 
+  static inline int32_t scaledDepthLimit(float depth) {
+    if (!(depth > 0.0f)) return 0;
+    // 2^31 is exactly representable as float; INT32_MAX is not.
+    float scaled = depth * 2048.0f;
+    if (scaled >= 2147483648.0f) return INT32_MAX;
+    return (int32_t)scaled;
+  }
+
+  static inline uint32_t integerPhaseOffset(int16_t modulator, int32_t depth) {
+    int64_t product = (int64_t)modulator * depth;
+    return (uint32_t)(uint64_t)product & ~UINT32_C(255);
+  }
+
+  static inline uint32_t floatPhaseOffset(int16_t modulator, float depth) {
+    // Bound invalid/extreme API inputs before conversion. Normal FM depths,
+    // including disableAntiAlias()'s 9999 limit, are unchanged.
+    if (!(depth >= -1048575.0f && depth <= 1048575.0f)) return 0;
+    int64_t steps = (int64_t)((float)modulator * depth * 8.0f);
+    return (uint32_t)((uint64_t)steps << 8);
+  }
+
   // Spinlock for paired modulator+carrier advance (dual-core only).
   // Used by phModInt(Osc& modOsc, ...) to prevent cross-core phase mismatches.
   #if IS_ESP32() || IS_RP2040()
   std::atomic<bool> _pairLock{false};
   // Seqlock for bandPtr+increment pair — ensures next() always reads a consistent
   // pair even when setFreq() is updating both from the other core.
-  // Even value = stable; odd value = write in progress (reader must retry).
+  // Even = stable; odd = write in progress (bounded readers use their cache).
   std::atomic<uint32_t> _freqSeq{0};
+  // One render context per core, matching M16's audio task ownership. A reader
+  // must never spin on a preempted lower-priority control writer on this core.
+  struct FrequencySnapshot {
+    uint32_t increment = 0;
+    int16_t* table = nullptr;
+  };
+  FrequencySnapshot _renderFrequency[2];
+  std::atomic<uint32_t> _frequencyReadFallbacks{0};
+
+  inline void readFrequencySnapshot(uint32_t& increment, int16_t*& table) {
+    FrequencySnapshot& previous = _renderFrequency[_M16_CORE_ID()];
+    for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+      uint32_t before = _freqSeq.load(std::memory_order_acquire);
+      if (before & 1U) continue;
+      uint32_t nextIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+      int16_t* nextTable = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+      std::atomic_thread_fence(std::memory_order_acquire);
+      uint32_t after = _freqSeq.load(std::memory_order_acquire);
+      if (before == after) {
+        previous.increment = nextIncrement;
+        previous.table = nextTable;
+        increment = nextIncrement;
+        table = nextTable;
+        return;
+      }
+    }
+    _frequencyReadFallbacks.fetch_add(1, std::memory_order_relaxed);
+    increment = previous.increment;
+    table = previous.table; // silence until the first successful snapshot
+  }
+
   #endif
 
   // 16.16 fixed-point constants (compile-time for efficiency)
