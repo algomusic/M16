@@ -181,11 +181,10 @@ class FX {
     inline
     int16_t softClipInt(int32_t sample_in, int32_t amount) {
       // Scale input by amount (amount is 10-bit fixed point, 1024 = 1.0)
-      int32_t x = (sample_in * amount) >> 10;
-
-      // Clamp input to prevent overflow
-      if (x > 98304) x = 98304;         // 3x MAX_16
-      else if (x < -98304) x = -98304;
+      int64_t scaled = ((int64_t)sample_in * amount) >> 10;
+      if (scaled > 98304) scaled = 98304;
+      else if (scaled < -98304) scaled = -98304;
+      int32_t x = (int32_t)scaled;
 
       // Rational soft clip: out = x * T / (T + |x|), T = 32768
       int32_t absX = (x >= 0) ? x : -x;
@@ -501,7 +500,7 @@ class FX {
       M16_ATOMIC_GUARD(_fxLock, {
         int16_t dry = clip16(audioIn);
         processReverb(dry, dry);
-        reverbCached = mixReverbChannel(dry, (revWetL + revWetR) / 2);
+        reverbCached = mixReverbChannel(dry, (revWetL + revWetR) / 2, reverbMix);
       });
       return reverbCached;
     }
@@ -516,6 +515,7 @@ class FX {
     */
     inline
     void reverbStereo(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
+      const int renderMix = reverbMix;
       // Thread-safe lazy initialization with mutex (dual-core platforms)
       if (!reverbInitiated) {
         #if IS_ESP32()
@@ -550,8 +550,8 @@ class FX {
       audioOutRight = reverbCacheR;
       M16_ATOMIC_GUARD(_fxLock, {
         processReverb(clip16(audioInLeft), clip16(audioInRight));
-        audioOutLeft = mixReverbChannel(audioInLeft, revWetL);
-        audioOutRight = mixReverbChannel(audioInRight, revWetR);
+        audioOutLeft = mixReverbChannel(audioInLeft, revWetL, renderMix);
+        audioOutRight = mixReverbChannel(audioInRight, revWetR, renderMix);
         reverbCacheL = audioOutLeft;
         reverbCacheR = audioOutRight;
       });
@@ -567,6 +567,7 @@ class FX {
     */
     inline
     void reverbStereoInterp(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
+      const int renderMix = reverbMix;
       // Thread-safe lazy initialization with mutex (dual-core platforms)
       if (!reverbInitiated) {
         #if IS_ESP32()
@@ -608,8 +609,8 @@ class FX {
         if (reverbInterpToggle) {
           // Process reverb this sample
           processReverb(clip16(audioInLeft), clip16(audioInRight));
-          outL = mixReverbChannel(audioInLeft, revWetL);
-          outR = mixReverbChannel(audioInRight, revWetR);
+          outL = mixReverbChannel(audioInLeft, revWetL, renderMix);
+          outR = mixReverbChannel(audioInRight, revWetR, renderMix);
           reverbInterpPrevL = outL;
           reverbInterpPrevR = outR;
         } else {
@@ -632,14 +633,15 @@ class FX {
      * real-time callback. */
     inline void reverbStereoInterpUnlocked(int32_t audioInLeft, int32_t audioInRight,
                                            int32_t &audioOutLeft, int32_t &audioOutRight) {
+      const int renderMix = reverbMix;
       if (!reverbInitiated) initReverb(reverbSize);
       int32_t outL;
       int32_t outR;
       reverbInterpToggle = !reverbInterpToggle;
       if (reverbInterpToggle) {
         processReverb(clip16(audioInLeft), clip16(audioInRight));
-        outL = mixReverbChannel(audioInLeft, revWetL);
-        outR = mixReverbChannel(audioInRight, revWetR);
+        outL = mixReverbChannel(audioInLeft, revWetL, renderMix);
+        outR = mixReverbChannel(audioInRight, revWetR, renderMix);
         reverbInterpPrevL = outL;
         reverbInterpPrevR = outR;
       } else {
@@ -668,6 +670,7 @@ class FX {
     /** A simple 'Chamberlin' reverb using allpass filter preprocessor and recursive delay lines. */
     inline
     void reverbStereo2(int32_t audioInLeft, int32_t audioInRight, int32_t &audioOutLeft, int32_t &audioOutRight) {
+      const int renderMix = reverbMix;
       if (!reverb2Initiated) {
         allpass1.setDelayTime(49.6);
         allpass1.setFeedbackLevel(0.83);
@@ -711,8 +714,8 @@ class FX {
           int32_t summedMono = (dryL + dryR) / 2;
           int32_t ap = allpass2.next(allpass1.next(summedMono));
           processReverb(clip16((dryL + ap) / 2), clip16((dryR + ap) / 2));
-          outL = mixReverbChannel(dryL, revWetL);
-          outR = mixReverbChannel(dryR, revWetR);
+          outL = mixReverbChannel(dryL, revWetL, renderMix);
+          outR = mixReverbChannel(dryR, revWetR, renderMix);
           reverbCacheL = outL;
           reverbCacheR = outR;
         } else {
@@ -732,6 +735,8 @@ class FX {
     inline
     void setReverbLength(float rLen) {
       rLen = max(0.0f, min(1.0f, rLen));
+      if (rLen == lastReverbLengthTarget) return;
+      lastReverbLengthTarget = rLen;
       reverbFeedbackLevel = pow(rLen, 0.2f);
       // Pre-calculate integer coefficient for optimized path
       reverbFeedbackInt = (int16_t)(reverbFeedbackLevel * 1024.0f);
@@ -1046,10 +1051,10 @@ class FX {
      * Keeping both endpoints within the 16-bit range makes this a unity-gain
      * crossfade; the final clip is then only a defensive guard.
      */
-    inline int16_t mixReverbChannel(int32_t dryInput, int32_t wetInput) {
+    inline int16_t mixReverbChannel(int32_t dryInput, int32_t wetInput, int mix) {
       int32_t dry = clip16(dryInput);
       int32_t wet = clip16(wetInput);
-      int32_t mixed = dry * (1024 - reverbMix) + wet * reverbMix;
+      int32_t mixed = dry * (1024 - mix) + wet * mix;
       // Symmetric rounding avoids the negative bias of a signed right shift.
       mixed += (mixed >= 0) ? 512 : -512;
       return clip16(mixed / 1024);
@@ -1073,18 +1078,29 @@ class FX {
     int16_t crushHoldCounter = 0;
     bool reverbInitiated = false;
     float reverbFeedbackLevel = 0.93; // 0.0 to 1.0
-    int reverbMix = 40; // 0 to 1024
     float reverbSize = 4.0; // >= 1, memory allocated to delay lengths
-    int16_t reverbFeedbackInt = 950; // 0-1024, integer version of feedback level
-    int16_t reverbDampCoeff = 904; // Pre-calculated dampening coefficient (0.3 default)
+    float lastReverbLengthTarget = -1.0f; // control-context cache
+    #if IS_ESP32() || IS_RP2040()
+    std::atomic<int> reverbMix{40};
+    std::atomic<int16_t> reverbFeedbackInt{950};
+    std::atomic<int16_t> reverbDampCoeff{904};
+    #else
+    int reverbMix = 40;
+    int16_t reverbFeedbackInt = 950, reverbDampCoeff = 904;
+    #endif
     int32_t revFilterStore1 = 0, revFilterStore2 = 0, revFilterStore3 = 0, revFilterStore4 = 0;
     int32_t revInputHPF_L = 0, revInputHPF_R = 0;  // Input highpass filter state
 
     // Optimized reverb delay buffers - power-of-2 sizes for fast modulo via bitwise AND
-    // 1024 samples (~23ms at 44.1kHz) - larger sizes use legacy Del path
+    // Default size 4.0 needs 2137 samples at 44.1kHz. Keep the smaller
+    // allocation on constrained targets; their existing legacy path still works.
+    #if IS_ESP32() || IS_RP2040() || defined(__IMXRT1062__)
+    static const int REV_BUF_BITS = 12;
+    #else
     static const int REV_BUF_BITS = 10;
-    static const int REV_BUF_SIZE = 1 << REV_BUF_BITS;  // 1024
-    static const int REV_BUF_MASK = REV_BUF_SIZE - 1;   // 0x3FF for fast wrap
+    #endif
+    static const int REV_BUF_SIZE = 1 << REV_BUF_BITS;
+    static const int REV_BUF_MASK = REV_BUF_SIZE - 1;
 
     int16_t* revBuf1 = nullptr;
     int16_t* revBuf2 = nullptr;
@@ -1214,29 +1230,23 @@ class FX {
     }
 
     /** Allocate optimized reverb buffers */
-    void allocateReverbBuffers() {
-      if (revBuf1) return;  // Already allocated
-
+    bool allocateReverbBuffers() {
+      if (revBuf1 && revBuf2 && revBuf3 && revBuf4) return true;
+      // One allocation makes publication all-or-nothing. No partially allocated
+      // fast path can be selected if PSRAM/internal heap is exhausted.
+      int16_t* storage = nullptr;
       #if IS_ESP32()
-        // Calculate total size needed for all 4 buffers
-        size_t totalSize = REV_BUF_SIZE * sizeof(int16_t) * 4;
-        size_t available = getFreePSRAM();
-
-        if (isPSRAMAvailable() && available > totalSize + (totalSize / 10)) {
-          revBuf1 = psramAllocInt16(REV_BUF_SIZE, "reverb buf 1");
-          revBuf2 = psramAllocInt16(REV_BUF_SIZE, nullptr);
-          revBuf3 = psramAllocInt16(REV_BUF_SIZE, nullptr);
-          revBuf4 = psramAllocInt16(REV_BUF_SIZE, nullptr);
-        }
+      storage = psramAllocInt16(REV_BUF_SIZE * 4, "reverb buffers");
       #endif
-
-      // Fallback to regular RAM if PSRAM not available or allocation failed
-      if (!revBuf1) { revBuf1 = new(std::nothrow) int16_t[REV_BUF_SIZE](); Serial.println("Reverb buffers in regular RAM"); }
-      if (!revBuf2) revBuf2 = new(std::nothrow) int16_t[REV_BUF_SIZE]();
-      if (!revBuf3) revBuf3 = new(std::nothrow) int16_t[REV_BUF_SIZE]();
-      if (!revBuf4) revBuf4 = new(std::nothrow) int16_t[REV_BUF_SIZE]();
-
+      if (!storage) storage = new(std::nothrow) int16_t[REV_BUF_SIZE * 4]();
+      if (!storage) return false;
+      memset(storage, 0, REV_BUF_SIZE * 4 * sizeof(int16_t));
+      revBuf1 = storage;
+      revBuf2 = storage + REV_BUF_SIZE;
+      revBuf3 = storage + REV_BUF_SIZE * 2;
+      revBuf4 = storage + REV_BUF_SIZE * 3;
       revWritePos = 0;
+      return true;
     }
 
     /** Set the reverb params
@@ -1253,16 +1263,16 @@ class FX {
       float d3_ms = 10.844f * size;
       float d4_ms = 12.118f * size;
 
-      uint16_t d1_samp = (uint16_t)(d1_ms * SAMPLE_RATE * 0.001f);
-      uint16_t d2_samp = (uint16_t)(d2_ms * SAMPLE_RATE * 0.001f);
-      uint16_t d3_samp = (uint16_t)(d3_ms * SAMPLE_RATE * 0.001f);
-      uint16_t d4_samp = (uint16_t)(d4_ms * SAMPLE_RATE * 0.001f);
+      float d1_samp = d1_ms * SAMPLE_RATE * 0.001f;
+      float d2_samp = d2_ms * SAMPLE_RATE * 0.001f;
+      float d3_samp = d3_ms * SAMPLE_RATE * 0.001f;
+      float d4_samp = d4_ms * SAMPLE_RATE * 0.001f;
 
       // Check if delays fit in optimized buffers
       if (d1_samp < REV_BUF_SIZE && d2_samp < REV_BUF_SIZE &&
-          d3_samp < REV_BUF_SIZE && d4_samp < REV_BUF_SIZE) {
-        // Use optimized path
-        allocateReverbBuffers();
+          d3_samp < REV_BUF_SIZE && d4_samp < REV_BUF_SIZE &&
+          allocateReverbBuffers()) {
+        // Use optimized path only after the complete allocation succeeds.
         revDelay1 = d1_samp;
         revDelay2 = d2_samp;
         revDelay3 = d3_samp;
@@ -1283,6 +1293,8 @@ class FX {
 
     /** Compute reverb - optimized version with inlined buffer operations */
     inline void processReverb(int16_t audioInLeft, int16_t audioInRight) {
+      const int16_t renderFeedback = reverbFeedbackInt;
+      const int16_t renderDamp = reverbDampCoeff;
       if (useOptimizedReverb) {
         if (!revBuf1 || !revBuf2 || !revBuf3 || !revBuf4) {
           revWetL = revWetR = 0;
@@ -1306,16 +1318,16 @@ class FX {
         int32_t d4 = revBuf4[(wp - revDelay4) & REV_BUF_MASK];
 
         // Apply feedback level (with rounding to reduce quantization noise)
-        d1 = (d1 * reverbFeedbackInt + 512) >> 10;
-        d2 = (d2 * reverbFeedbackInt + 512) >> 10;
-        d3 = (d3 * reverbFeedbackInt + 512) >> 10;
-        d4 = (d4 * reverbFeedbackInt + 512) >> 10;
+        d1 = (d1 * renderFeedback + 512) >> 10;
+        d2 = (d2 * renderFeedback + 512) >> 10;
+        d3 = (d3 * renderFeedback + 512) >> 10;
+        d4 = (d4 * renderFeedback + 512) >> 10;
 
         // Apply dampening lowpass filter (with rounding)
-        revFilterStore1 += ((d1 - revFilterStore1) * reverbDampCoeff + 512) >> 10;
-        revFilterStore2 += ((d2 - revFilterStore2) * reverbDampCoeff + 512) >> 10;
-        revFilterStore3 += ((d3 - revFilterStore3) * reverbDampCoeff + 512) >> 10;
-        revFilterStore4 += ((d4 - revFilterStore4) * reverbDampCoeff + 512) >> 10;
+        revFilterStore1 += ((d1 - revFilterStore1) * renderDamp + 512) >> 10;
+        revFilterStore2 += ((d2 - revFilterStore2) * renderDamp + 512) >> 10;
+        revFilterStore3 += ((d3 - revFilterStore3) * renderDamp + 512) >> 10;
+        revFilterStore4 += ((d4 - revFilterStore4) * renderDamp + 512) >> 10;
 
         // Use filtered values directly (dampening already reduces HF, input HPF handles LF)
         d1 = revFilterStore1;
@@ -1377,10 +1389,10 @@ class FX {
         int32_t d3 = delay3.read(); int32_t d4 = delay4.read();
 
         // Dampening lowpass filter on delay outputs
-        revFilterStore1 += ((d1 - revFilterStore1) * reverbDampCoeff + 512) >> 10;
-        revFilterStore2 += ((d2 - revFilterStore2) * reverbDampCoeff + 512) >> 10;
-        revFilterStore3 += ((d3 - revFilterStore3) * reverbDampCoeff + 512) >> 10;
-        revFilterStore4 += ((d4 - revFilterStore4) * reverbDampCoeff + 512) >> 10;
+        revFilterStore1 += ((d1 - revFilterStore1) * renderDamp + 512) >> 10;
+        revFilterStore2 += ((d2 - revFilterStore2) * renderDamp + 512) >> 10;
+        revFilterStore3 += ((d3 - revFilterStore3) * renderDamp + 512) >> 10;
+        revFilterStore4 += ((d4 - revFilterStore4) * renderDamp + 512) >> 10;
         d1 = revFilterStore1; d2 = revFilterStore2;
         d3 = revFilterStore3; d4 = revFilterStore4;
 
