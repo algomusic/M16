@@ -3,3 +3,6 @@ DOCS/CODE_EXECUTION_RULES.md
 DOCS/M16_LIBRARY_ANALYSIS.md
 Documentation/M16  use of audioBlockWrite.md
 Documentation/M16_Documentation.md
+tests/beat_machine_regressions.py
+tests/PortabilityCheck/PortabilityCheck.ino
+tests/README.md
