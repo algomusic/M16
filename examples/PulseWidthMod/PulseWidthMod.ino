@@ -11,7 +11,7 @@ unsigned long msNow = millis();
 unsigned long pitchTime = msNow;
 unsigned long widthTime = msNow;
 unsigned long pitchDelta = 12000;
-unsigned long lfoReadRate = 29; // update delta time in millis
+unsigned long lfoReadRate = 29; // duty target update interval in milliseconds
 float pVal = 0.5;
   
 void setup() {
@@ -22,6 +22,7 @@ void setup() {
   filter.setFreq(1500);
   LFO1.setFreq(0.1); 
   aOsc1.setPulseWidth(0.25);
+  aOsc1.setPulseWidthSmoothing((float)lfoReadRate); // ramp between control-rate duty updates
   // seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
@@ -39,10 +40,10 @@ void loop() {
   
   if (msNow - widthTime >= lfoReadRate) {
     widthTime += lfoReadRate;
-    // Compute the LFO value to modulate the duty cycle amount (freqency) by
-    // = osc val / osc range * depth * val range reduction + offset (to make unipolar)
+    // Map the bipolar LFO to approximately 10-70% duty (0.4 +/- 0.3).
+    // Pulse width changes the waveform shape; the master frequency stays fixed.
     float lfo1Val = (LFO1.atTime(msNow) * MAX_16_INV * 0.5) * 0.6 + 0.4; 
-    aOsc1.setPulseWidth(lfo1Val); // 0.0 - 1.0
+    aOsc1.setPulseWidth(lfo1Val); // library accepts 0.05-0.95
   }
 }
 
