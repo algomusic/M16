@@ -40,9 +40,9 @@ void loop() {
   
   if (msNow - widthTime >= lfoReadRate) {
     widthTime += lfoReadRate;
-    // Map the bipolar LFO to approximately 10-70% duty (0.4 +/- 0.3).
+    // Map the bipolar LFO.
     // Pulse width changes the waveform shape; the master frequency stays fixed.
-    float lfo1Val = (LFO1.atTime(msNow) * MAX_16_INV * 0.5) * 0.6 + 0.4; 
+    float lfo1Val = (LFO1.atTime(msNow) * MAX_16_INV * 0.5f) * 0.9f + 0.1f; 
     aOsc1.setPulseWidth(lfo1Val); // library accepts 0.05-0.95
   }
 }

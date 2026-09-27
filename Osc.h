@@ -1628,7 +1628,7 @@ public:
    */
   inline void setPulseWidth(float width) {
     if (width != width) return;
-    width = max(0.05f, min(0.95f, width));
+    width = max(0.001f, min(0.999f, width));
     uint32_t target = (uint32_t)(width * 65536.0f + 0.5f);
     storePulseControl(_pulseWidthTarget, target);
   }
