@@ -32,6 +32,161 @@ public:
   static const uint8_t cont                = 0xFB;
   static const uint8_t stop                = 0xFC;
 
+  /** Optional standard-MIDI pressure tracker, owned by the control thread.
+   * Channel state costs 16 bytes. Applications keep one poly-pressure byte per
+   * active voice, clear it on Note On, and stop updating that voice at Note Off.
+   * All channels and note numbers are zero-based MIDI values.
+   */
+  class Aftertouch {
+  public:
+    void reset() { for (uint8_t &value : channels) value = 0; }
+    bool process(uint8_t status, uint8_t ch, uint8_t d1, uint8_t d2 = 0) {
+      if (ch >= 16 || status >= 0xf0) return false;
+      status &= 0xf0;
+      if (status == 0xd0) { channels[ch] = d1 & 127; return true; }
+      if (status == 0xb0 && d1 == 121) { channels[ch] = 0; return true; }
+      return false;
+    }
+    /** Feed each event to process() first, then to updateNote() for held voices.
+     * Returns true when this event addresses the supplied channel/note.
+     * Channel Pressure is data1; Polyphonic Key Pressure is data2.
+     */
+    bool updateNote(uint8_t &polyPressure, uint8_t noteChannel, uint8_t note,
+                    uint8_t status, uint8_t ch, uint8_t d1, uint8_t d2 = 0) const {
+      if (ch >= 16 || note >= 128 || ch != noteChannel || status >= 0xf0) return false;
+      status &= 0xf0;
+      if (status == 0xa0 && d1 == note) { polyPressure = d2 & 127; return true; }
+      if (status == 0xb0 && d1 == 121) { polyPressure = 0; return true; }
+      return status == 0xd0;
+    }
+    uint8_t pressure(uint8_t ch, uint8_t polyPressure = 0) const {
+      if (ch >= 16) return 0;
+      polyPressure &= 127;
+      return channels[ch] > polyPressure ? channels[ch] : polyPressure;
+    }
+    float gain(uint8_t ch, uint8_t polyPressure = 0, float maxBoost = 0.3f) const {
+      return 1.0f + pressure(ch, polyPressure) * (maxBoost / 127.0f);
+    }
+  private:
+    uint8_t channels[16] = {};
+  };
+
+  /** Optional, allocation-free MPE state tracker. All channels are zero-based.
+   * Feed each event returned by read() to process(), in order, on the control
+   * thread. This does not allocate voices or change the MIDI parser/routing.
+   * Applications own Note On/Off lifetimes and freeze member expression at Off.
+   */
+  class MPE {
+  public:
+    enum Change { None = 0, Expression = 1, Configuration = 2, Sustain = 4,
+                  ResetControllers = 8 };
+    MPE() { reset(); }
+    void reset(bool lowerZone = true) {
+      members[0] = lowerZone ? 15 : 0;
+      members[1] = 0;
+      for (uint8_t ch = 0; ch < 16; ++ch) resetChannel(ch);
+    }
+    int8_t manager(uint8_t ch) const {
+      if (ch >= 16) return -1;
+      if (members[0] && ch <= members[0]) return 0;
+      if (members[1] && ch >= 15 - members[1]) return 15;
+      return -1;
+    }
+    bool isManager(uint8_t ch) const { return manager(ch) == ch; }
+    bool isMember(uint8_t ch) const { return manager(ch) >= 0 && !isManager(ch); }
+    bool enabled() const { return members[0] || members[1]; }
+    uint8_t memberCount(bool upper = false) const { return members[upper ? 1 : 0]; }
+    // New zone wins any overlap; configuration resets affected channel controls.
+    bool configure(uint8_t managerChannel, uint8_t count) {
+      if ((managerChannel != 0 && managerChannel != 15) || count > 15) return false;
+      int8_t previous[16];
+      for (uint8_t ch = 0; ch < 16; ++ch) previous[ch] = manager(ch);
+      uint8_t z = managerChannel == 15 ? 1 : 0;
+      members[z] = count;
+      if (count == 15) members[1-z] = 0;
+      else if (count && members[1-z] && count + members[1-z] > 14)
+        members[1-z] = 14 - count;
+      for (uint8_t ch = 0; ch < 16; ++ch) {
+        if (previous[ch] != manager(ch) || manager(ch) == managerChannel)
+          resetChannel(ch);
+      }
+      return true;
+    }
+    uint8_t process(uint8_t status, uint8_t ch, uint8_t d1, uint8_t d2 = 0) {
+      if (ch >= 16 || status >= 0xf0) return None;
+      status &= 0xf0; d1 &= 127; d2 &= 127;
+      if (status == 0xe0) { bend[ch] = MIDI16::value14(d1, d2); return Expression; }
+      if (status == 0xd0) { pressure[ch] = d1; return Expression; }
+      if (status != 0xb0) return None;
+      switch (d1) {
+        case 101: rpnMSB[ch] = d2; return None;
+        case 100: rpnLSB[ch] = d2; return None;
+        case 99: case 98: rpnMSB[ch] = rpnLSB[ch] = 127; return None;
+        case 6:
+          if (rpnMSB[ch] != 0) return None;
+          if (rpnLSB[ch] == 6) return configure(ch, d2) ? Configuration : None;
+          if (rpnLSB[ch] == 0 && d2 <= 96) {
+            int8_t m = manager(ch);
+            for (uint8_t c = 0; c < 16; ++c)
+              if (c == ch || (isMember(ch) && isMember(c) && manager(c) == m)) range[c] = d2;
+            return Expression;
+          }
+          return None;
+        case 74: timbre[ch] = d2; return Expression;
+        case 64:
+          if (isManager(ch)) { sustain[ch] = d2 >= 64; return Sustain; }
+          return None;
+        case 121:
+          // Reset performance controls, preserving zone and bend sensitivity.
+          bend[ch] = 8192; pressure[ch] = 0; timbre[ch] = 64;
+          sustain[ch] = false; rpnMSB[ch] = rpnLSB[ch] = 127;
+          return Expression | Sustain | ResetControllers;
+        default: return None;
+      }
+    }
+    float bendSemitones(uint8_t ch) const {
+      return ch < 16 ? MIDI16::pitchBendSemitones(bend[ch], range[ch]) : 0.0f;
+    }
+    float combinedBendSemitones(uint8_t ch) const {
+      int8_t m = manager(ch);
+      return bendSemitones(ch) + (m >= 0 && m != ch ? bendSemitones(m) : 0.0f);
+    }
+    uint8_t bendRange(uint8_t ch) const { return ch < 16 ? range[ch] : 0; }
+    uint8_t combinedPressure(uint8_t ch) const {
+      if (ch >= 16) return 0;
+      int8_t m = manager(ch);
+      return m >= 0 && pressure[m] > pressure[ch] ? pressure[m] : pressure[ch];
+    }
+    uint8_t combinedTimbre(uint8_t ch) const {
+      if (ch >= 16) return 64;
+      int8_t m = manager(ch);
+      int value = timbre[ch] + (m >= 0 && m != ch ? (int)timbre[m] - 64 : 0);
+      return value < 0 ? 0 : (value > 127 ? 127 : value);
+    }
+    bool sustainDown(uint8_t ch) const {
+      int8_t m = manager(ch);
+      return m >= 0 && sustain[m];
+    }
+  private:
+    uint8_t members[2];
+    uint16_t bend[16];
+    uint8_t pressure[16], timbre[16], range[16], rpnMSB[16], rpnLSB[16];
+    bool sustain[16];
+    void resetChannel(uint8_t ch) {
+      bend[ch] = 8192; pressure[ch] = 0; timbre[ch] = 64;
+      range[ch] = isMember(ch) ? 48 : 2;
+      rpnMSB[ch] = rpnLSB[ch] = 127; sustain[ch] = false;
+    }
+  };
+
+  static uint16_t value14(uint8_t lsb, uint8_t msb) {
+    return ((uint16_t)(msb & 127) << 7) | (lsb & 127);
+  }
+  static float pitchBendSemitones(uint16_t value, float range = 2.0f) {
+    int offset = (int)(value > 16383 ? 16383 : value) - 8192;
+    return offset * (range / (offset < 0 ? 8192.0f : 8191.0f));
+  }
+
   /** Default constructor – uses sProject PCB pins (rx=37, tx=38). */
   MIDI16() : MIDI16(37, 38) {}
 
