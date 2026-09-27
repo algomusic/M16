@@ -101,6 +101,7 @@ public:
 	*/
 	inline
 	int16_t next() {
+    if (pulseWidthEnabled()) return renderPulseWidth();
     int32_t sampVal;
 
     // Sample and hold: pick a random sample from the wavetable once per period
@@ -129,7 +130,7 @@ public:
     }
 
     #if IS_ESP32() || IS_RP2040()
-    if (!pulseWidthOn && !isNoise && !isCrackle) {
+    if (!isNoise && !isCrackle) {
       // Bounded coherent read; reuse the previous snapshot if a writer is busy.
       uint32_t cachedIncrement;
       int16_t* cachedBandPtr;
@@ -166,7 +167,7 @@ public:
     }
 
     // Atomic path for noise and crackle oscillators
-    if ((isNoise || isCrackle) && !pulseWidthOn) {
+    if (isNoise || isCrackle) {
       uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
       int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
 
@@ -192,7 +193,7 @@ public:
     }
     #endif
 
-    // Non-atomic fallback for pulse width mode (or single-core platforms)
+    // Non-atomic fallback for single-core platforms
     int idx = (isNoise && !isCrackle)
                 ? noiseTableIndex(phase_fractional)
                 : (phase_fractional >> 16);
@@ -211,6 +212,7 @@ public:
    * this method a consistent wavetable-band pointer and phase increment.
    */
   inline int16_t nextUnlocked() {
+    if (pulseWidthEnabled()) return renderPulseWidth(0, true);
     int32_t sampVal;
 
     #if IS_ESP32() || IS_RP2040()
@@ -235,8 +237,8 @@ public:
       return sandHValue;
     }
 
-    // Pulse-width and crackle modes have specialised phase/wrap behaviour.
-    if (pulseWidthOn || isCrackle) {
+    // Crackle has specialised phase/wrap behaviour.
+    if (isCrackle) {
       int idx = (phase_fractional >> 16) & (TABLE_SIZE - 1);
       sampVal = cachedBandPtr[idx];
       incrementPhase();
@@ -274,17 +276,18 @@ public:
   /** Updates the phase and returns the next sample with interpolation.
    * Uses cubic interpolation for high band (>831Hz), linear for mid band (>208Hz),
    * smoothing for low band. Thresholds match band selection in setFreq().
-   * Higher quality than next() at ~5-15% more CPU cost.
+   * PWM uses the same linear-interpolated path as next() at every frequency.
    * @return sampVal The next sample.
    */
   inline
   int16_t next2() {
+    if (pulseWidthEnabled()) return renderPulseWidth();
     int32_t sampVal;
     int idx;
 
     // Fast path: atomic phase increment for thread-safe dual-core operation
     #if IS_ESP32() || IS_RP2040()
-    if (!pulseWidthOn && !isNoise && !isCrackle) {
+    if (!isNoise && !isCrackle) {
       uint32_t myPhase;
       // Same bounded snapshot protocol as next().
       uint32_t cachedIncrement;
@@ -335,7 +338,7 @@ public:
     }
     #endif
 
-    // Non-atomic path for pulse width, noise, crackle modes (or single-core platforms)
+    // Non-atomic path for noise/crackle modes (or single-core platforms)
     idx = (phase_fractional >> 16) & (TABLE_SIZE - 1);
     if (frequency > 831.0f) {
       float t = (float)(phase_fractional & 0xFFFF) * (1.0f / 65536.0f);
@@ -476,6 +479,7 @@ public:
 
   /** Return the current value of the Oscil. */
   int16_t getValue() {
+    if (pulseWidthEnabled()) return renderPulseWidth(0, true, false, nullptr, 0, false);
     int idx = phase_fractional >> 16; // 16.16 fixed-point
     return bandPtr[idx];
   }
@@ -486,6 +490,8 @@ public:
   */
 	inline
   int16_t nextMorph(int16_t * secondWaveTable, float morphAmount) {
+    if (pulseWidthEnabled()) return renderPulseWidth(0, false, false,
+        secondWaveTable, max(0, min(1024, (int)(1024 * morphAmount))));
     if (morphAmount <= 0) return next(); // identical to next() when not morphing
     int intMorphAmount = max(0, min (1024, (int)(1024 * morphAmount)));
     int32_t sampVal;
@@ -556,6 +562,8 @@ public:
   */
 	inline
   int16_t currentMorph(int16_t * secondWaveTable, float morphAmount) {
+    if (pulseWidthEnabled()) return renderPulseWidth(0, true, false,
+        secondWaveTable, max(0, min(1024, (int)(1024 * morphAmount))), false);
     if (morphAmount <= 0) {
       // Read current sample without morphing
       #if IS_ESP32() || IS_RP2040()
@@ -618,6 +626,8 @@ public:
   */
 	inline
   int16_t nextWTrans(int16_t * secondWaveTable, float windowSize, bool duel, bool invert) {
+    if (pulseWidthEnabled()) return renderPulseWidthWindow(0,
+        secondWaveTable, windowSize, duel, invert);
     // see https://dove-audio.com/wtf-module/
     int halfTable = HALF_TABLE_SIZE;
     int portion12 = halfTable * windowSize;
@@ -705,9 +715,10 @@ public:
 
     // Calculate phase offset in 16.16 format
     uint32_t modOffset = floatPhaseOffset(modulator, modIndex);
+    if (pulseWidthEnabled()) return renderPulseWidth(modOffset);
 
     #if IS_ESP32() || IS_RP2040()
-    if (!pulseWidthOn && !isNoise && !isCrackle) {
+    if (!isNoise && !isCrackle) {
       // Atomic path: each core gets a unique phase value (matches next() pattern)
       // ACQUIRE on increment synchronizes-with setFreq()'s RELEASE store.
       uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_ACQUIRE);
@@ -749,7 +760,7 @@ public:
     }
     #endif
 
-    // Non-atomic fallback for pulse width, noise, crackle, or single-core platforms
+    // Non-atomic fallback for noise, crackle, or single-core platforms
     uint32_t p = phase_fractional + modOffset;
 
     int idx = (p >> 16) & (TABLE_SIZE - 1);
@@ -797,9 +808,10 @@ public:
 
     // modOffset = modulator * modIndex * 8.0f, pre-scaled by 256
     uint32_t modOffset = integerPhaseOffset(modulator, modIndexScaled);
+    if (pulseWidthEnabled()) return renderPulseWidth(modOffset);
 
     #if IS_ESP32() || IS_RP2040()
-    if (!pulseWidthOn && !isNoise && !isCrackle) {
+    if (!isNoise && !isCrackle) {
       // ACQUIRE on increment synchronizes-with setFreq()'s RELEASE store.
       uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_ACQUIRE);
       int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
@@ -849,6 +861,7 @@ public:
     if (modIndexScaled > dMaxScaled) modIndexScaled = dMaxScaled;
 
     uint32_t modOffset = integerPhaseOffset(modulator, modIndexScaled);
+    if (pulseWidthEnabled()) return renderPulseWidth(modOffset, true);
 
     #if IS_ESP32() || IS_RP2040()
     uint32_t cachedIncrement;
@@ -860,7 +873,7 @@ public:
     #endif
 
     if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
-    if (pulseWidthOn || isNoise || isCrackle) {
+    if (isNoise || isCrackle) {
       uint32_t p = phase_fractional + modOffset;
       int idx = (p >> 16) & (TABLE_SIZE - 1);
       int frac = (p >> 6) & 0x3FF;
@@ -900,6 +913,7 @@ public:
     if (modIndex > dMax) modIndex = dMax;
 
     uint32_t modOffset = floatPhaseOffset(modulator, modIndex);
+    if (pulseWidthEnabled()) return renderPulseWidth(modOffset, false, false, secondWaveTable, intMorphAmount);
 
     #if IS_ESP32() || IS_RP2040()
     {
@@ -984,6 +998,7 @@ public:
     if (modIndex > dMax) modIndex = dMax;
 
     uint32_t modOffset = floatPhaseOffset(modulator, modIndex);
+    if (pulseWidthEnabled()) return renderPulseWidthWindow(modOffset, secondWaveTable, windowSize, duel, invert);
 
     // Advance phase and compute modulated phase position
     #if IS_ESP32() || IS_RP2040()
@@ -1213,9 +1228,10 @@ public:
 
     // Calculate phase offset in 16.16 format
     uint32_t modOffset = floatPhaseOffset(modulator, modIndex);
+    if (pulseWidthEnabled()) return renderPulseWidth(modOffset, false, true);
 
     #if IS_ESP32() || IS_RP2040()
-    if (!pulseWidthOn && !isNoise && !isCrackle) {
+    if (!isNoise && !isCrackle) {
       // Atomic path: advance full increment atomically, compute two lookups from it
       uint32_t cachedIncrement = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
       int16_t* cachedBandPtr = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
@@ -1250,7 +1266,7 @@ public:
     }
     #endif
 
-    // Non-atomic fallback for pulse width, noise, crackle, or single-core platforms
+    // Non-atomic fallback for noise, crackle, or single-core platforms
     uint32_t halfInc = phase_increment_fractional >> 1;
 
     // --- Sample 1: at current phase ---
@@ -1297,6 +1313,12 @@ public:
   */
   inline
   int16_t ringMod(int audioIn) {
+    if (pulseWidthEnabled()) {
+      uint32_t phase, increment;
+      if (!beginPulseWidth(phase, increment, false, true)) return 0;
+      int32_t sample = pulseWidthLookup(waveTable, pulseWidthPhase(phase + increment));
+      return finishPulseWidth((sample * audioIn) >> 15, true);
+    }
     incrementPhase();
     int idx = phase_fractional >> 16; // 16.16 fixed-point
     int32_t currSamp = waveTable[idx];
@@ -1444,12 +1466,6 @@ public:
         phase_increment_fractional = newIncrement;
       #endif
 
-      if (pulseWidthOn) {
-        // Calculate pulse width variants in 16.16
-        uint32_t halfInc = newIncrement >> 1;
-        phase_increment_fractional_w1 = (uint32_t)(halfInc / pulseWidth);
-        phase_increment_fractional_w2 = (uint32_t)(halfInc / (1.0f - pulseWidth));
-      }
       if (spreadActive) {
         // 16.16 spread increments
         phase_increment_fractional_s1 = (uint32_t)(newIncrement * spread1);
@@ -1600,25 +1616,40 @@ public:
     crackleAmnt = max(1, min(MAX_16, amnt));
 	}
 
-  /** Set using pulse width for the waveform
-  * @width The cycle amount for the first half of the wave - 0.0 to 1.0
-  */
-	inline
-	void setPulseWidth(float width) {
-    pulseWidthOn = true;
-    pulseWidth = max(0.05f, min(0.95f, width));
-    // Calculate 16.16 pulse width increments
-    uint32_t halfPhaseInc = phase_increment_fractional >> 1;
-    phase_increment_fractional_w1 = (uint32_t)(halfPhaseInc / pulseWidth);
-    phase_increment_fractional_w2 = (uint32_t)(halfPhaseInc / (1.0f - pulseWidth));
+  /** Stretch a periodic wavetable to a duty fraction, clamped to 0.05..0.95.
+   * The master phase/frequency is independent of duty. Duty is quantized to
+   * 1/65536; NaN is ignored. next()/next2()/nextUnlocked() use linear PWM reads.
+   * Safe to publish from a control task on ESP32/RP2040. Give each PWM Osc one
+   * audio-rendering owner (including spread, smoothing and FM/morph calls).
+   * Table assignment/generation and setPhase() remain setup/owner operations.
+   * PWM also applies to phMod variants, morph/window rendering and ringMod.
+   * atTime(), feedback() and particle() retain their specialised behaviour.
+   * Noise, crackle and sample-and-hold are not periodic PWM sources.
+   */
+  inline void setPulseWidth(float width) {
+    if (width != width) return;
+    width = max(0.05f, min(0.95f, width));
+    uint32_t target = (uint32_t)(width * 65536.0f + 0.5f);
+    storePulseControl(_pulseWidthTarget, target);
   }
 
-  /** Set using pulse width for the waveform
-  * @width The cycle amount for the first half of the wave - 0.0 to 1.0
-  */
-	inline
-	float getPulseWidth() {
-    return pulseWidth;
+  /** Return the requested duty (not the intermediate smoothed duty). */
+  inline float getPulseWidth() {
+    uint32_t target = loadPulseControl(_pulseWidthTarget);
+    return target ? target * (1.0f / 65536.0f) : 0.5f;
+  }
+
+  /** Optional linear duty ramp, 0..1000 ms; zero (default) gives immediate PWM.
+   * Set before audio starts or publish from the control task. Initial duty is
+   * applied directly; later targets ramp from the current duty. A new target
+   * restarts the ramp. Leave at zero for intentional audio-rate modulation.
+   * Duration is converted using the current sample rate when this is called.
+   */
+  inline void setPulseWidthSmoothing(float milliseconds) {
+    if (milliseconds != milliseconds) return;
+    milliseconds = max(0.0f, min(1000.0f, milliseconds));
+    storePulseControl(_pulseWidthRampSamples,
+        (uint32_t)(milliseconds * (0.001f * SAMPLE_RATE) + 0.5f));
   }
 
   /** Below are helper methods for generating waveforms into existing arrays.
@@ -1930,6 +1961,196 @@ public:
   }
 
 private:
+  // PWM control publication is one aligned 32-bit value per independent setting.
+  // Render/cache state below is owned exclusively by one audio task per Osc.
+  uint32_t _pulseWidthTarget = 0; // Q16 duty; zero means PWM has never been enabled
+  uint32_t _pulseWidthRampSamples = 0;
+  uint32_t _pwmRequested = 0, _pwmRampSetting = 0, _pwmRampRemaining = 0;
+  uint32_t _pwmDuty = 32768, _pwmBoundary = HALF_TABLE_SIZE_FP;
+  float _pwmCurrent = 32768.0f, _pwmStep = 0.0f;
+  float _pwmScale1 = 1.0f, _pwmScale2 = 1.0f;
+  uint8_t _pwmBand = 0, _pwmNextBand = 0, _pwmBandMix = 32;
+
+  static inline uint32_t loadPulseControl(const uint32_t& value) {
+    #if IS_ESP32() || IS_RP2040()
+      return __atomic_load_n(&value, __ATOMIC_RELAXED);
+    #else
+      return value;
+    #endif
+  }
+
+  static inline void storePulseControl(uint32_t& value, uint32_t target) {
+    #if IS_ESP32() || IS_RP2040()
+      __atomic_store_n(&value, target, __ATOMIC_RELAXED);
+    #else
+      value = target;
+    #endif
+  }
+
+  inline bool pulseWidthEnabled() const {
+    return loadPulseControl(_pulseWidthTarget) != 0;
+  }
+
+  inline void preparePulseWidth(uint32_t increment, bool advance) {
+    uint32_t target = loadPulseControl(_pulseWidthTarget);
+    uint32_t ramp = loadPulseControl(_pulseWidthRampSamples);
+    bool initial = (_pwmRequested == 0);
+    if (initial || target != _pwmRequested || ramp != _pwmRampSetting) {
+      _pwmRequested = target;
+      _pwmRampSetting = ramp;
+      _pwmRampRemaining = initial ? 0 : ramp;
+      if (_pwmRampRemaining == 0) {
+        _pwmCurrent = (float)target;
+      } else {
+        _pwmStep = ((float)target - _pwmCurrent) / (float)ramp;
+      }
+    }
+    if (advance && _pwmRampRemaining != 0) {
+      _pwmCurrent += _pwmStep;
+      if (--_pwmRampRemaining == 0) _pwmCurrent = (float)_pwmRequested;
+    }
+    uint32_t duty = (uint32_t)(_pwmCurrent + 0.5f);
+    if (duty != _pwmDuty) {
+      _pwmDuty = duty;
+      _pwmBoundary = duty * TABLE_SIZE;
+      float d = duty * (1.0f / 65536.0f);
+      // One division on duty changes; no divisions for a settled duty.
+      float reciprocal = 0.5f / (d * (1.0f - d));
+      _pwmScale1 = (1.0f - d) * reciprocal;
+      _pwmScale2 = d * reciprocal;
+    }
+
+    // Existing three bands are a coarse approximation, not a guarantee against
+    // aliasing. Account for the fastest local scan and any detuned spread voice.
+    float scan = max(_pwmScale1, _pwmScale2);
+    if (spreadActive) scan *= max(1.0f, max(fabsf(spread1), fabsf(spread2)));
+    float effectiveHz = (float)increment *
+        ((float)SAMPLE_RATE / (TABLE_SIZE * 65536.0f)) * scan;
+    uint8_t wanted = effectiveHz > 831.0f ? 2 : effectiveHz > 208.0f ? 1 : 0;
+    if (initial) {
+      _pwmBand = _pwmNextBand = wanted;
+      _pwmBandMix = 32;
+    } else if (advance) {
+      // Finish a 32-sample fade before starting another. Rapid band requests
+      // cannot restart a fade indefinitely or jump between unrelated weights.
+      if (_pwmBandMix == 32 && wanted != _pwmBand) {
+        _pwmNextBand = wanted;
+        _pwmBandMix = 0;
+      }
+      if (_pwmBandMix < 32 && ++_pwmBandMix == 32) _pwmBand = _pwmNextBand;
+    }
+  }
+
+  inline uint32_t pulseWidthPhase(uint32_t phase) const {
+    phase &= TABLE_SIZE_FP_MASK;
+    if (_pwmDuty == 32768) return phase; // exact identity at 50%
+    float mapped = phase < _pwmBoundary
+        ? (float)phase * _pwmScale1
+        : (float)HALF_TABLE_SIZE_FP + (float)(phase - _pwmBoundary) * _pwmScale2;
+    // A float can round the final position to TABLE_SIZE_FP_CONST.
+    return (uint32_t)mapped & TABLE_SIZE_FP_MASK;
+  }
+
+  static inline int32_t pulseLinear(const int16_t* table, uint32_t phase) {
+    uint32_t index = (phase >> 16) & (TABLE_SIZE - 1);
+    int32_t a = table[index];
+    int32_t b = table[(index + 1) & (TABLE_SIZE - 1)];
+    // 15 fractional bits keep even a full int16 transition in signed 32 bits.
+    int32_t fraction = (phase & 0xffffU) >> 1;
+    return a + (((b - a) * fraction) >> 15);
+  }
+
+  inline int32_t pulseWidthLookup(const int16_t* table, uint32_t mapped) const {
+    int32_t a = pulseLinear(table + _pwmBand * TABLE_SIZE, mapped);
+    if (_pwmBandMix == 32) return a;
+    int32_t b = pulseLinear(table + _pwmNextBand * TABLE_SIZE, mapped);
+    return a + (((b - a) * _pwmBandMix) >> 5);
+  }
+
+  inline bool beginPulseWidth(uint32_t& phase, uint32_t& increment,
+                              bool unlocked, bool advance) {
+    #if IS_ESP32() || IS_RP2040()
+      int16_t* table;
+      readFrequencySnapshot(increment, table);
+      if (table == nullptr || increment == 0 || waveTable == nullptr) return false;
+      // PWM selects its own duty-aware bands and crossfades them. Also consume
+      // setFreq's ordinary pending band so it never waits for a missed crossing.
+      if (__atomic_load_n((uintptr_t*)&_pendingBandPtr, __ATOMIC_RELAXED) != 0) {
+        int16_t* pending = (int16_t*)__atomic_exchange_n(
+            (uintptr_t*)&_pendingBandPtr, (uintptr_t)nullptr, __ATOMIC_RELAXED);
+        if (pending != nullptr)
+          __atomic_store_n((uintptr_t*)&bandPtr, (uintptr_t)pending, __ATOMIC_RELAXED);
+      }
+      phase = unlocked ? phase_fractional
+                       : __atomic_load_n(&phase_fractional, __ATOMIC_RELAXED);
+      phase &= TABLE_SIZE_FP_MASK;
+      if (advance) {
+        uint32_t nextPhase = (phase + increment) & TABLE_SIZE_FP_MASK;
+        if (unlocked) phase_fractional = nextPhase;
+        else __atomic_store_n(&phase_fractional, nextPhase, __ATOMIC_RELAXED);
+      }
+    #else
+      increment = phase_increment_fractional;
+      if (bandPtr == nullptr || increment == 0 || waveTable == nullptr) return false;
+      phase = phase_fractional & TABLE_SIZE_FP_MASK;
+      if (advance) phase_fractional = (phase + increment) & TABLE_SIZE_FP_MASK;
+    #endif
+    preparePulseWidth(increment, advance);
+    return true;
+  }
+
+  inline int16_t finishPulseWidth(int32_t sample, bool advance) {
+    if (spreadActive) {
+      int32_t a = pulseWidthLookup(waveTable, pulseWidthPhase(phase_fractional_s1));
+      int32_t b = pulseWidthLookup(waveTable, pulseWidthPhase(phase_fractional_s2));
+      sample = clip16((sample + ((a * 500) >> 10) + ((b * 500) >> 10)) >> 1);
+      if (advance) incrementSpreadPhase();
+    }
+    return (int16_t)sample;
+  }
+
+  inline int32_t pulseWidthMorphSample(uint32_t phase, const int16_t* second,
+                                       int morph) const {
+    uint32_t mapped = pulseWidthPhase(phase);
+    int32_t a = pulseWidthLookup(waveTable, mapped);
+    if (second == nullptr || morph == 0) return a;
+    int32_t b = pulseWidthLookup(second, mapped);
+    return a + (((b - a) * morph) >> 10);
+  }
+
+  inline int16_t renderPulseWidth(uint32_t offset = 0, bool unlocked = false,
+                                  bool oversample = false,
+                                  const int16_t* second = nullptr, int morph = 0,
+                                  bool advance = true) {
+    uint32_t phase, increment;
+    if (!beginPulseWidth(phase, increment, unlocked, advance)) return 0;
+    int32_t sample = pulseWidthMorphSample(phase + offset, second, morph);
+    if (oversample) {
+      int32_t half = pulseWidthMorphSample(phase + (increment >> 1) + offset, second, morph);
+      sample = (sample + half) >> 1;
+    }
+    return finishPulseWidth(sample, advance);
+  }
+
+  inline int16_t renderPulseWidthWindow(uint32_t offset, const int16_t* second,
+                                        float window, bool dual, bool invert) {
+    uint32_t phase, increment;
+    if (!beginPulseWidth(phase, increment, false, true)) return 0;
+    uint32_t mapped = pulseWidthPhase(phase + offset);
+    int index = mapped >> 16;
+    window = max(0.0f, min(1.0f, window));
+    int centre = dual ? TABLE_SIZE / 4 : HALF_TABLE_SIZE;
+    int radius = (int)(centre * window);
+    bool inside = (index >= centre - radius && index <= centre + radius);
+    if (dual) inside |= (index >= 3 * centre - radius && index <= 3 * centre + radius);
+    int32_t sample = pulseWidthLookup(inside && second != nullptr ? second : waveTable, mapped);
+    if (inside && second != nullptr && invert) sample = clip16(-sample);
+    sample = (sample + prevSampVal) >> 1; // retain window-join smoothing
+    prevSampVal = sample;
+    return finishPulseWidth(sample, true);
+  }
+
+
   /** Fast 32-bit avalanche hash for stateless noise lookup. */
   static inline uint32_t noiseHash(uint32_t x) {
     x ^= x >> 16;
@@ -2028,8 +2249,6 @@ private:
   // 16.16 fixed-point: upper 16 bits = table index, lower 16 bits = fractional
   uint32_t phase_fractional = 0;
   uint32_t phase_increment_fractional = 1228800; // ~440Hz default: (440 * TABLE_SIZE << 16) / SAMPLE_RATE
-  uint32_t phase_increment_fractional_w1 = 1228800; // pulse width variant 1
-  uint32_t phase_increment_fractional_w2 = 1228800; // pulse width variant 2
   // Spread variables (16.16 fixed-point for phase, float for ratios)
   float spread1 = 1.0f;
   float spread2 = 1.0f;
@@ -2051,8 +2270,6 @@ private:
   int crackleAmnt = MAX_16 * 0.5; //MAX_16 * 0.5;
   float frequency = 440;
   float prevFrequency = 440;
-  float pulseWidth = 0.5;
-  bool pulseWidthOn = false;
   int16_t prevParticle, particleEnv, particleThreshold = 0.993; //MAX_16 * 0.993;
   float particleEnvReleaseRate = 0.92; // thresh and rate = number of apparent particles
   uint32_t feedback_phase_fractional = 0; // 16.16 fixed-point
@@ -2234,22 +2451,13 @@ private:
 
   /** Increments the phase of the oscillator without returning a sample. */
   inline void incrementPhase() {
-      // Increment phase (pulse width uses different increments per half-cycle)
-      if (pulseWidthOn) {
-          if (phase_fractional < HALF_TABLE_SIZE_FP) {
-              phase_fractional += phase_increment_fractional_w1;
-          } else {
-              phase_fractional += phase_increment_fractional_w2;
-          }
-      } else {
-          // Use atomic load for thread-safety with setFreq on dual-core systems
-          #if IS_ESP32() || IS_RP2040()
-            uint32_t inc = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
-            phase_fractional += inc;
-          #else
-            phase_fractional += phase_increment_fractional;
-          #endif
-      }
+      // PWM warps only the lookup position; all master phases advance uniformly.
+      #if IS_ESP32() || IS_RP2040()
+        uint32_t inc = __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+        phase_fractional += inc;
+      #else
+        phase_fractional += phase_increment_fractional;
+      #endif
 
       // Noise uses stateless hashed lookup, so it can use the normal cheap
       // phase wrap. Only crackle retains randomized wrap behavior.
