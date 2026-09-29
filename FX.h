@@ -51,6 +51,20 @@ class FX {
       return clip16(sample_in);
     }
 
+    /** Ring modulation with a dry/wet control.
+     * @param carrier Signal being modulated.
+     * @param modulator Modulating signal, normalized to the int16 range.
+     * @param wetLevel Wet amount from 0 (unchanged carrier) to 1024 (full ring mod).
+     */
+    inline int16_t ringMod(int16_t carrier, int16_t modulator, uint16_t wetLevel = 1024) {
+      if (wetLevel == 0) return carrier;
+      if (wetLevel > 1024) wetLevel = 1024;
+      int32_t ringSample = (static_cast<int32_t>(carrier) * modulator) >> 15;
+      int32_t mixed = (static_cast<int32_t>(carrier) * (1024 - wetLevel) +
+                       ringSample * wetLevel) >> 10;
+      return clip16(mixed);
+    }
+
     // clip16() in M16.h does hard clipping
 
     /* Soft Clipping default
