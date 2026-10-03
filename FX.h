@@ -65,6 +65,80 @@ class FX {
       return clip16(mixed);
     }
 
+    /** Trigger history for one oscillator-sync master/slave pair. */
+    struct OscSyncState {
+      int16_t previousMaster = 0;
+      bool comparatorArmed = false;
+      uint32_t previousMasterPhase = 0;
+      bool phaseInitialized = false;
+    };
+
+    /** Sample-based hard sync for a master that is not an Osc object.
+     * Arm only after a sufficiently negative master sample, then detect its
+     * rising zero crossing. Linear crossing interpolation compensates for the
+     * reset taking effect at the next sample. Osc masters should use the
+     * phase-wrap overload below, which is independent of waveform shape.
+     * Call after rendering sample_in, from the slave's audio task.
+     */
+    /** @param amount Zero disables sync; any positive value enables hard sync.
+     * Kept as float for compatibility with existing callers.
+     */
+    inline int16_t hardSync(int16_t sample_in, int16_t sync_in, Osc& slave,
+                           OscSyncState& state, float amount = 1.0f) {
+      const int16_t previous = state.previousMaster;
+      state.previousMaster = sync_in;
+      if (amount <= 0.0f) {
+        state.comparatorArmed = false;
+        return sample_in;
+      }
+      constexpr int16_t hysteresis = MAX_16 / 64;
+      if (sync_in <= -hysteresis) state.comparatorArmed = true;
+      const bool risingCrossing = state.comparatorArmed && previous < 0 && sync_in >= 0;
+      if (risingCrossing) {
+        state.comparatorArmed = false;
+        const int32_t span = (int32_t)sync_in - previous;
+        const float crossingFraction = span > 0 ? (float)(-previous) / span : 1.0f;
+        const float elapsedSamples = 2.0f - crossingFraction;
+        slave.setPhaseRaw((uint32_t)(elapsedSamples * slave.getPhaseIncrementRaw()));
+      }
+      return sample_in;
+    }
+
+    /** Hard sync using an Osc master's phase wrap rather than its samples.
+     * Call after both oscillators render the current sample, from the same
+     * audio task. The master phase then represents the next sample. Its
+     * post-wrap overshoot gives the fractional time since the reset; advance
+     * the slave by the corresponding fraction of its own increment so its
+     * next sample is at the correct phase.
+     * @param sample_in Current slave sample, returned unchanged.
+     * @param state Reset phaseInitialized when the master route changes.
+     * @param resetPhase Optional fixed phase offset in cycles (0.0 to 1.0).
+     */
+    inline int16_t oscSync(int16_t sample_in, Osc& master, Osc& slave,
+                           OscSyncState& state, float resetPhase = 0.0f) {
+      const uint32_t masterPhase = master.getPhaseRaw();
+      if (&master == &slave || !state.phaseInitialized) {
+        state.previousMasterPhase = masterPhase;
+        state.phaseInitialized = true;
+        return sample_in;
+      }
+      const bool wrapped = masterPhase < state.previousMasterPhase;
+      state.previousMasterPhase = masterPhase;
+      if (wrapped) {
+        const uint32_t masterIncrement = master.getPhaseIncrementRaw();
+        if (masterIncrement != 0) {
+          const uint32_t slaveIncrement = slave.getPhaseIncrementRaw();
+          uint32_t target = (uint32_t)(((uint64_t)masterPhase * slaveIncrement +
+                                        masterIncrement / 2) / masterIncrement);
+          if (resetPhase > 0.0f && resetPhase < 1.0f) {
+            target += (uint32_t)(resetPhase * (TABLE_SIZE << 16));
+          }
+          slave.setPhaseRaw(target);
+        }
+      }
+      return sample_in;
+    }
+
     // clip16() in M16.h does hard clipping
 
     /* Soft Clipping default
@@ -440,6 +514,23 @@ class FX {
       int16_t sampVal = shapeTable[index];
       if (amount >= 0 && amount < 1.0) sampVal = (sampVal * amount) + (sample_in * (1.0 - amount));
       return sampVal;
+    }
+
+    /** Blend a sample with a live shaping value instead of reading shapeTable.
+     * The caller supplies the shaped value for this sample, for example from
+     * another audio-rate signal. This is a dry/wet crossfade; it does not
+     * derive a transfer curve from shape_in.
+     * @param sample_in Original sample (dry signal).
+     * @param shape_in Live value replacing the table lookup result.
+     * @param amount 0.0 = dry, 1.0 = shape_in; clamped outside that range.
+     */
+    inline int16_t waveShaperLive(int16_t sample_in, int16_t shape_in, float amount) {
+      if (!(amount > 0.0f)) return sample_in;
+      if (amount >= 1.0f) return shape_in;
+      const int32_t wetQ10 = static_cast<int32_t>(amount * 1024.0f + 0.5f);
+      const int32_t mixed = static_cast<int32_t>(sample_in) * (1024 - wetQ10) +
+                            static_cast<int32_t>(shape_in) * wetQ10;
+      return static_cast<int16_t>(mixed / 1024);
     }
 
     /** Create a dedicated soft clip wave shaper
