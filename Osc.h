@@ -418,21 +418,54 @@ public:
     setTable(table._samples);
   }
 
-	/** Set the phase of the Oscil. Phase ranges from 0.0 - 1.0 */
+	/** Set the oscillator phase in cycles. Phase 1.0 wraps to 0.0. */
 	inline
   void setPhase(float phase) {
-    // Convert 0.0-1.0 to 16.16 fixed-point (0 to TABLE_SIZE << 16)
-		phase_fractional = (uint32_t)(phase * TABLE_SIZE * 65536.0f);
-    // Spread phases also 16.16
-    phase_fractional_s1 = phase_fractional;
-    phase_fractional_s2 = phase_fractional;
+    setPhaseRaw((uint32_t)(phase * TABLE_SIZE_FP_CONST));
 	}
 
-	/** Get the phase of the Oscil in fractional format (0.0 - 1.0). */
+  /** Read the wrapped 16.16 phase in [0, TABLE_SIZE << 16).
+   * The ESP32/RP2040 render accumulator free-runs, so mask it before exposing
+   * a cycle position. Call from the task that renders this oscillator when
+   * using it to time an oscillator-sync reset.
+   */
+  inline uint32_t getPhaseRaw() const {
+    #if IS_ESP32() || IS_RP2040()
+    return __atomic_load_n(&phase_fractional, __ATOMIC_RELAXED) & TABLE_SIZE_FP_MASK;
+    #else
+    return phase_fractional & TABLE_SIZE_FP_MASK;
+    #endif
+  }
+
+  /** Read the current 16.16 phase advance per audio sample. */
+  inline uint32_t getPhaseIncrementRaw() const {
+    #if IS_ESP32() || IS_RP2040()
+    return __atomic_load_n(&phase_increment_fractional, __ATOMIC_RELAXED);
+    #else
+    return phase_increment_fractional;
+    #endif
+  }
+
+  /** Reset the base and spread phases to a wrapped 16.16 position.
+   * Call from the oscillator's rendering task for deterministic sync timing.
+   */
+  inline void setPhaseRaw(uint32_t phase) {
+    phase &= TABLE_SIZE_FP_MASK;
+    #if IS_ESP32() || IS_RP2040()
+    __atomic_store_n(&phase_fractional, phase, __ATOMIC_RELAXED);
+    __atomic_store_n(&phase_fractional_s1, phase, __ATOMIC_RELAXED);
+    __atomic_store_n(&phase_fractional_s2, phase, __ATOMIC_RELAXED);
+    #else
+    phase_fractional = phase;
+    phase_fractional_s1 = phase;
+    phase_fractional_s2 = phase;
+    #endif
+  }
+
+	/** Get the wrapped oscillator phase as a fraction of one cycle (0.0 - 1.0). */
 	inline
   float getPhase() {
-    // Convert 16.16 fixed-point back to 0.0-1.0
-		return (float)phase_fractional / (TABLE_SIZE * 65536.0f);
+    return (float)getPhaseRaw() / TABLE_SIZE_FP_CONST;
 	}
 
   /** Set the spread value of the Oscil.
