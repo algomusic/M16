@@ -23,10 +23,10 @@
 #include "Wav.h"
 
 // SD Card SPI pins
-#define SD_MISO 10
-#define SD_SCLK 11
-#define SD_MOSI 12
-#define SD_CS   13
+#define SD_MISO 10 // 10 sProject, 14 sProto
+#define SD_SCLK 11 // 11 sProject, 13 sProto
+#define SD_MOSI 12 // sProject & sProto
+#define SD_CS   13 // 13 sProject, 11 sProto
 
 // Create objects
 SdFs sd;
@@ -56,10 +56,7 @@ void setup() {
     // Print first samples for verification
     wav.printFirstSamples(10);
     // Configure Samp object with loaded WAV data
-    sample.setTable(wav.getBuffer(),
-                   wav.getFrameCount(),
-                   wav.getSampleRate(),
-                   wav.getChannels());
+    sample.setTable(wav.getBuffer(), wav.getFrameCount(), wav.getSampleRate(), wav.getChannels());
 
     end = wav.getFrameCount();
     currentSpeed = sample.getSpeed();  // 1.0 for initial playback
