@@ -14,6 +14,8 @@
 #include <atomic>
 #include <stdint.h>
 
+#include "CODECS.h"
+
 class Gain {
 public:
   /** Construct at full level (1024). */
@@ -59,4 +61,26 @@ private:
   std::atomic<int16_t> levelQ10{1024};
 };
 
+/** Control the Waveshare speaker amplifier through TCA9555 P1.0 (EXIO8).
+ * This pin is an on/off switch. Set playback volume with es8311SetVolumeDb().
+ * Call from setup()/loop(), never audioUpdate(). Other expander pins are kept.
+ */
+inline bool tca9555SpeakerEnable(bool enabled, uint8_t address = 0x20) {
+  uint8_t output, direction;
+  if (!M16CodecDetail::read(address, 0x03, output) ||
+      !M16CodecDetail::read(address, 0x07, direction)) return false;
+  const uint8_t nextOutput = enabled ? (uint8_t)(output | 0x01) : (uint8_t)(output & ~0x01);
+  // Set the latch before changing pin direction to prevent an amplifier pulse.
+  return M16CodecDetail::write(address, 0x03, nextOutput) &&
+         M16CodecDetail::write(address, 0x07, (uint8_t)(direction & ~0x01));
+}
+
+/** Read the actual speaker amplifier state. Returns false on an I2C error. */
+inline bool tca9555SpeakerEnabled(bool &enabled, uint8_t address = 0x20) {
+  uint8_t output, direction;
+  if (!M16CodecDetail::read(address, 0x03, output) ||
+      !M16CodecDetail::read(address, 0x07, direction)) return false;
+  enabled = (output & 0x01) != 0 && (direction & 0x01) == 0;
+  return true;
+}
 #endif /* GAIN_H_ */

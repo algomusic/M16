@@ -15,6 +15,8 @@
 #ifndef MIC_H_
 #define MIC_H_
 
+#include "CODECS.h"
+
 class Mic { 
   public:
     /** Constructor
@@ -160,5 +162,56 @@ class Mic {
       inline void readMic() { samples_read = 0; }
     #endif
 };
+
+/** ES7210 analog microphone PGA gain: 0..33 dB in 3 dB steps, or 36 dB.
+ * Works through Arduino Wire on supported boards. Call from setup()/loop(),
+ * not audioUpdate().
+ */
+inline bool es7210SetMicGainDb(int db, uint8_t address = 0x40) {
+  if (db < 0 || db > 36 || (db != 36 && (db > 33 || db % 3 != 0))) return false;
+  const uint8_t reg = 0x10 | (uint8_t)(db == 36 ? 13 : db / 3);
+  for (uint8_t pin = 0x43; pin <= 0x46; ++pin) {
+    if (!M16CodecDetail::write(address, pin, reg)) return false;
+  }
+  return true;
+}
+
+/** ES7210 ADC digital gain, -95 to +32 dB (default 0 dB). */
+inline bool es7210SetInputVolumeDb(int db, uint8_t address = 0x40) {
+  if (db < -95 || db > 32) return false;
+  const uint8_t reg = (uint8_t)(0xBF + db * 2);
+  for (uint8_t pin = 0x1B; pin <= 0x1E; ++pin) {
+    if (!M16CodecDetail::write(address, pin, reg)) return false;
+  }
+  return true;
+}
+
+/** Configure an ES7210 for two analog microphones on standard stereo I2S.
+ * Uses the supplied sample rate and MCLK ratio (defaults to M16 SAMPLE_RATE
+ * and 256fs). The current register sequence supports 44.1 kHz only. This
+ * register setup is independent of the MCU, but the board must provide matching
+ * MCLK/BCLK/WS and M16 input transport. Call after Wire.begin(), outside
+ * audioUpdate().
+ */
+inline bool es7210Setup(uint32_t sampleRate = (uint32_t)SAMPLE_RATE,
+                        uint16_t mclkRatio = 256,
+                        uint8_t address = 0x40) {
+  if (mclkRatio != 256 || sampleRate != 44100) return false;
+
+  const uint8_t registers[][2] = {
+    {0x00, 0xFF}, {0x00, 0x32},
+    {0x09, 0x30}, {0x0A, 0x30},
+    {0x23, 0x2A}, {0x22, 0x0A}, {0x21, 0x2A}, {0x20, 0x0A},
+    {0x11, 0x60}, {0x12, 0x00}, // 16-bit Philips I2S; ADC1/2 on SDOUT1
+    {0x40, 0xC3}, {0x41, 0x70}, {0x42, 0x70}, // analog power, mic bias
+    {0x43, 0x1A}, {0x44, 0x1A}, {0x45, 0x1A}, {0x46, 0x1A}, // 30 dB PGA
+    {0x47, 0x08}, {0x48, 0x08}, {0x49, 0x08}, {0x4A, 0x08},
+    {0x07, 0x20}, {0x02, 0xC1}, {0x04, 0x01}, {0x05, 0x00}, // 256fs clock
+    {0x06, 0x04}, {0x4B, 0x0F}, {0x4C, 0x0F},
+    {0x00, 0x71}, {0x00, 0x41},
+    {0x1B, 0xBF}, {0x1C, 0xBF}, {0x1D, 0xBF}, {0x1E, 0xBF} // 0 dB digital
+  };
+  return M16CodecDetail::writeSequence(address, registers, sizeof(registers) / sizeof(registers[0]));
+}
 
 #endif /* MIC_H_ */
