@@ -15,6 +15,12 @@
 #ifndef OSC_H_
 #define OSC_H_
 
+/** Two signed components returned by the Perlin gradient-vector field. */
+struct NoiseVector2 {
+  int16_t x = 0;
+  int16_t y = 0;
+};
+
 /** A shareable, memory-owning oscillator wavetable.
  *
  * WaveTable keeps allocation details and raw pointers out of sketches. Generate
@@ -94,6 +100,92 @@ public:
     // consuming or locking the global audio PRNG. Users can override this via
     // setNoiseSeed() when a reproducible stream is required.
     noiseSalt = noiseHash((uint32_t)(uintptr_t)this ^ 0x9E3779B9u);
+  }
+
+  /** Set the starting position for the 2D Perlin gradient-vector stream. */
+  inline void setPerlinVectorPosition(float x, float y) {
+    setPerlinVectorPosition(x, y, millis());
+  }
+
+  /** Set the starting position and time anchor for the vector field. */
+  inline void setPerlinVectorPosition(float x, float y, uint32_t timeMs) {
+    _perlinVectorTimeXQ16 = perlinVectorCoordinateQ16(x);
+    _perlinVectorTimeYQ16 = perlinVectorCoordinateQ16(y);
+    _perlinVectorTimeAnchorMs = timeMs;
+    _perlinVectorXNextQ16 = _perlinVectorTimeXQ16;
+    _perlinVectorYNextQ16 = _perlinVectorTimeYQ16;
+    _perlinVectorXNextRemainder = 0;
+    _perlinVectorYNextRemainder = 0;
+  }
+
+  /** Set the X and Y movement speeds in noise-coordinate units per second.
+   * Negative speeds move backwards through the field.
+   */
+  inline void setPerlinVectorSpeed(float xSpeed, float ySpeed) {
+    setPerlinVectorSpeed(xSpeed, ySpeed, millis());
+  }
+
+  /** Set vector speed at an explicit timestamp, preserving the current position. */
+  inline void setPerlinVectorSpeed(float xSpeed, float ySpeed, uint32_t timeMs) {
+    const int64_t xPosition = perlinVectorPositionAt(timeMs, true);
+    const int64_t yPosition = perlinVectorPositionAt(timeMs, false);
+    _perlinVectorTimeXQ16 = xPosition;
+    _perlinVectorTimeYQ16 = yPosition;
+    _perlinVectorTimeAnchorMs = timeMs;
+    _perlinVectorXSpeedQ16 = perlinVectorSpeedQ16(xSpeed);
+    _perlinVectorYSpeedQ16 = perlinVectorSpeedQ16(ySpeed);
+    _perlinVectorXNextRemainder = 0;
+    _perlinVectorYNextRemainder = 0;
+    updatePerlinVectorNextStep(true);
+  }
+
+  /** Sample the two interpolated gradient components at a 2D position.
+   * Coordinates are in noise units; returned components span the signed
+   * 16-bit audio range.
+   */
+  inline NoiseVector2 getPerlinVector2D(float x, float y) const {
+    const int64_t xQ16 = perlinVectorCoordinateQ16(x);
+    const int64_t yQ16 = perlinVectorCoordinateQ16(y);
+    return perlinVectorValueAtPosition(xQ16, yQ16);
+  }
+
+  /** Get the vector at an explicit millisecond timestamp. */
+  inline NoiseVector2 getPerlinVectorValue(uint32_t timeMs) const {
+    return perlinVectorValueAtPosition(perlinVectorPositionAt(timeMs, true),
+                                       perlinVectorPositionAt(timeMs, false));
+  }
+
+  /** Get the current time-based vector using millis(). */
+  inline NoiseVector2 getPerlinVectorNow() const {
+    return getPerlinVectorValue(millis());
+  }
+
+  /** Return the next audio-rate X/Y vector and advance through the field.
+   * Set its starting point and movement speeds before audio rendering.
+   */
+  inline NoiseVector2 getPerlinVectorNext() {
+    updatePerlinVectorNextStep();
+    const NoiseVector2 value = perlinVectorValueAtPosition(
+        _perlinVectorXNextQ16, _perlinVectorYNextQ16);
+    _perlinVectorXNextQ16 += _perlinVectorXNextStepQ16;
+    _perlinVectorYNextQ16 += _perlinVectorYNextStepQ16;
+    _perlinVectorXNextRemainder += _perlinVectorXStepRemainder;
+    _perlinVectorYNextRemainder += _perlinVectorYStepRemainder;
+    if (_perlinVectorXNextRemainder >= _perlinVectorStepSampleRate) {
+      _perlinVectorXNextQ16++;
+      _perlinVectorXNextRemainder -= _perlinVectorStepSampleRate;
+    } else if (_perlinVectorXNextRemainder <= -_perlinVectorStepSampleRate) {
+      _perlinVectorXNextQ16--;
+      _perlinVectorXNextRemainder += _perlinVectorStepSampleRate;
+    }
+    if (_perlinVectorYNextRemainder >= _perlinVectorStepSampleRate) {
+      _perlinVectorYNextQ16++;
+      _perlinVectorYNextRemainder -= _perlinVectorStepSampleRate;
+    } else if (_perlinVectorYNextRemainder <= -_perlinVectorStepSampleRate) {
+      _perlinVectorYNextQ16--;
+      _perlinVectorYNextRemainder += _perlinVectorStepSampleRate;
+    }
+    return value;
   }
 
   /** Updates the phase according to the current frequency and returns the sample at the new phase position.
@@ -1603,9 +1695,9 @@ public:
 			isNoise = val;
 		}
 
-  /** Set the per-oscillator salt used by stateless noise indexing.
-   * Equal seeds produce equal lookup sequences; different seeds decorrelate
-   * oscillators that share the same noise wavetable.
+  /** Set the per-oscillator seed used by generated noise and Perlin noise.
+   * Equal seeds produce repeatable matching noise values; different seeds
+   * produce different noise patterns.
    */
   inline void setNoiseSeed(uint32_t seed) {
     noiseSalt = noiseHash(seed ? seed : 0x9E3779B9u);
@@ -2194,6 +2286,106 @@ private:
     return x;
   }
 
+  struct PerlinGradient2D {
+    int32_t x;
+    int32_t y;
+  };
+
+  static inline int64_t perlinVectorCoordinateQ16(float coordinate) {
+    if (!(coordinate == coordinate)) return 0; // NaN
+    if (coordinate >= 32768.0f) return 2147483647LL;
+    if (coordinate <= -32768.0f) return -2147483648LL;
+    return (int64_t)(coordinate * 65536.0f);
+  }
+
+  static inline int32_t perlinVectorSpeedQ16(float speed) {
+    if (!(speed == speed)) return 0; // NaN
+    if (speed >= 32768.0f) return 2147483647;
+    if (speed <= -32768.0f) return (int32_t)(-2147483647 - 1);
+    return (int32_t)(speed * 65536.0f);
+  }
+
+  inline int64_t perlinVectorPositionAt(uint32_t timeMs, bool xAxis) const {
+    const uint32_t elapsedMs = timeMs - _perlinVectorTimeAnchorMs;
+    const uint32_t wholeSeconds = elapsedMs / 1000u;
+    const uint32_t remainingMs = elapsedMs % 1000u;
+    const int32_t speedQ16 = xAxis ? _perlinVectorXSpeedQ16 : _perlinVectorYSpeedQ16;
+    const int64_t advance = (int64_t)speedQ16 * wholeSeconds
+        + ((int64_t)speedQ16 * remainingMs) / 1000;
+    return (xAxis ? _perlinVectorTimeXQ16 : _perlinVectorTimeYQ16) + advance;
+  }
+
+  inline PerlinGradient2D perlinGradient2D(int64_t latticeX, int64_t latticeY) const {
+    const uint32_t hash = noiseHash((uint32_t)latticeX ^ noiseSalt ^
+        noiseHash((uint32_t)latticeY + 0x9E3779B9u));
+    const int32_t diagonal = 46341; // 1/sqrt(2) in Q16.16.
+    switch (hash & 7u) {
+      case 0: return { 65536, 0 };
+      case 1: return { -65536, 0 };
+      case 2: return { 0, 65536 };
+      case 3: return { 0, -65536 };
+      case 4: return { diagonal, diagonal };
+      case 5: return { -diagonal, diagonal };
+      case 6: return { diagonal, -diagonal };
+      default: return { -diagonal, -diagonal };
+    }
+  }
+
+  static inline int32_t perlinLerpQ16(int32_t a, int32_t b, int32_t weight) {
+    return a + (int32_t)(((int64_t)(b - a) * weight) >> 16);
+  }
+
+  inline NoiseVector2 perlinVectorValueAtPosition(int64_t xQ16, int64_t yQ16) const {
+    int64_t latticeX = xQ16 / 65536;
+    int64_t latticeY = yQ16 / 65536;
+    int32_t fractionX = (int32_t)(xQ16 % 65536);
+    int32_t fractionY = (int32_t)(yQ16 % 65536);
+    if (fractionX < 0) { latticeX--; fractionX += 65536; }
+    if (fractionY < 0) { latticeY--; fractionY += 65536; }
+
+    const int32_t fadeX = perlinFadeQ16((uint32_t)fractionX);
+    const int32_t fadeY = perlinFadeQ16((uint32_t)fractionY);
+    const PerlinGradient2D g00 = perlinGradient2D(latticeX, latticeY);
+    const PerlinGradient2D g10 = perlinGradient2D(latticeX + 1, latticeY);
+    const PerlinGradient2D g01 = perlinGradient2D(latticeX, latticeY + 1);
+    const PerlinGradient2D g11 = perlinGradient2D(latticeX + 1, latticeY + 1);
+    const int32_t topX = perlinLerpQ16(g00.x, g10.x, fadeX);
+    const int32_t bottomX = perlinLerpQ16(g01.x, g11.x, fadeX);
+    const int32_t topY = perlinLerpQ16(g00.y, g10.y, fadeX);
+    const int32_t bottomY = perlinLerpQ16(g01.y, g11.y, fadeX);
+    const int32_t valueXQ16 = perlinLerpQ16(topX, bottomX, fadeY);
+    const int32_t valueYQ16 = perlinLerpQ16(topY, bottomY, fadeY);
+
+    NoiseVector2 value;
+    value.x = (int16_t)clip16((int32_t)(((int64_t)valueXQ16 * MAX_16) >> 16));
+    value.y = (int16_t)clip16((int32_t)(((int64_t)valueYQ16 * MAX_16) >> 16));
+    return value;
+  }
+
+  inline void updatePerlinVectorNextStep(bool resetRemainder = false) {
+    int sampleRate = SAMPLE_RATE;
+    if (sampleRate <= 0) sampleRate = 1;
+    if (_perlinVectorStepSampleRate == sampleRate && !resetRemainder) return;
+    if (_perlinVectorStepSampleRate != sampleRate || resetRemainder) {
+      _perlinVectorXNextRemainder = 0;
+      _perlinVectorYNextRemainder = 0;
+    }
+    _perlinVectorStepSampleRate = sampleRate;
+    _perlinVectorXNextStepQ16 = _perlinVectorXSpeedQ16 / sampleRate;
+    _perlinVectorYNextStepQ16 = _perlinVectorYSpeedQ16 / sampleRate;
+    _perlinVectorXStepRemainder = _perlinVectorXSpeedQ16 % sampleRate;
+    _perlinVectorYStepRemainder = _perlinVectorYSpeedQ16 % sampleRate;
+  }
+
+  static inline int32_t perlinFadeQ16(uint32_t t) {
+    // Quintic Perlin fade: 6t^5 - 15t^4 + 10t^3, with all terms in Q16.16.
+    const int32_t t2 = (int32_t)(((uint64_t)t * t) >> 16);
+    const int32_t t3 = (int32_t)(((int64_t)t2 * t) >> 16);
+    const int32_t t4 = (int32_t)(((int64_t)t3 * t) >> 16);
+    const int32_t t5 = (int32_t)(((int64_t)t4 * t) >> 16);
+    return 6 * t5 - 15 * t4 + 10 * t3;
+  }
+
   inline uint32_t noiseTableIndex(uint32_t phase) const {
     return noiseHash(phase + noiseSalt) & (TABLE_SIZE - 1);
   }
@@ -2301,6 +2493,20 @@ private:
   bool isSandH = false;
   int16_t sandHValue = 0;
   int crackleAmnt = MAX_16 * 0.5; //MAX_16 * 0.5;
+  int64_t _perlinVectorTimeXQ16 = 0;
+  int64_t _perlinVectorTimeYQ16 = 0;
+  uint32_t _perlinVectorTimeAnchorMs = 0;
+  int64_t _perlinVectorXNextQ16 = 0;
+  int64_t _perlinVectorYNextQ16 = 0;
+  int32_t _perlinVectorXSpeedQ16 = 0;
+  int32_t _perlinVectorYSpeedQ16 = 0;
+  int32_t _perlinVectorXNextStepQ16 = 0;
+  int32_t _perlinVectorYNextStepQ16 = 0;
+  int32_t _perlinVectorXStepRemainder = 0;
+  int32_t _perlinVectorYStepRemainder = 0;
+  int32_t _perlinVectorXNextRemainder = 0;
+  int32_t _perlinVectorYNextRemainder = 0;
+  int _perlinVectorStepSampleRate = 0;
   float frequency = 440;
   float prevFrequency = 440;
   int16_t prevParticle, particleEnv, particleThreshold = 0.993; //MAX_16 * 0.993;
