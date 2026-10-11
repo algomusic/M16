@@ -39,6 +39,10 @@ class All {
      */
     inline
     int16_t next(int input) {
+      // A zero-length allpass is an identity operation. Check before lazy
+      // initialization so bypassed instances need no delay buffers.
+      if (delayTime_samples == 0) return input;
+
       // y[n] = (-g * x[n]) + x[n - d] + (g * y[n - d]) // g = gain, d = delay, x = input, y = output
       // set up first time called
       if (!allpassInitiated) {
@@ -47,7 +51,6 @@ class All {
 
       if (!inputBuffer || !outputBuffer) return 0;
       if (bufferSize_samples == 0) return 0;
-      if (delayTime_samples == 0) return input;
 
       // Write input to delay buffer
       inputBuffer[bufferWriteIndex] = (int16_t)clip16(input);
