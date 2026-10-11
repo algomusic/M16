@@ -43,6 +43,9 @@ void setup() {
   effect1.setReverbMix(0.4); // 0.0 - 1.0
   verb.setReverbMix(0.7); // 0.0 - 1.0
   verb.setDampening(0.3); // 0.0 - 1.0
+  effect1.initPVerb();
+  effect1.setPVerbModulation(0.1); // 0.0 - 1.0
+  effect1.setPVerbShimmer(0.6); // 0.0 - 1.0
   // seti2sPins(38, 39, 40,  41); // BCK, WS, DOUT
   // setSampleRate(22050);
   // useInternalDAC(); // enable internal DAC output, call before audioStart()
@@ -83,6 +86,10 @@ void audioUpdate() {
     effect1.reverbStereo(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
     // Try reverbStereo2 is a smoother reverb that requires more processing power
     // effect1.reverbStereo2(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
+    // Try interpolated version for efficiency
+    // effect1.reverbStereoInterpUnlocked(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
+    // Try pVerb
+    // effect1.pVerb(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal); 
     // Try Freeverb
     // verb.reverbStereo(oscVal * leftPan, oscVal * rightPan, leftVal, rightVal);
   #endif

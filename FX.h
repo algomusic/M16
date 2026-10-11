@@ -834,6 +834,151 @@ class FX {
       });
     }
 
+    /** Plinky's modulated Dattorro/Griesinger reverb tank with shimmer.
+     * Call initPVerb() during setup to allocate and clear its 32 KB
+     * delay buffer before audio starts. Dry/wet balance uses setReverbMix().
+     * Keep this effect instance on one audio core while rendering.
+     * @param audioInLeft Input left sample
+     * @param audioInRight Input right sample
+     * @param audioOutLeft Wet left output
+     * @param audioOutRight Wet right output
+     */
+    inline void pVerb(int32_t audioInLeft, int32_t audioInRight,
+                           int32_t &audioOutLeft, int32_t &audioOutRight) {
+      const int renderMix = reverbMix;
+      const int32_t renderFade = pVerbFade;
+      const int16_t dryLeft = clip16(audioInLeft);
+      const int16_t dryRight = clip16(audioInRight);
+      if (!pVerbBuffer && !initPVerb()) {
+        audioOutLeft = mixReverbChannel(dryLeft, 0, renderMix);
+        audioOutRight = mixReverbChannel(dryRight, 0, renderMix);
+        return;
+      }
+
+      const int i0 = pVerbPos;
+      int i = i0;
+      int32_t outL = 0;
+      int32_t outR = 0;
+      float wob = pVerbLfoNext(pVerbApLfoR, pVerbApLfoI,
+                                    pVerbApLfoA) * pVerbModulation;
+      const int apWobPos = (int)((wob + 1.0f) * 262144.0f);
+      wob = pVerbLfoNext(pVerbDelayLfoR, pVerbDelayLfoI,
+                              pVerbDelayLfoA) * pVerbModulation;
+      const int delayWobPos = (int)((wob + 1.0f) * 262144.0f);
+
+      int32_t acc = (dryLeft * pVerbSend) >> 17;
+      pVerbAllpass(i, acc, 142, false, 0);
+      pVerbAllpass(i, acc, 379, false, 0);
+      acc += (dryRight * pVerbSend) >> 17;
+      pVerbAllpass(i, acc, 107, false, 0);
+      pVerbAllpass(i, acc, 277, false, 0);
+
+      const int32_t reinject = acc;
+      acc += pVerbFeedback;
+      pVerbAllpass(i, acc, 672, true, apWobPos);
+      pVerbAllpass(i, acc, 1800, false, 0);
+      pVerbDelay(i, acc, 4453, false, 0);
+
+      pVerbShimmerFade += pVerbShimmerFadeStep;
+      if (pVerbShimmerFade >= 32768) {
+        pVerbShimmerFade -= 32768;
+        pVerbShimmerPos1 = pVerbShimmerPos2;
+        pVerbShimmerPos2 = (rand() & 4095) + 8192;
+        pVerbShimmerFadeStep = (rand() & 7) + 8;
+      }
+
+      const int mask = 16383;
+      int32_t shimmer = 0;
+      if (pVerbShimmer != 0) {
+        const int s1 = pVerbBuffer[(i + pVerbShimmerPos1) & mask];
+        const int s2 = pVerbBuffer[(i + pVerbShimmerPos2) & mask];
+        const int s3 = pVerbBuffer[(i + pVerbShimmerPos1 + 1) & mask];
+        const int s4 = pVerbBuffer[(i + pVerbShimmerPos2 + 1) & mask];
+        const int shimmerL = (s1 >> 1) + (s3 >> 1);
+        const int shimmerR = (s2 >> 1) + (s4 >> 1);
+        shimmer = (shimmerL * (32767 - pVerbShimmerFade) +
+                   shimmerR * pVerbShimmerFade) >> 15;
+        shimmer = (shimmer * pVerbShimmer) >> 8;
+        shimmer >>= 1;
+      }
+      acc += shimmer;
+      outL = shimmer;
+      outR = shimmer;
+      --pVerbShimmerPos1;
+      --pVerbShimmerPos2;
+
+      pVerbLpf += (((acc * renderFade) >> 8) - pVerbLpf) * 0.95f;
+      pVerbDc += (pVerbLpf - pVerbDc) * 0.005f;
+      acc = (int32_t)(pVerbLpf - pVerbDc);
+      outL += acc;
+
+      acc += reinject;
+      pVerbAllpass(i, acc, 908, true, delayWobPos);
+      pVerbAllpass(i, acc, 2656, false, 0);
+      pVerbDelay(i, acc, 3163, false, 0);
+      pVerbLpf2 += (((acc * renderFade) >> 8) - pVerbLpf2) * 0.95f;
+      acc = (int32_t)pVerbLpf2;
+      outR += acc;
+
+      pVerbPos = (i0 - 1) & mask;
+      pVerbFeedback = (acc * renderFade) >> 8;
+      audioOutLeft = mixReverbChannel(dryLeft, clip16(outL), renderMix);
+      audioOutRight = mixReverbChannel(dryRight, clip16(outR), renderMix);
+    }
+
+    /** Allocate and clear Plinky's 16384-sample reverb buffer.
+     * Call once during setup to keep allocation out of the audio callback.
+     * Returns false if the buffer could not be allocated.
+     */
+    inline bool initPVerb() {
+      if (!pVerbBuffer) {
+        #if IS_ESP32()
+        pVerbBuffer = psramAllocInt16(16384, "Plinky reverb");
+        #endif
+        if (!pVerbBuffer) {
+          pVerbBuffer = new(std::nothrow) int16_t[16384];
+        }
+        if (!pVerbBuffer) return false;
+      }
+      for (int i = 0; i < 16384; ++i) pVerbBuffer[i] = 0;
+      pVerbPos = 0;
+      pVerbFeedback = 0;
+      pVerbLpf = pVerbLpf2 = pVerbDc = 0.0f;
+      pVerbShimmerPos1 = 2000;
+      pVerbShimmerPos2 = 1000;
+      pVerbShimmerFade = 0;
+      pVerbShimmerFadeStep = 8;
+      return true;
+    }
+
+    /** Set Plinky reverb send, from 0.0 (off) to 1.0. */
+    inline void setPVerbSend(float amount) {
+      pVerbSend = (int32_t)(constrain(amount, 0.0f, 1.0f) * 65536.0f);
+    }
+
+    /** Set the tank decay coefficient from 0.0 (short) to 1.0 (long). */
+    inline void setPVerbDecay(float amount) {
+      pVerbFade = (int32_t)(250.0f * constrain(amount, 0.0f, 1.0f));
+    }
+
+    /** Set shimmer amount from 0.0 (off) to 1.0 (Plinky's default coefficient). */
+    inline void setPVerbShimmer(float amount) {
+      pVerbShimmer = (int32_t)(240.0f * constrain(amount, 0.0f, 1.0f));
+    }
+
+    /** Set Plinky reverb modulation depth from 0.0 (off) to 1.0 (full depth).
+     * The default depth is 0.5. Lower values reduce the pitch movement caused
+     * by the modulated tank delay taps.
+     */
+    inline void setPVerbModulation(float amount) {
+      pVerbModulation = constrain(amount, 0.0f, 1.0f);
+    }
+
+    /** Alias for setPVerbModulation(). */
+    inline void setPVerbWobble(float amount) {
+      setPVerbModulation(amount);
+    }
+
     /** Set the reverb length
     * @rLen The amount of feedback that effects reverb decay time. Values from 0.0 to 1.0.
     */
@@ -843,6 +988,8 @@ class FX {
       if (rLen == lastReverbLengthTarget) return;
       lastReverbLengthTarget = rLen;
       reverbFeedbackLevel = pow(rLen, 0.2f);
+      // Plinky uses k_reverb_fade (0-250) to control tank decay.
+      pVerbFade = (int32_t)(reverbFeedbackLevel * 250.0f);
       // Pre-calculate integer coefficient for optimized path
       reverbFeedbackInt = (int16_t)(reverbFeedbackLevel * 1024.0f);
       // Update Del objects if using legacy path
@@ -1152,6 +1299,39 @@ class FX {
 
 
   private:
+    /** Plinky reverb delay primitives. The original tank uses half of each
+     * documented delay length and a 12-bit fractional wobble position.
+     */
+    inline int16_t pVerbInterpolate(int base, int wobPos) const {
+      base -= wobPos >> 12;
+      wobPos &= 0x0fff;
+      const int16_t a0 = pVerbBuffer[base & 16383];
+      const int16_t a1 = pVerbBuffer[(base - 1) & 16383];
+      return (int16_t)(((int32_t)a0 * (4096 - wobPos) + (int32_t)a1 * wobPos) >> 12);
+    }
+
+    inline void pVerbAllpass(int &pos, int32_t &acc, int length, bool wobble, int wobPos) {
+      const int next = (pos + length / 2) & 16383;
+      const int16_t delayed = wobble ? pVerbInterpolate(next, wobPos) : pVerbBuffer[next];
+      acc -= delayed >> 1;
+      pVerbBuffer[pos] = clip16(acc);
+      acc = (acc >> 1) + delayed;
+      pos = next;
+    }
+
+    inline void pVerbDelay(int &pos, int32_t &acc, int length, bool wobble, int wobPos) {
+      const int next = (pos + length / 2) & 16383;
+      pVerbBuffer[pos] = clip16(acc);
+      acc = wobble ? pVerbInterpolate(next, wobPos): pVerbBuffer[next];
+      pos = next;
+    }
+
+    inline float pVerbLfoNext(float &real, float &imag, float increment) {
+      real -= increment * imag;
+      imag += increment * real;
+      return real;
+    }
+
     /** Mix a clipped dry signal with the normalized, delay-only reverb tap.
      * Keeping both endpoints within the 16-bit range makes this a unity-gain
      * crossfade; the final clip is then only a defensive guard.
@@ -1178,6 +1358,24 @@ class FX {
     }
 
     int16_t reverbCached = 0;
+    int16_t* pVerbBuffer = nullptr;
+    int pVerbPos = 0;
+    int32_t pVerbFeedback = 0;
+    int32_t pVerbSend = 65536;
+    #if IS_ESP32() || IS_RP2040()
+    std::atomic<int32_t> pVerbFade{240};
+    #else
+    int32_t pVerbFade = 240;
+    #endif
+    int32_t pVerbShimmer = 240;
+    float pVerbModulation = 0.2f;
+    float pVerbApLfoR = 1.0f, pVerbApLfoI = 0.0f;
+    float pVerbApLfoA = (1.0f / 32777.0f * 9.4f) * 2.0f;
+    float pVerbDelayLfoR = 1.0f, pVerbDelayLfoI = 0.0f;
+    float pVerbDelayLfoA = (1.3f / 32777.0f * 3.15971f) * 2.0f;
+    int pVerbShimmerPos1 = 2000, pVerbShimmerPos2 = 1000;
+    int pVerbShimmerFade = 0, pVerbShimmerFadeStep = 8;
+    float pVerbLpf = 0.0f, pVerbLpf2 = 0.0f, pVerbDc = 0.0f;
     // Bit crusher sample-and-hold state
     int16_t crushHoldValue = 0;
     int16_t crushHoldCounter = 0;
