@@ -37,6 +37,10 @@ class SVF {
       low = 0;
       band = 0;
       high = 0;
+      allpassPrevIn = 0;
+      allpassPrevOut = 0;
+      dcPrev = 0;
+      dcOut = 0;
     }
 
     /** Set how resonant the filter will be.
@@ -58,6 +62,11 @@ class SVF {
       gainCompInt = (int32_t)(gainCompF * 32768.0f);
     }
 
+    /** Return the current resonance value (clamped by setRes()). */
+    inline float getRes() {
+      return 1.0f - q * (1.0f / 32768.0f);
+    }
+
     /** Set the cutoff or centre frequency of the filter.
     * @param freq_val  40 Hz to ~21% of sample rate (safe range to prevent overflow).
     *                  At 44.1kHz: 40-9200 Hz, At 48kHz: 40-10000 Hz
@@ -68,6 +77,7 @@ class SVF {
       int32_t safeMaxFreq = SAMPLE_RATE * 0.21f;  // 21% of sample rate
       // Clamp frequency to safe range
       freq_val = max((int32_t)40, min(safeMaxFreq, freq_val));
+      _freq = freq_val;
       // Calculate f and store as 15-bit fixed-point
       float fFloat = 2.0f * sin(3.1415927f * freq_val * SAMPLE_RATE_INV);
       fInt = (int32_t)(fFloat * 32768.0f);
@@ -76,7 +86,7 @@ class SVF {
     /** Return the cutoff or centre frequency of the filter.*/
     inline
     float getFreq() {
-      return fInt * (1.0f / 32768.0f);
+      return (float)_freq;
     }
 
     /** Set the cutoff or corner frequency of the filter using normalised value.
@@ -99,6 +109,7 @@ class SVF {
 
       // Safety clamp
       cutoff_freq = max(40.0f, min((float)safeMaxFreq, cutoff_freq));
+      _freq = (int32_t)cutoff_freq;
       // Calculate f and store as 15-bit fixed-point
       float fFloat = 2.0f * sin(3.1415927f * cutoff_freq * SAMPLE_RATE_INV);
       fInt = (int32_t)(fFloat * 32768.0f);
@@ -136,6 +147,17 @@ class SVF {
       #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
       _svfLock.store(false, std::memory_order_release);
       #endif
+      return prevOutput_;
+    }
+
+    /** Calculate the next lowpass sample without acquiring the state lock.
+     * Use only when exactly one audio core owns this filter instance.
+     */
+    inline int16_t nextLPFUnlocked(int32_t input) {
+      input = clip16(input);
+      calcFilter(input);
+      int32_t cached_gainCompInt = gainCompInt;
+      prevOutput_ = clip16((int32_t)(((int64_t)low * cached_gainCompInt) >> 15));
       return prevOutput_;
     }
 
@@ -180,6 +202,17 @@ class SVF {
       return prevOutput_;
     }
 
+    /** Calculate the next highpass sample without acquiring the state lock.
+     * Use only when exactly one audio core owns this filter instance.
+     */
+    inline int16_t nextHPFUnlocked(int32_t input) {
+      input = clip16(input);
+      calcFilter(input);
+      int32_t cached_gainCompInt = gainCompInt;
+      prevOutput_ = clip16((int32_t)(((int64_t)high * cached_gainCompInt) >> 15));
+      return prevOutput_;
+    }
+
     /** Retrieve the current Highpass filter sample.
      *  Allows simultaneous use of LPF, HPF & BPF. 
      *  Use nextXXX() for one of them at each sample to compute the next filter values.
@@ -212,6 +245,17 @@ class SVF {
       return prevOutput_;
     }
 
+    /** Calculate the next bandpass sample without acquiring the state lock.
+     * Use only when exactly one audio core owns this filter instance.
+     */
+    inline int16_t nextBPFUnlocked(int32_t input) {
+      input = clip16(input);
+      calcFilter(input);
+      int32_t cached_gainCompInt = gainCompInt;
+      prevOutput_ = clip16((int32_t)(((int64_t)band * cached_gainCompInt) >> 15));
+      return prevOutput_;
+    }
+
     /** Retrieve the current Bandpass filter sample.
      *  Allows simultaneous use of LPF, HPF & BPF. 
      *  Use nextXXX() for one of them at each sample to compute the next filter values.
@@ -219,6 +263,22 @@ class SVF {
     inline
     int16_t currentBPF() {
       return max(-MAX_16, min(MAX_16, (int)band));
+    }
+
+    /** Return the current bandpass output (SVF2 API compatibility). */
+    inline int16_t nextBPF() {
+      return currentBPF();
+    }
+
+    /** Calculate the next allpass sample with DC blocking. */
+    inline int16_t nextAllpass(int32_t input) {
+      input = clip16(input);
+      int32_t output = input + allpassPrevIn - allpassPrevOut;
+      allpassPrevIn = input;
+      allpassPrevOut = output;
+      dcOut = output - dcPrev + ((dcOut * 32604) >> 15);
+      dcPrev = output;
+      return clip16(dcOut);
     }
 
     /** Calculate the next filter sample, given an input signal and a filter mix value.
@@ -300,12 +360,15 @@ class SVF {
     int16_t prevOutput_ = 0;  // Last output for lock-miss fallback
 
     int32_t low = 0, band = 0, high = 0;
+    int32_t allpassPrevIn = 0, allpassPrevOut = 0;
+    int32_t dcPrev = 0, dcOut = 0;
     int32_t q = MAX_16;
     int32_t scale = (int32_t)(sqrt(1.0f) * MAX_16);
     int32_t fInt = 32768;        // 15-bit fixed-point frequency coefficient (1.0 = 32768)
     int32_t resOffsetInt = 32768; // 15-bit fixed-point resonance offset (1.0 = 32768)
     int32_t gainCompInt = 32768;  // Resonance-dependent output gain compensation
     float _normalisedCutoff = 1.0f;  // Stored normalized cutoff (0.0-1.0), default fully open
+    int32_t _freq = (int32_t)(SAMPLE_RATE * 0.21f);
 
     /** Integer-only filter calculation for maximum performance.
      *  Uses 15-bit fixed-point for frequency and resonance coefficients.
