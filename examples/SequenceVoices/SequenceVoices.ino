@@ -80,8 +80,8 @@ void loop() {
 
   msNow = millis();
  
-  if (msNow - stepTime >= stepDelta) {
-      stepTime += stepDelta;
+  if ((unsigned long)(msNow - stepTime) >= stepDelta) {
+      stepTime = msNow;
     if (stepCnt%64 == 0) seqGen();
     for (int i=0; i<voices; i++) {
       int p = sequences[i].next();
@@ -94,8 +94,8 @@ void loop() {
     stepCnt++;
   }
 
-  if (msNow - envTime >= envDelta) {
-      envTime += envDelta;
+  if ((unsigned long)(msNow - envTime) >= envDelta) {
+      envTime = msNow;
     for (int i=0; i<voices; i++) {
       ampEnvs[i].next();
     }
@@ -117,7 +117,8 @@ void loop() {
 void audioUpdate() {
   int32_t mix = 0;
   for (int i = audioPartitionOffset(); i < voices; i += audioPartitionStride()) {
-    mix += ((filters[i].nextLPF(oscillators[i].next()) * ampEnvs[i].getValue()) >> 15) * 0.6;
+    // The partition loop gives each oscillator one permanent audio-core owner.
+    mix += ((filters[i].nextLPF(oscillators[i].nextUnlocked()) * ampEnvs[i].getValue()) >> 15) * 0.6;
   }
   audioBlockWrite(mix, mix);
 }
