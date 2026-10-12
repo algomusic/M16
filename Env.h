@@ -355,16 +355,18 @@ class Env {
     inline
     uint16_t evaluate() {
       uint32_t frameNow = audioFrameCount();
+      uint32_t envelopeStartFrame;
 
       // Begin the note on the first frame that actually evaluates it, rather
       // than allowing loop/audio scheduling latency to skip the attack onset.
       #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
-      anchorPendingStart(frameNow);
+      envelopeStartFrame = anchorPendingStart(frameNow);
       #else
       if (startPending) {
         startFrame = frameNow;
         startPending = false;
       }
+      envelopeStartFrame = startFrame;
       #endif
 
       #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
@@ -397,7 +399,7 @@ class Env {
       }
       else {
         // Deterministic pre-release contour, a pure function of frames-since-start.
-        uint32_t elapsed = frameNow - startFrame;
+        uint32_t elapsed = frameNow - envelopeStartFrame;
 
         if (resetTransitionSamples > 0.0f &&
             elapsed < (uint32_t)resetTransitionSamples) {
@@ -520,11 +522,15 @@ class Env {
     bool resetOnStart = false; // If true, start a zero-based attack (optionally transitioned)
 
     #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
-    inline void anchorPendingStart(uint32_t frameNow) {
+    inline uint32_t anchorPendingStart(uint32_t frameNow) {
       for (;;) {
         uint8_t state = startPendingState.load(std::memory_order_acquire);
-        if (state == 0) return;
-        if (state == 2) continue;
+        if (state == 0) return startFrame;
+        // Another evaluator may have claimed the start on a lower-priority
+        // task on this core. Do not spin here: that task cannot resume until
+        // this higher-priority audio task yields. Render this evaluation from
+        // the current frame; the owner will publish the shared anchor shortly.
+        if (state == 2) return frameNow;
 
         uint8_t expected = 1;
         if (!startPendingState.compare_exchange_weak(
@@ -539,9 +545,11 @@ class Env {
         // In that case the CAS deliberately fails and the loop anchors the new
         // request as well instead of losing it.
         expected = 2;
-        startPendingState.compare_exchange_strong(
+        if (startPendingState.compare_exchange_strong(
             expected, 0, std::memory_order_release,
-            std::memory_order_relaxed);
+            std::memory_order_relaxed)) {
+          return frameNow;
+        }
       }
     }
     #endif
