@@ -35,14 +35,17 @@ void setup() {
   // reverb
   #if IS_ESP8266()
     effect1.setReverbSize(4); // quality and memory >= 1
-  #else // ESP32 and RP2040
+  #else // ESP32 or Pi Pico or Teensy 4
     effect1.setReverbSize(16); // quality and memory >= 1
   #endif
   effect1.setReverbLength(0.7); // 0.0 - 1.0
-  verb.setReverbLength(0.95); // 0.0 - 1.0
+  effect1.setReverbShimmer(0.0); // 0.0 - 1.0
   effect1.setReverbMix(0.4); // 0.0 - 1.0
+  // freeverb setuo if used
   verb.setReverbMix(0.7); // 0.0 - 1.0
   verb.setDampening(0.3); // 0.0 - 1.0
+  verb.setReverbLength(0.95); // 0.0 - 1.0
+  // pVerb setup if used
   effect1.initPVerb();
   effect1.setPVerbModulation(0.1); // 0.0 - 1.0
   effect1.setPVerbShimmer(0.6); // 0.0 - 1.0
