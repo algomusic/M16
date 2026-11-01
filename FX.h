@@ -834,7 +834,7 @@ class FX {
       });
     }
 
-    /** Plinky's modulated Dattorro/Griesinger reverb tank with shimmer.
+    /** A Dattorro/Griesinger plate-style reverb following Plinky's modulated approch with shimmer.
      * Call initPVerb() during setup to allocate and clear its 32 KB
      * delay buffer before audio starts. Dry/wet balance uses setReverbMix().
      * Keep this effect instance on one audio core while rendering.
@@ -1039,6 +1039,14 @@ class FX {
       // Higher damp value = lower coefficient = more HF cut
       int16_t dampInt = (int16_t)(damp * 1024.0f);
       reverbDampCoeff = 717 + (((1024 - dampInt) * 307) >> 10);
+    }
+
+    /** Set shimmer amount for the standard reverb methods.
+     * 0.0 disables shimmer; 1.0 uses the same nominal coefficient as pVerb.
+     * It taps the existing reverb buffers and allocates no extra memory.
+     */
+    inline void setReverbShimmer(float amount) {
+      reverbShimmer = (int32_t)(240.0f * constrain(amount, 0.0f, 1.0f));
     }
 
     /** Set the reverb memory size
@@ -1411,6 +1419,11 @@ class FX {
     int16_t* revBuf4 = nullptr;
     uint16_t revWritePos = 0;  // Single write position for all buffers
     uint16_t revDelay1 = 0, revDelay2 = 0, revDelay3 = 0, revDelay4 = 0;  // Delay offsets in samples
+    uint16_t reverbShimmerMaxOffset = REV_BUF_SIZE - 1;
+    int32_t reverbShimmer = 0;
+    uint16_t reverbShimmerPos1 = 700, reverbShimmerPos2 = 1400;
+    uint16_t reverbShimmerFade = 0, reverbShimmerFadeStep = 8;
+    uint32_t reverbShimmerRandom = 0x6d2b79f5;
 
     // Legacy Del objects kept for API compatibility (setReverbSize with unusual sizes)
     Del delay1, delay2, delay3, delay4;
@@ -1580,6 +1593,7 @@ class FX {
         revDelay2 = d2_samp;
         revDelay3 = d3_samp;
         revDelay4 = d4_samp;
+        reverbShimmerMaxOffset = REV_BUF_SIZE - 1;
         useOptimizedReverb = true;
       } else {
         // Fall back to Del-based reverb for large sizes
@@ -1589,8 +1603,15 @@ class FX {
         delay2.setTime(d2_ms); delay2.setLevel(reverbFeedbackLevel); delay2.setFeedback(true); delay2.setFiltered(0);
         delay3.setTime(d3_ms); delay3.setLevel(reverbFeedbackLevel); delay3.setFeedback(true); delay3.setFiltered(0);
         delay4.setTime(d4_ms); delay4.setLevel(reverbFeedbackLevel); delay4.setFeedback(true); delay4.setFiltered(0);
+        // Del::read(offset) offsets from the configured delay tap and only
+        // wraps once. Larger offsets can address outside its buffer, so keep
+        // the shimmer scan within the delay distance as well as buffer size.
+        reverbShimmerMaxOffset = max(1, min((int)delay1.getBufferLength() - 1,
+                                             (int)delay1.getDelayLength()));
         useOptimizedReverb = false;
       }
+      reverbShimmerPos1 = min((int)reverbShimmerPos1, (int)reverbShimmerMaxOffset);
+      reverbShimmerPos2 = min((int)reverbShimmerPos2, (int)reverbShimmerMaxOffset);
       reverbInitiated = true;
     }
 
@@ -1644,6 +1665,10 @@ class FX {
         // channel also keeps the wet endpoint at unity gain.
         revWetL = (d1 + d3) / 2;
         revWetR = (d2 + d4) / 2;
+
+        // Keep shimmer out of the feedback matrix. Reinjecting a correlated
+        // delay tap at the tank input can cancel parts of the existing tail.
+        applyReverbShimmer(revWetL, revWetR, wp);
 
         // Mixing matrix (Hadamard-style diffusion)
         revP1 = inL + d1;
@@ -1702,6 +1727,10 @@ class FX {
         revWetL = (d1 + d3) / 2;
         revWetR = (d2 + d4) / 2;
 
+        // Add shimmer at the wet output so it cannot change or cancel the
+        // reverb tank's internal feedback signal.
+        applyReverbShimmer(revWetL, revWetR, 0);
+
         // Mixing matrix (Hadamard-style diffusion)
         revP1 = inL + d1; revP2 = inR + d2;
         int32_t p3 = revP1 + revP2; int32_t m3 = revP1 - revP2;
@@ -1726,6 +1755,66 @@ class FX {
         delay1.write(w1); delay2.write(w2);
         delay3.write(w3); delay4.write(w4);
       }
+    }
+
+    /** Add a light, moving-delay shimmer tap to the wet output.
+     * Two read heads crossfade while their offsets move by one sample per
+     * sample, creating the same rising-delay impression as pVerb's shimmer.
+     * Keeping this outside the feedback matrix avoids phase cancellation
+     * changing the tank's existing reverb tail.
+     * Disabled by default, so the normal reverb path has only one branch.
+     */
+    inline void applyReverbShimmer(int32_t &wetL, int32_t &wetR, uint16_t writePos) {
+      const int32_t amount = reverbShimmer;
+      if (amount == 0 || reverbShimmerMaxOffset < 128) return;
+
+      if (reverbShimmerFade >= 32768) {
+        reverbShimmerFade -= 32768;
+        reverbShimmerPos1 = reverbShimmerPos2;
+        // A small xorshift avoids rand() and its library/locking overhead in
+        // the audio callback while varying the incoming delay head.
+        reverbShimmerRandom ^= reverbShimmerRandom << 13;
+        reverbShimmerRandom ^= reverbShimmerRandom >> 17;
+        reverbShimmerRandom ^= reverbShimmerRandom << 5;
+        reverbShimmerPos2 = 128 + (reverbShimmerRandom % (reverbShimmerMaxOffset - 127));
+        reverbShimmerRandom ^= reverbShimmerRandom << 13;
+        reverbShimmerRandom ^= reverbShimmerRandom >> 17;
+        reverbShimmerRandom ^= reverbShimmerRandom << 5;
+        reverbShimmerFadeStep = 8 + (reverbShimmerRandom & 7);
+      }
+
+      int32_t tapL1, tapL2, tapR1, tapR2;
+      if (useOptimizedReverb) {
+        const int readL1 = (writePos - reverbShimmerPos1) & REV_BUF_MASK;
+        const int readL2 = (writePos - reverbShimmerPos2) & REV_BUF_MASK;
+        const int readR1 = (writePos - reverbShimmerPos1) & REV_BUF_MASK;
+        const int readR2 = (writePos - reverbShimmerPos2) & REV_BUF_MASK;
+        tapL1 = revBuf1[readL1]; tapL2 = revBuf1[readL2];
+        tapR1 = revBuf2[readR1]; tapR2 = revBuf2[readR2];
+      } else {
+        // Del::read(offset) adds its offset to a fixed delay tap, unlike the
+        // optimized reader which subtracts the moving head from writePos.
+        // Reverse the offset here so the head advances two samples per output
+        // sample in both paths and keeps the octave-up pitch motion.
+        const int offset1 = reverbShimmerMaxOffset - reverbShimmerPos1;
+        const int offset2 = reverbShimmerMaxOffset - reverbShimmerPos2;
+        tapL1 = delay1.read(offset1); tapL2 = delay1.read(offset2);
+        tapR1 = delay2.read(offset1); tapR2 = delay2.read(offset2);
+      }
+
+      const int32_t weight1 = 32767 - reverbShimmerFade;
+      int32_t shimmerL = (tapL1 * weight1 + tapL2 * reverbShimmerFade) >> 15;
+      int32_t shimmerR = (tapR1 * weight1 + tapR2 * reverbShimmerFade) >> 15;
+      // The moving tap is an additional wet voice, not part of the tank's
+      // feedback. Match pVerb's nominal half-level shimmer contribution.
+      wetL += ((shimmerL * amount) >> 8) >> 0; // >> 0 is a no-op but keeps the same math structure as pVerb
+      wetR += ((shimmerR * amount) >> 8) >> 0;
+
+      ++reverbShimmerFade;
+      // Fade rate is represented as a phase increment to stay in integer math.
+      reverbShimmerFade += reverbShimmerFadeStep - 1;
+      reverbShimmerPos1 = reverbShimmerPos1 ? reverbShimmerPos1 - 1 : reverbShimmerMaxOffset;
+      reverbShimmerPos2 = reverbShimmerPos2 ? reverbShimmerPos2 - 1 : reverbShimmerMaxOffset;
     }
 
     void initChorus() {
