@@ -23,9 +23,9 @@ Generic I2S microphones need no codec driver. The Teensy Audio Board additionall
 control object to be enabled and its line or microphone input selected. Teensy I2S input is enabled on demand with `audioInputStart()`. It uses the PJRC Audio pin routing: DIN 8, LRCLK 20, BCLK 21, and MCLK 23 when required.
 `Mic::nextLeft()`, `nextRight()`, or `nextStereo(left, right)` read the captured input. 
 
-M16 prioritises audio processing and may not play well with other libraries where timing is critical, such as wifi, and file i/o. The temporary stopping of audio during these tasks may help coordination between them.
+M16 prioritises audio processing and may not play well with other libraries where timing is critical, such as wifi, and file i/o. 
 
-API documentation is the the [M16 Wiki](https://github.com/algomusic/M16/wiki).
+API documentation is in the [M16 Wiki](https://github.com/algomusic/M16/wiki).
 
 Designed for use with the Arduino IDE.
 
