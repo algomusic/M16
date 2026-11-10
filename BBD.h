@@ -52,8 +52,10 @@ private:
   #endif
   #if IS_ESP32() || IS_RP2040()
   std::atomic<int16_t> delayMix{1024};
+  std::atomic<uint32_t> delayMixGains{1024UL << 16};
   #else
   int16_t delayMix = 1024;
+  uint32_t delayMixGains = 1024UL << 16;
   #endif
   int16_t feedbackLevel = 512;
   #if IS_ESP32() || IS_RP2040()
@@ -84,22 +86,17 @@ private:
   // Base delay at scanRate 1.0: 4096 / 44100 * 1000 = 92.88ms
   static constexpr float BASE_DELAY_MS = (float)BUFFER_SIZE / 44100.0f * 1000.0f;
 
-  /** Soft saturation for analog warmth
-   * Applies gentle compression above threshold
-   */
+  /** Soft-knee compression for feedback-loop sums, matching Del.h. */
   inline int16_t softSaturate(int32_t x) {
-    // Threshold chosen so 4:1 compression above it keeps output below MAX_16
-    // for any realistic feedback+input sum (up to ~64000):
-    //   20000 + (64000-20000)/4 = 31000 < MAX_16 — hard guard never fires
-    const int32_t threshold = 20000;
-    if (x > threshold) {
-      x = threshold + ((x - threshold) >> 2);
-    } else if (x < -threshold) {
-      x = -threshold + ((x + threshold) >> 2);
-    }
-    if (x > MAX_16) return MAX_16;
-    if (x < MIN_16) return MIN_16;
-    return x;
+    const int32_t knee = 24576; // 75% of positive full scale
+    const int32_t range = 8192;
+    const int32_t magnitude = x < 0 ? -x : x;
+    if (magnitude <= knee) return (int16_t)x;
+
+    const int32_t overKnee = magnitude - knee;
+    const int32_t compressed = knee +
+        (overKnee * range) / (overKnee + range);
+    return (int16_t)(x < 0 ? -compressed : compressed);
   }
 
 public:
@@ -204,13 +201,26 @@ public:
     return _targetDelayLevel * 0.0009765625f;
   }
 
-  /** Set the delay dry/wet mix.
+  /** Set the delay dry/wet mix using a headroom-normalized equal-power curve.
    * @param mix 0.0 is fully dry, 1.0 is fully wet. Defaults to 1.0 so
    * existing code continues to receive only the delayed signal from next().
+   * The gain ratio follows an equal-power curve while the coefficient sum
+   * stays at unity, preventing correlated dry/wet peaks from overloading.
    */
   void setDelayMix(float mix) {
-    delayMix = min((int32_t)1024,
-                   max((int32_t)0, (int32_t)(mix * 1024.0f)));
+    const float mixPosition = fmaxf(0.0f, fminf(1.0f, mix));
+    const int16_t mixQ10 = (int16_t)(mixPosition * 1024.0f + 0.5f);
+    const float angle = mixPosition * 1.57079632679f;
+    const float dryPowerGain = cosf(angle);
+    const float wetPowerGain = sinf(angle);
+    const float gainSum = dryPowerGain + wetPowerGain;
+    const uint16_t dryGain = gainSum > 0.0f
+        ? (uint16_t)(dryPowerGain * (1024.0f / gainSum) + 0.5f)
+        : 1024;
+    const uint16_t boundedDryGain = min((uint16_t)1024, dryGain);
+    const uint16_t wetGain = 1024 - boundedDryGain;
+    delayMix = mixQ10;
+    delayMixGains = ((uint32_t)wetGain << 16) | boundedDryGain;
   }
 
   /** @return Delay dry/wet mix, from 0.0 to 1.0. */
@@ -280,6 +290,21 @@ public:
     #endif
   }
 
+  /** Process separate dry and delay-send inputs. The dry signal is mixed
+   * unchanged while delaySendValue is accumulated into the BBD buffer.
+   */
+  inline int16_t next(int32_t dryValue, int32_t delaySendValue) {
+    #if IS_ESP32() || IS_RP2040()
+    int16_t output = 0;
+    M16_ATOMIC_GUARD_BLOCKING(_bbdLock, {
+      output = nextUnlocked(dryValue, delaySendValue);
+    });
+    return output;
+    #else
+    return nextUnlocked(dryValue, delaySendValue);
+    #endif
+  }
+
   /** Process one sample without acquiring the BBD state lock.
    * Use only when exactly one audio core owns and advances this instance, such
    * as a master delay inside the post-combine callback. Parameter targets may
@@ -289,9 +314,18 @@ public:
    * @return Delayed output sample
    */
   inline int16_t nextUnlocked(int32_t inValue) {
+    return nextUnlocked(inValue, inValue);
+  }
+
+  /** Process separate dry and delay-send inputs without acquiring the BBD
+   * state lock. Use only when one audio core owns this instance.
+   */
+  inline int16_t nextUnlocked(int32_t dryInput, int32_t delaySendInput) {
     const uint32_t render__targetScanRate = _targetScanRate;
     const int16_t render__targetDelayLevel = _targetDelayLevel;
-    const int16_t render_delayMix = delayMix;
+    const uint32_t renderDelayMixGains = delayMixGains;
+    const int32_t renderDryGain = renderDelayMixGains & 0xFFFF;
+    const int32_t renderWetGain = renderDelayMixGains >> 16;
     const int16_t render__targetFeedbackLevel = _targetFeedbackLevel;
     const bool render_delayFeedback = delayFeedback;
     const byte render_filtered = filtered;
@@ -317,7 +351,7 @@ public:
     }
 
     // Accumulate inputs for anti-aliasing at low scan rates.
-    inputAccum += inValue;
+    inputAccum += delaySendInput;
     inputCount++;
     uint32_t prevPhase = phase;
     phase += scanRate;
@@ -348,15 +382,17 @@ public:
 
       int32_t writeValue;
       if (inputCount > 0) {
-        writeValue = inputAccum / inputCount;
+        // At short delay times a BBD step can consume exactly one input
+        // sample. Avoid the variable integer divide in that common case.
+        writeValue = inputCount == 1
+            ? inputAccum : inputAccum / inputCount;
         inputAccum = 0;
         inputCount = 0;
       } else {
-        writeValue = inValue;
+        writeValue = delaySendInput;
       }
       if (render_delayFeedback) {
         writeValue += (holdValue * feedbackLevel) >> 10;
-        writeValue = (writeValue * 251) >> 8;
       }
       delayBuffer[bufferIndex] = softSaturate(writeValue);
       bufferIndex = (bufferIndex + steps) & BUFFER_MASK;
@@ -364,10 +400,18 @@ public:
 
     smoothedOut += ((holdValue - smoothedOut) * smoothCoeff) >> 15;
     lastResult = (int16_t)smoothedOut;
-    if (render_delayMix >= 1024) return lastResult;
-    if (render_delayMix <= 0) return clip16(inValue);
-    return clip16(((inValue * (1024 - render_delayMix)) >> 10)
-                + ((lastResult * render_delayMix) >> 10));
+    if (renderDryGain >= 1024) return clip16(dryInput);
+    if (renderDryGain == 0) return lastResult;
+    // Keep the direct input linear. If the equal-power blend exceeds the
+    // output range, reduce only the wet contribution; saturating the combined
+    // signal would add BBD-style harmonics to the initial dry tone as well.
+    int32_t dryValue = (int32_t)(((int64_t)dryInput * renderDryGain) >> 10);
+    int32_t wetValue = (int32_t)(((int64_t)lastResult * renderWetGain) >> 10);
+    dryValue = max((int32_t)MIN_16, min((int32_t)MAX_16, dryValue));
+    const int32_t wetMinimum = (int32_t)MIN_16 - dryValue;
+    const int32_t wetMaximum = (int32_t)MAX_16 - dryValue;
+    wetValue = max(wetMinimum, min(wetMaximum, wetValue));
+    return (int16_t)(dryValue + wetValue);
   }
 
   /** @return Current hold value */
