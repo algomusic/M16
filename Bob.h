@@ -183,6 +183,11 @@ public:
       freq = 5000.0f + (freq - 5000.0f) * 0.4f;
     }
     freq = max(5.0f, min(20000.0f, freq));
+    // Ignore changes smaller than 8 steps on a 15-bit frequency scale. This
+    // prevents control-rate modulation from needlessly rebuilding coefficients.
+    const float minimumCutoffChange =
+        ((float)SAMPLE_RATE * 0.425f) * (8.0f / 32768.0f);
+    if (fabsf(freq - Fbase_) < minimumCutoffChange) return;
     Fbase_ = freq;
     compute_coeffs(Fbase_);
     KQ_ = K_ * Qadjust_;

@@ -77,10 +77,13 @@ class SVF {
       int32_t safeMaxFreq = SAMPLE_RATE * 0.21f;  // 21% of sample rate
       // Clamp frequency to safe range
       freq_val = max((int32_t)40, min(safeMaxFreq, freq_val));
-      _freq = freq_val;
       // Calculate f and store as 15-bit fixed-point
       float fFloat = 2.0f * sin(3.1415927f * freq_val * SAMPLE_RATE_INV);
-      fInt = (int32_t)(fFloat * 32768.0f);
+      int32_t newFInt = (int32_t)(fFloat * 32768.0f);
+      int32_t coefficientDelta = newFInt - fInt;
+      if (coefficientDelta > -8 && coefficientDelta < 8) return;
+      _freq = freq_val;
+      fInt = newFInt;
     }
 
     /** Return the cutoff or centre frequency of the filter.*/
@@ -109,10 +112,13 @@ class SVF {
 
       // Safety clamp
       cutoff_freq = max(40.0f, min((float)safeMaxFreq, cutoff_freq));
-      _freq = (int32_t)cutoff_freq;
       // Calculate f and store as 15-bit fixed-point
       float fFloat = 2.0f * sin(3.1415927f * cutoff_freq * SAMPLE_RATE_INV);
-      fInt = (int32_t)(fFloat * 32768.0f);
+      int32_t newFInt = (int32_t)(fFloat * 32768.0f);
+      int32_t coefficientDelta = newFInt - fInt;
+      if (coefficientDelta > -8 && coefficientDelta < 8) return;
+      _freq = (int32_t)cutoff_freq;
+      fInt = newFInt;
     }
 
     /** Alias for setNormalisedCutoff for backwards compatibility */

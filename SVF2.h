@@ -91,8 +91,11 @@ public:
   // Apply precomputed Hz coefficients without changing to the normalized
   // cutoff API's different resonance mapping. Calculation may run in loop().
   inline void setFrequencyCoefficient(int hz, int32_t coefficient) {
-    freq = max(0, min((int)(SAMPLE_RATE * 0.195f), hz));
+    int32_t newFreq = max(0, min((int)(SAMPLE_RATE * 0.195f), hz));
     int32_t f = max((int32_t)0, min((int32_t)31457, coefficient));
+    int32_t coefficientDelta = f - loadF();
+    if (coefficientDelta > -8 && coefficientDelta < 8) return;
+    freq = newFreq;
     int32_t q = loadQ();
     publishCoefficients(f, q, feedbackForFrequency(q, f), loadGainComp());
   }
@@ -136,6 +139,8 @@ public:
     int32_t newFInt = coefficient;
     if (newFInt < 32) newFInt = 32;
     else if (newFInt > 31457) newFInt = 31457;
+    int32_t coefficientDelta = newFInt - loadF();
+    if (coefficientDelta > -8 && coefficientDelta < 8) return;
     freq = (int32_t)(maxFreq * (newFInt * (1.0f / 32768.0f)));
     int32_t currentQ = loadQ();
     // fb = q + q * (1.0 + f)  ->  fbInt = qInt + (qInt * (32768 + fInt)) >> 15
