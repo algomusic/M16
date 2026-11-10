@@ -207,7 +207,7 @@ public:
         uint32_t newPhase = myPhase + cachedIncrement;
         // Detect period wrap: check if we crossed a TABLE_SIZE boundary
         if ((myPhase & ~TABLE_SIZE_FP_MASK) != (newPhase & ~TABLE_SIZE_FP_MASK)) {
-          sandHValue = cachedBandPtr[audioRand(TABLE_SIZE)];
+          sandHValue = cachedBandPtr[audioRandomTableIndex()];
         }
         return sandHValue;
       }
@@ -216,7 +216,7 @@ public:
       phase_fractional += phase_increment_fractional;
       if (phase_fractional >= TABLE_SIZE_FP_CONST) {
         phase_fractional &= TABLE_SIZE_FP_MASK;
-        sandHValue = bandPtr[audioRand(TABLE_SIZE)];
+        sandHValue = bandPtr[audioRandomTableIndex()];
       }
       return sandHValue;
     }
@@ -324,7 +324,7 @@ public:
       phase_fractional = newPhase & TABLE_SIZE_FP_MASK;
       if ((oldPhase & ~TABLE_SIZE_FP_MASK) !=
           (newPhase & ~TABLE_SIZE_FP_MASK)) {
-        sandHValue = cachedBandPtr[audioRand(TABLE_SIZE)];
+        sandHValue = cachedBandPtr[audioRandomTableIndex()];
       }
       return sandHValue;
     }
@@ -615,10 +615,19 @@ public:
   */
 	inline
   int16_t nextMorph(int16_t * secondWaveTable, float morphAmount) {
+    return nextMorphQ10(secondWaveTable, morphAmountToQ10(morphAmount));
+  }
+
+  /** Morph using a precomputed Q10 amount (0-1024).
+   * Use this overload when the morph setting is updated at control rate, so
+   * float conversion and audio-core lookup are kept out of the sample path.
+   */
+  inline int16_t nextMorphQ10(int16_t * secondWaveTable,
+                              uint16_t morphAmountQ10) {
+    const int intMorphAmount = morphAmountQ10 > 1024 ? 1024 : morphAmountQ10;
     if (pulseWidthEnabled()) return renderPulseWidth(0, false, false,
-        secondWaveTable, max(0, min(1024, (int)(1024 * morphAmount))));
-    if (morphAmount <= 0) return next(); // identical to next() when not morphing
-    int intMorphAmount = max(0, min (1024, (int)(1024 * morphAmount)));
+        secondWaveTable, intMorphAmount);
+    if (intMorphAmount == 0) return next();
     int32_t sampVal;
     #if IS_ESP32() || IS_RP2040()
     {
@@ -633,11 +642,11 @@ public:
       if (isSandH && isNoise) {
         uint32_t newPhase = myPhase + cachedIncrement;
         if ((myPhase & ~TABLE_SIZE_FP_MASK) != (newPhase & ~TABLE_SIZE_FP_MASK)) {
-          sandHValue = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+          sandHValue = secondWaveTable[bandOffset + audioRandomTableIndex()];
         }
         sampVal2 = sandHValue;
       } else if (isNoise) {
-        sampVal2 = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+        sampVal2 = secondWaveTable[bandOffset + audioRandomTableIndex()];
       } else {
         sampVal2 = secondWaveTable[bandOffset + idx];
       }
@@ -658,11 +667,11 @@ public:
       phase_fractional += phase_increment_fractional;
       if (phase_fractional >= TABLE_SIZE_FP_CONST) {
         phase_fractional &= TABLE_SIZE_FP_MASK;
-        sandHValue = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+        sandHValue = secondWaveTable[bandOffset + audioRandomTableIndex()];
       }
       sampVal2 = sandHValue;
     } else if (isNoise) {
-      sampVal2 = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+      sampVal2 = secondWaveTable[bandOffset + audioRandomTableIndex()];
     } else {
       sampVal2 = secondWaveTable[bandOffset + idx];
     }
@@ -681,6 +690,13 @@ public:
     return nextMorph(secondWaveTable._samples, morphAmount);
   }
 
+  /** Morph toward a shared WaveTable using a precomputed Q10 amount. */
+  inline int16_t nextMorphQ10(const WaveTable& secondWaveTable,
+                              uint16_t morphAmountQ10) {
+    if (!secondWaveTable.isAllocated()) return next();
+    return nextMorphQ10(secondWaveTable._samples, morphAmountQ10);
+  }
+
   /** Get a blend of this Osc and another, without incrementing the waveTable lookup.
   * @param secondWaveTable - a waveTable  array to morph with
   * @param morphAmount - The balance (mix) of the second waveTable , 0.0 - 1.0
@@ -688,7 +704,7 @@ public:
 	inline
   int16_t currentMorph(int16_t * secondWaveTable, float morphAmount) {
     if (pulseWidthEnabled()) return renderPulseWidth(0, true, false,
-        secondWaveTable, max(0, min(1024, (int)(1024 * morphAmount))), false);
+        secondWaveTable, morphAmountToQ10(morphAmount), false);
     if (morphAmount <= 0) {
       // Read current sample without morphing
       #if IS_ESP32() || IS_RP2040()
@@ -703,7 +719,7 @@ public:
       #endif
       return prevSampVal;
     }
-    int intMorphAmount = max(0, min(1024, (int)(1024 * morphAmount)));
+    int intMorphAmount = morphAmountToQ10(morphAmount);
     int32_t sampVal;
     #if IS_ESP32() || IS_RP2040()
     {
@@ -1030,8 +1046,67 @@ public:
    * @param morphAmount - The balance (mix) of the second wavetable, 0.0 - 1.0
    */
   inline int16_t phModMorph(int16_t modulator, float modIndex, int16_t * secondWaveTable, float morphAmount) {
-    if (morphAmount <= 0) return phMod(modulator, modIndex);
-    int intMorphAmount = max(0, min(1024, (int)(1024 * morphAmount)));
+    return phModMorphQ10(modulator, modIndex, secondWaveTable,
+                         morphAmountToQ10(morphAmount));
+  }
+
+  /** Phase modulation and morphing with a precomputed Q10 amount (0-1024). */
+  inline int16_t phModMorphQ10(int16_t modulator, float modIndex,
+                               int16_t * secondWaveTable,
+                               uint16_t morphAmountQ10) {
+    const int intMorphAmount = morphAmountQ10 > 1024 ? 1024 : morphAmountQ10;
+    if (intMorphAmount == 0) return phMod(modulator, modIndex);
+
+    // At full white-noise morph, neither the carrier sample nor the phase
+    // modulation offset affects the output. Advance phase and preserve S&H,
+    // then return the noise sample without doing the unused carrier work.
+    if (isNoise && intMorphAmount >= 1024) {
+      int32_t noiseSample;
+      #if IS_ESP32() || IS_RP2040()
+      {
+        uint32_t cachedIncrement = __atomic_load_n(
+            &phase_increment_fractional, __ATOMIC_RELAXED);
+        int16_t* cachedBandPtr = (int16_t*)__atomic_load_n(
+            (uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+        if (cachedBandPtr == nullptr || cachedIncrement == 0) return 0;
+        uint32_t myPhase = __atomic_fetch_add(
+            &phase_fractional, cachedIncrement, __ATOMIC_RELAXED);
+        const int bandOffset = (int)(cachedBandPtr - waveTable);
+        if (isSandH) {
+          const uint32_t newPhase = myPhase + cachedIncrement;
+          if ((myPhase & ~TABLE_SIZE_FP_MASK) !=
+              (newPhase & ~TABLE_SIZE_FP_MASK))
+            sandHValue = secondWaveTable[bandOffset +
+                                         audioRandomTableIndex()];
+          noiseSample = sandHValue;
+        } else {
+          noiseSample = secondWaveTable[bandOffset +
+                                        audioRandomTableIndex()];
+        }
+        if (spreadActive) noiseSample = doSpreadAtomic(noiseSample);
+        return (int16_t)noiseSample;
+      }
+      #else
+      {
+        const int bandOffset = (int)(bandPtr - waveTable);
+        if (isSandH) {
+          phase_fractional += phase_increment_fractional;
+          if (phase_fractional >= TABLE_SIZE_FP_CONST) {
+            phase_fractional &= TABLE_SIZE_FP_MASK;
+            sandHValue = secondWaveTable[bandOffset +
+                                         audioRandomTableIndex()];
+          }
+          noiseSample = sandHValue;
+        } else {
+          incrementPhase();
+          noiseSample = secondWaveTable[bandOffset +
+                                        audioRandomTableIndex()];
+        }
+        if (spreadActive) noiseSample = doSpread(noiseSample);
+        return (int16_t)noiseSample;
+      }
+      #endif
+    }
 
     // Anti-aliasing: clamp modIndex to depth_max = 9000 / (freq * cmRatio)
     float dMax = _cachedDepthMax;
@@ -1054,11 +1129,11 @@ public:
       if (isSandH && isNoise) {
         uint32_t newPhase = myPhase + cachedIncrement;
         if ((myPhase & ~TABLE_SIZE_FP_MASK) != (newPhase & ~TABLE_SIZE_FP_MASK)) {
-          sandHValue = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+          sandHValue = secondWaveTable[bandOffset + audioRandomTableIndex()];
         }
         sampVal2 = sandHValue;
       } else if (isNoise) {
-        sampVal2 = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+        sampVal2 = secondWaveTable[bandOffset + audioRandomTableIndex()];
       } else {
         sampVal2 = secondWaveTable[bandOffset + idx];
       }
@@ -1084,11 +1159,11 @@ public:
       phase_fractional += phase_increment_fractional;
       if (phase_fractional >= TABLE_SIZE_FP_CONST) {
         phase_fractional &= TABLE_SIZE_FP_MASK;
-        sandHValue = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+        sandHValue = secondWaveTable[bandOffset + audioRandomTableIndex()];
       }
       sampVal2 = sandHValue;
     } else if (isNoise) {
-      sampVal2 = secondWaveTable[bandOffset + audioRand(TABLE_SIZE)];
+      sampVal2 = secondWaveTable[bandOffset + audioRandomTableIndex()];
     } else {
       sampVal2 = secondWaveTable[bandOffset + idx];
     }
@@ -1106,6 +1181,15 @@ public:
                            const WaveTable& secondWaveTable, float morphAmount) {
     if (!secondWaveTable.isAllocated()) return phMod(modulator, modIndex);
     return phModMorph(modulator, modIndex, secondWaveTable._samples, morphAmount);
+  }
+
+  /** Phase modulation and morphing toward a shared table using Q10 amount. */
+  inline int16_t phModMorphQ10(int16_t modulator, float modIndex,
+                               const WaveTable& secondWaveTable,
+                               uint16_t morphAmountQ10) {
+    if (!secondWaveTable.isAllocated()) return phMod(modulator, modIndex);
+    return phModMorphQ10(modulator, modIndex, secondWaveTable._samples,
+                         morphAmountQ10);
   }
 
   /** Phase Modulation with window transform (FM + WTrans)
@@ -2086,6 +2170,26 @@ public:
   }
 
 private:
+  // TABLE_SIZE is a power of two, so masking avoids the 64-bit range-scaling
+  // multiply in audioRand(TABLE_SIZE) for audio-rate table reads.
+  static inline uint32_t audioRandomTableIndex() {
+    return (audioRand32() >> 16) & (TABLE_SIZE - 1);
+  }
+
+  // Morph settings are control-rate values. Cache their Q10 representation
+  // per core so render calls don't repeat float multiplication and integer
+  // clamping or race when an Osc is rendered on more than one core.
+  inline int morphAmountToQ10(float amount) {
+    if (!(amount > 0.0f)) return 0;
+    if (amount >= 1.0f) return 1024;
+    const uint8_t core = (uint8_t)_M16_CORE_ID();
+    if (amount != _lastMorphAmount[core]) {
+      _lastMorphAmount[core] = amount;
+      _cachedMorphAmountQ10[core] = (uint16_t)(amount * 1024.0f);
+    }
+    return _cachedMorphAmountQ10[core];
+  }
+
   // PWM control publication is one aligned 32-bit value per independent setting.
   // Render/cache state below is owned exclusively by one audio task per Osc.
   uint32_t _pulseWidthTarget = 0; // Q16 duty; zero means PWM has never been enabled
@@ -2095,6 +2199,8 @@ private:
   float _pwmCurrent = 32768.0f, _pwmStep = 0.0f;
   float _pwmScale1 = 1.0f, _pwmScale2 = 1.0f;
   uint8_t _pwmBand = 0, _pwmNextBand = 0, _pwmBandMix = 32;
+  float _lastMorphAmount[_M16_PRNG_CORES] = {};
+  uint16_t _cachedMorphAmountQ10[_M16_PRNG_CORES] = {};
 
   static inline uint32_t loadPulseControl(const uint32_t& value) {
     #if IS_ESP32() || IS_RP2040()
@@ -2710,7 +2816,7 @@ private:
           if (audioRand(0x8000) > crackleAmnt) {
               phase_fractional = 1 << 16;
           } else {
-              phase_fractional = audioRand(TABLE_SIZE) << 16;
+              phase_fractional = audioRandomTableIndex() << 16;
           }
       }
   }
