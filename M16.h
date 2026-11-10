@@ -524,10 +524,45 @@ int32_t clip16(int input);
 // Master processing hook shared by every block-output platform. In partitioned
 // mode the finalizer invokes it exactly once after combining both partial mixes.
 typedef void (*AudioPostProcessCallback)(int32_t& left, int32_t& right);
+typedef void (*AudioPostProcessSidechainCallback)(
+    int32_t& left, int32_t& right, int32_t sidechain);
 static AudioPostProcessCallback _audioPostProcessCallback = nullptr;
+static AudioPostProcessSidechainCallback _audioPostProcessSidechainCallback = nullptr;
+// Optional ESP32 external-I2S mode: a dedicated Core 1 worker runs the
+// post-process callback and writes completed audio blocks. Disabled by default.
+static bool _audioEffectsTaskRequested = false;
+static std::atomic<bool> _audioEffectsTaskActive{false};
 
 inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
   _audioPostProcessCallback = callback;
+  _audioPostProcessSidechainCallback = nullptr;
+}
+
+/** Set an ESP32 post-process callback with one sample-aligned sidechain.
+ * Use audioBlockWrite(left, right, sidechain) to provide that signal. In the
+ * optional effects-worker mode the sidechain is queued with its audio frame.
+ * If set, this callback is used instead of AudioPostProcessCallback.
+ */
+inline void setAudioPostProcessCallbackWithSidechain(
+    AudioPostProcessSidechainCallback callback) {
+  _audioPostProcessSidechainCallback = callback;
+  _audioPostProcessCallback = nullptr;
+}
+
+/** Select the optional ESP32 external-I2S effects worker.
+ * Call before audioStart(). When enabled, the post-process callback runs on a
+ * Core 1 task after complete mono/stereo blocks arrive from the Core 0 audio
+ * producer. The mode requires a dual-core ESP32, external I2S, and
+ * setIsDualCore(false). Unsupported configurations keep the normal synchronous
+ * post-process path. The default is false.
+ */
+inline void setAudioEffectsTask(bool enabled) {
+  _audioEffectsTaskRequested = enabled;
+}
+
+/** Return true when the optional effects worker was successfully started. */
+inline bool audioEffectsTaskIsActive() {
+  return _audioEffectsTaskActive.load(std::memory_order_acquire);
 }
 
 // ESP32 - GPIO 25 -> BCLK, GPIO 12 -> DIN, and GPIO 27 -> LRCLK (WS)
@@ -692,6 +727,43 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
 
   void audioUpdate(); // forward
   static volatile bool _audioTasksRunning = false;
+  TaskHandle_t audioCallback1Handle = NULL;  // Core 0 audio producer task
+
+  // SPSC handoff from the Core 0 audio producer to the Core 1 effects/I2S
+  // worker. The producer publishes only complete mixed blocks; the worker owns
+  // the post-process callback and consumes blocks in sequence.
+  #ifndef M16_EFFECTS_QUEUE_BLOCKS
+    #define M16_EFFECTS_QUEUE_BLOCKS 4
+  #endif
+  #if (M16_EFFECTS_QUEUE_BLOCKS < 2) || \
+      ((M16_EFFECTS_QUEUE_BLOCKS & (M16_EFFECTS_QUEUE_BLOCKS - 1)) != 0)
+    #error "M16_EFFECTS_QUEUE_BLOCKS must be a power of two and at least 2"
+  #endif
+  struct AudioEffectsBlock {
+    int32_t left[M16_BLOCK_SIZE];
+    int32_t right[M16_BLOCK_SIZE];
+    int32_t sidechain[M16_BLOCK_SIZE];
+  };
+  static AudioEffectsBlock _audioEffectsQueue[M16_EFFECTS_QUEUE_BLOCKS]
+      __attribute__((aligned(32)));
+  static std::atomic<uint32_t> _audioEffectsWriteSequence{0};
+  static std::atomic<uint32_t> _audioEffectsReadSequence{0};
+  static std::atomic<bool> _audioEffectsProducerWaiting{false};
+  static TaskHandle_t _audioEffectsTaskHandle = NULL;
+  static std::atomic<uint32_t> _audioEffectsQueueFullWaits{0};
+  static std::atomic<uint32_t> _audioEffectsQueueEmptyWaits{0};
+  static std::atomic<uint32_t> _audioEffectsDmaWriteErrors{0};
+  static uint16_t _audioEffectsFastWrites = 0;
+
+  inline uint32_t audioEffectsQueueFullWaitCount() {
+    return _audioEffectsQueueFullWaits.load(std::memory_order_relaxed);
+  }
+  inline uint32_t audioEffectsQueueEmptyWaitCount() {
+    return _audioEffectsQueueEmptyWaits.load(std::memory_order_relaxed);
+  }
+  inline uint32_t audioEffectsDmaWriteErrorCount() {
+    return _audioEffectsDmaWriteErrors.load(std::memory_order_relaxed);
+  }
 
   void audioCallback(void* param) {
       while (!_audioTasksRunning) {
@@ -705,6 +777,79 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
           // Per-sample yield() adds ~2μs overhead (4-9% CPU) for no benefit,
           // which can push heavy DSP (reverb) past the sample deadline.
       }
+  }
+
+  // Consume complete post-mix blocks, apply effects in sample order, then feed
+  // I2S. The block queue is deliberately SPSC: the normal audio producer is
+  // pinned to Core 0 and this worker is pinned to Core 1.
+  static void audioEffectsTask(void* /*param*/) {
+    static uint8_t outputBlock[M16_BLOCK_SIZE * 4];
+    while (!_audioEffectsTaskActive.load(std::memory_order_acquire))
+      vTaskDelay(1);
+
+    for (;;) {
+      uint32_t readSequence =
+          _audioEffectsReadSequence.load(std::memory_order_relaxed);
+      uint32_t writeSequence =
+          _audioEffectsWriteSequence.load(std::memory_order_acquire);
+      if (readSequence == writeSequence) {
+        _audioEffectsQueueEmptyWaits.fetch_add(1, std::memory_order_relaxed);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        continue;
+      }
+
+      AudioEffectsBlock& block =
+          _audioEffectsQueue[readSequence & (M16_EFFECTS_QUEUE_BLOCKS - 1)];
+      for (int i = 0; i < M16_BLOCK_SIZE; ++i) {
+        int32_t left = block.left[i];
+        int32_t right = block.right[i];
+        if (_audioPostProcessSidechainCallback != nullptr)
+          _audioPostProcessSidechainCallback(left, right, block.sidechain[i]);
+        else if (_audioPostProcessCallback != nullptr)
+          _audioPostProcessCallback(left, right);
+        left = clip16(left);
+        right = clip16(right);
+        outputBlock[i * 4 + 0] = (uint8_t)(right & 0xFF);
+        outputBlock[i * 4 + 1] = (uint8_t)((right >> 8) & 0xFF);
+        outputBlock[i * 4 + 2] = (uint8_t)(left & 0xFF);
+        outputBlock[i * 4 + 3] = (uint8_t)((left >> 8) & 0xFF);
+      }
+
+      // The output bytes are local now, so return the queue slot before the
+      // blocking DMA write. This lets Core 0 prepare the next block while I2S
+      // drains the current one.
+      _audioEffectsReadSequence.store(readSequence + 1,
+                                      std::memory_order_release);
+      if (_audioEffectsProducerWaiting.exchange(
+              false, std::memory_order_acq_rel))
+        xTaskNotifyGive(audioCallback1Handle);
+
+      size_t bytesWritten = 0;
+      uint32_t writeStartUs = micros();
+      esp_err_t writeResult = i2s_channel_write(
+          tx_handle, outputBlock, sizeof(outputBlock), &bytesWritten,
+          portMAX_DELAY);
+      uint32_t writeElapsedUs = (uint32_t)(micros() - writeStartUs);
+      if (writeResult != ESP_OK || bytesWritten != sizeof(outputBlock))
+        _audioEffectsDmaWriteErrors.fetch_add(1, std::memory_order_relaxed);
+
+      #if M16_DMA_FAST_WRITE_YIELD_BLOCKS > 0
+        uint32_t blockPeriodUs = (uint32_t)(((uint64_t)M16_BLOCK_SIZE *
+            1000000ULL) / (uint32_t)SAMPLE_RATE);
+        uint32_t fastWriteUs = blockPeriodUs >> 2;
+        if (fastWriteUs < 50U) fastWriteUs = 50U;
+        if (writeElapsedUs < fastWriteUs) {
+          if (_audioEffectsFastWrites < M16_DMA_FAST_WRITE_YIELD_BLOCKS)
+            _audioEffectsFastWrites++;
+          if (_audioEffectsFastWrites >= M16_DMA_FAST_WRITE_YIELD_BLOCKS) {
+            _audioEffectsFastWrites = 0;
+            vTaskDelay(1);
+          }
+        } else {
+          _audioEffectsFastWrites = 0;
+        }
+      #endif
+    }
   }
 
   // Output smoothing state
@@ -822,6 +967,7 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
   // being mistaken for the readiness of a reused slot.
   static int32_t _blockPartialL[2][2][M16_BLOCK_SIZE] __attribute__((aligned(32)));
   static int32_t _blockPartialR[2][2][M16_BLOCK_SIZE] __attribute__((aligned(32)));
+  static int32_t _blockPartialSidechain[2][2][M16_BLOCK_SIZE] __attribute__((aligned(32)));
   static int _blockPos[2];
   static uint32_t _blockSequence[2] = {0, 0};
   static std::atomic<uint32_t> _blockReadySequence[2]{{0}, {0}};
@@ -998,7 +1144,6 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
   }
 
   // These handles can now be used for vTask things
-  TaskHandle_t audioCallback1Handle = NULL;  // Core 0 audio task
   TaskHandle_t audioCallback2Handle = NULL;  // Core 1 audio task
 
   // ---- Block-based dual-core voice partitioning helpers ----
@@ -1038,17 +1183,24 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
   // Block-based audio write.
   // Accumulates samples into a per-core partial buffer of M16_BLOCK_SIZE entries.
   // This creates "breathing room" for the OS and prevents watchdog resets.
+  bool audioBlockWrite(int32_t leftSample, int32_t rightSample, int32_t sidechainSample);
+
   bool audioBlockWrite(int32_t leftSample, int32_t rightSample) {
+    return audioBlockWrite(leftSample, rightSample, 0);
+  }
+
+  bool audioBlockWrite(int32_t leftSample, int32_t rightSample, int32_t sidechainSample) {
     #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
       // The internal DAC already owns a single buffered audio task and does not
       // create an external-I2S TX channel. Preserve the portable block-writer API
       // by forwarding each frame to its dedicated DAC accumulation path.
       if (_useInternalDAC) {
-        if (_audioPostProcessCallback != nullptr) {
+        if (_audioPostProcessSidechainCallback != nullptr) {
+          _audioPostProcessSidechainCallback(leftSample, rightSample, sidechainSample);
+        } else if (_audioPostProcessCallback != nullptr) {
           _audioPostProcessCallback(leftSample, rightSample);
         }
-        return _i2s_write_samples_platform((int16_t)clip16(leftSample),
-                                            (int16_t)clip16(rightSample));
+        return _i2s_write_samples_platform((int16_t)clip16(leftSample), (int16_t)clip16(rightSample));
       }
     #endif
 
@@ -1067,8 +1219,7 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
       if (pos == 0 && sequence >= 2) {
         _audioProducerBlockWasPaced = false;
         uint32_t expectedConsumed = sequence - 1;
-        uint32_t consumed =
-            _blockConsumedSequence[slot].load(std::memory_order_acquire);
+        uint32_t consumed = _blockConsumedSequence[slot].load(std::memory_order_acquire);
         bool producerWasPaced = false;
         // Wrap-safe monotonic comparison: wait only while Core 0 is behind.
         // Requiring equality deadlocks if repeated timeout recovery lets Core 0
@@ -1076,8 +1227,7 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
         while ((int32_t)(consumed - expectedConsumed) < 0) {
           producerWasPaced = true;
           ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-          consumed =
-              _blockConsumedSequence[slot].load(std::memory_order_acquire);
+          consumed = _blockConsumedSequence[slot].load(std::memory_order_acquire);
         }
         if (consumed != expectedConsumed) {
           // Core 0 has already discarded one or more missing partitions and
@@ -1097,6 +1247,7 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
       }
       _blockPartialL[slot][1][pos] = leftSample;
       _blockPartialR[slot][1][pos] = rightSample;
+      _blockPartialSidechain[slot][1][pos] = sidechainSample;
       pos++;
       _blockPos[1] = pos;
       if (pos < M16_BLOCK_SIZE) return true;
@@ -1128,6 +1279,7 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
     int pos = _blockPos[0];
     _blockPartialL[slot][0][pos] = leftSample;
     _blockPartialR[slot][0][pos] = rightSample;
+    _blockPartialSidechain[slot][0][pos] = sidechainSample;
     pos++;
     _blockPos[0] = pos;
 
@@ -1137,6 +1289,40 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
 
     // Block is full — Process/Write
     _blockPos[0] = 0;
+
+    if (_audioEffectsTaskActive.load(std::memory_order_acquire)) {
+      uint32_t writeSequence =
+          _audioEffectsWriteSequence.load(std::memory_order_relaxed);
+      bool waitedForSpace = false;
+      while (writeSequence - _audioEffectsReadSequence.load(
+                 std::memory_order_acquire) >= M16_EFFECTS_QUEUE_BLOCKS) {
+        if (!waitedForSpace) {
+          _audioEffectsQueueFullWaits.fetch_add(1, std::memory_order_relaxed);
+          waitedForSpace = true;
+        }
+        _audioEffectsProducerWaiting.store(true, std::memory_order_release);
+        if (writeSequence - _audioEffectsReadSequence.load(
+                std::memory_order_acquire) < M16_EFFECTS_QUEUE_BLOCKS) {
+          _audioEffectsProducerWaiting.store(false, std::memory_order_relaxed);
+          break;
+        }
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        _audioEffectsProducerWaiting.store(false, std::memory_order_relaxed);
+      }
+
+      AudioEffectsBlock& queuedBlock =
+          _audioEffectsQueue[writeSequence & (M16_EFFECTS_QUEUE_BLOCKS - 1)];
+      for (int i = 0; i < M16_BLOCK_SIZE; ++i) {
+        queuedBlock.left[i] = _blockPartialL[slot][0][i];
+        queuedBlock.right[i] = _blockPartialR[slot][0][i];
+        queuedBlock.sidechain[i] = _blockPartialSidechain[slot][0][i];
+      }
+      _audioEffectsWriteSequence.store(writeSequence + 1,
+                                       std::memory_order_release);
+      _blockSequence[0] = sequence + 1;
+      xTaskNotifyGive(_audioEffectsTaskHandle);
+      return true;
+    }
 
     bool core1Ready = _blockSplitActive;
     if (_blockSplitActive) {
@@ -1180,7 +1366,12 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
         outL = _blockPartialL[slot][0][i];
         outR = _blockPartialR[slot][0][i];
       }
-      if (_audioPostProcessCallback != nullptr) {
+      int32_t sidechain = _blockPartialSidechain[slot][0][i];
+      if (_blockSplitActive && core1Ready)
+        sidechain += _blockPartialSidechain[slot][1][i];
+      if (_audioPostProcessSidechainCallback != nullptr) {
+        _audioPostProcessSidechainCallback(outL, outR, sidechain);
+      } else if (_audioPostProcessCallback != nullptr) {
         _audioPostProcessCallback(outL, outR);
       }
       outL = clip16(outL);
@@ -1238,6 +1429,7 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
   SemaphoreHandle_t audioInitMutex = NULL;
 
   void audioStart() {
+      _audioEffectsTaskActive.store(false, std::memory_order_relaxed);
       // Create mutex for initialization protection
       if (audioInitMutex == NULL) {
           audioInitMutex = xSemaphoreCreateMutex();
@@ -1245,6 +1437,9 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
 
     #if defined(SOC_DAC_SUPPORTED) && SOC_DAC_SUPPORTED
       if (_useInternalDAC) {
+        if (_audioEffectsTaskRequested) {
+          Serial.println("M16 effects worker requires external I2S; using synchronous effects");
+        }
         // Internal DAC initialization via dac_continuous driver
         dac_continuous_config_t dac_cfg = {
             .chan_mask = DAC_CHANNEL_MASK_ALL,
@@ -1342,6 +1537,37 @@ inline void setAudioPostProcessCallback(AudioPostProcessCallback callback) {
                       (long)core0TaskResult, (unsigned)ESP.getFreeHeap());
         _audioTasksRunning = false;
         return;
+      }
+
+      if (_audioEffectsTaskRequested) {
+        if (isDualCore || ESP.getChipCores() < 2) {
+          Serial.println("M16 effects worker requires single-producer audio mode; using synchronous effects");
+        } else {
+          _audioEffectsWriteSequence.store(0, std::memory_order_relaxed);
+          _audioEffectsReadSequence.store(0, std::memory_order_relaxed);
+          _audioEffectsProducerWaiting.store(false, std::memory_order_relaxed);
+          _audioEffectsQueueFullWaits = 0;
+          _audioEffectsQueueEmptyWaits = 0;
+          _audioEffectsDmaWriteErrors = 0;
+          _audioEffectsFastWrites = 0;
+          BaseType_t effectsTaskResult = xTaskCreatePinnedToCore(
+              audioEffectsTask,
+              "M16Effects",
+              8192,
+              NULL,
+              configMAX_PRIORITIES - 2,
+              &_audioEffectsTaskHandle,
+              1
+          );
+          if (effectsTaskResult == pdPASS && _audioEffectsTaskHandle != NULL) {
+            _audioEffectsTaskActive.store(true, std::memory_order_release);
+            Serial.println("M16 effects worker is running on Core 1");
+          } else {
+            _audioEffectsTaskHandle = NULL;
+            Serial.printf("M16 WARNING: effects task creation failed (result=%ld); using synchronous effects\n",
+                          (long)effectsTaskResult);
+          }
+        }
       }
       if (isDualCore && !dualTasksActive) {
         Serial.printf("M16 WARNING: Core 1 audio task unavailable (result=%ld, chip cores=%u, free heap=%u); using single-core fallback\n",
