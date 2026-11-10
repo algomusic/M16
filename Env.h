@@ -161,6 +161,7 @@ class Env {
       }
       attackSamples = envAttack * samplesPerMs;
       invAttackSamples = (attackSamples > 0.0f) ? (1.0f / attackSamples) : 0.0f;
+      setAttackScaleQ12(4096);
       holdSamples = envHold * samplesPerMs;
       decaySamples = envDecay * samplesPerMs;
       invDecaySamples = (decaySamples > 0.0f) ? (1.0f / decaySamples) : 0.0f;
@@ -179,6 +180,38 @@ class Env {
       releaseTriggered = false;
       envState = 1; // attack
       startPending = true;
+      #endif
+    }
+
+    // Lightweight retrigger for audio-rate cycle sources. Timing values are
+    // already prepared by start()/retriggerRelease(); this avoids random
+    // jitter and millisecond-to-sample conversions in the audio callback.
+    inline void triggerFromAudio(uint16_t attackScaleQ12 = 4096) {
+      if (attackScaleQ12 == 0) attackScaleQ12 = 1;
+      uint16_t currentLevel;
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      currentLevel = envVal.load(std::memory_order_relaxed);
+      attackScaleQ12Value.store(attackScaleQ12, std::memory_order_relaxed);
+      releaseTriggered.store(false, std::memory_order_relaxed);
+      envState.store(1, std::memory_order_relaxed);
+      startPendingState.store(1, std::memory_order_release);
+      #else
+      currentLevel = envVal;
+      attackScaleQ12Value = attackScaleQ12;
+      releaseTriggered = false;
+      envState = 1;
+      startPending = true;
+      #endif
+      resetStartLevel = currentLevel;
+      attackStartLevel = resetOnStart ? 0 : currentLevel;
+    }
+
+    inline void setAttackScaleQ12(uint16_t scale) {
+      if (scale == 0) scale = 1;
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      attackScaleQ12Value.store(scale, std::memory_order_relaxed);
+      #else
+      attackScaleQ12Value = scale;
       #endif
     }
 
@@ -327,6 +360,39 @@ class Env {
       return evaluate();
     }
 
+    /** Return the current value with a per-call sustain-level multiplier.
+     * The multiplier is clamped at the envelope's current maximum level and
+     * does not change the stored sustain setting.
+     */
+    inline
+    uint16_t getValueWithSustainScale(float scale) {
+      return evaluate(scale, 1.0f, 1.0f);
+    }
+
+    /** Return the current value with per-call sustain, decay, and release
+     * multipliers. Time scaling changes the active contour without changing
+     * the stored dial values. Scales below 1 shorten a time; scales above 1
+     * lengthen it.
+     */
+    inline
+    uint16_t getValueWithTimeScales(float sustainScale, float decayScale,
+                                    float releaseScale) {
+      const float safeDecayScale = fmaxf(0.001f, decayScale);
+      const float safeReleaseScale = fmaxf(0.001f, releaseScale);
+      return evaluate(sustainScale, 1.0f / safeDecayScale,
+                      1.0f / safeReleaseScale);
+    }
+
+    /** Return the current value with duration-rate multipliers.
+     * A rate of 0.1 lengthens a segment by 10x; a rate of 10 shortens it to
+     * one tenth. This form avoids divisions in audio-rate modulation paths.
+     */
+    inline
+    uint16_t getValueWithTimeRateScales(float sustainScale, float decayRate,
+                                        float releaseRate) {
+      return evaluate(sustainScale, decayRate, releaseRate);
+    }
+
     /** Set the maximum envelope value
     * @param level from 0.0 - 1.0
     * Can work as a gain control
@@ -353,7 +419,8 @@ class Env {
      * input is the release snapshot, published atomically by startRelease().
      */
     inline
-    uint16_t evaluate() {
+    uint16_t evaluate(float sustainScale = 1.0f, float decayRate = 1.0f,
+                      float releaseRate = 1.0f) {
       uint32_t frameNow = audioFrameCount();
       uint32_t envelopeStartFrame;
 
@@ -378,6 +445,20 @@ class Env {
       #endif
 
       const uint16_t peak = JIT_MAX_ENV_LEVEL;
+      const uint16_t evaluatedSustainLevel = sustainScale == 1.0f
+          ? sustainLevel
+          : static_cast<uint16_t>(fminf(JIT_MAX_ENV_LEVEL,
+                                        sustainLevel * fmaxf(0.0f, sustainScale)));
+      const float evaluatedInvDecaySamples = invDecaySamples * decayRate;
+      const float evaluatedInvReleaseSamples = invReleaseSamples * releaseRate;
+      uint16_t attackScaleQ12;
+      #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+      attackScaleQ12 = attackScaleQ12Value.load(std::memory_order_relaxed);
+      #else
+      attackScaleQ12 = attackScaleQ12Value;
+      #endif
+      const float evaluatedAttackSamples = attackSamples * (attackScaleQ12 * (1.0f / 4096.0f));
+      const float evaluatedInvAttackSamples = invAttackSamples * (4096.0f / attackScaleQ12);
       uint16_t currVal;
 
       if (currState == 0) {
@@ -387,7 +468,7 @@ class Env {
       else if (released) {
         // Asynchronous note-off release (sustaining envelopes).
         uint32_t relElapsed = frameNow - releaseStartFrame;
-        float rPercent = 1.0f - relElapsed * invReleaseSamples;
+        float rPercent = 1.0f - relElapsed * evaluatedInvReleaseSamples;
         if (rPercent > 0.0f && releaseStartLevel > 10) {
           rPercent = rPercent * rPercent * rPercent; // fast exp
           currVal = (uint16_t)(releaseStartLevel * rPercent);
@@ -414,38 +495,38 @@ class Env {
             elapsed -= (uint32_t)resetTransitionSamples;
           }
 
-        if (attackSamples > 0.0f && elapsed < (uint32_t)attackSamples) {
+        if (evaluatedAttackSamples > 0.0f && elapsed < (uint32_t)evaluatedAttackSamples) {
           // Attack interpolated from attackStartLevel for click-free retrigger.
           // attackCurve blends linear (0) with quadratic ease-out (1).
-          float t = elapsed * invAttackSamples;
+          float t = elapsed * evaluatedInvAttackSamples;
           t = t + attackCurve * t * (1.0f - t);
           currVal = (uint16_t)(attackStartLevel + (peak - attackStartLevel) * t);
           currState = 1;
         }
-        else if (elapsed < (uint32_t)(attackSamples + holdSamples)) {
+        else if (elapsed < (uint32_t)(evaluatedAttackSamples + holdSamples)) {
           // hold: maintain peak
           currVal = peak;
           currState = 2;
         }
         else {
-          uint32_t decayElapsed = elapsed - (uint32_t)(attackSamples + holdSamples);
-          if (sustainLevel > 0) {
+          uint32_t decayElapsed = elapsed - (uint32_t)(evaluatedAttackSamples + holdSamples);
+          if (evaluatedSustainLevel > 0) {
             // AHDSR: decay peak -> sustain, then hold sustain until note-off.
             if (decaySamples > 0.0f) {
-              float t = decayElapsed * invDecaySamples;
+              float t = decayElapsed * evaluatedInvDecaySamples;
               if (t < 1.0f) {
                 float dp = 1.0f - t;
                 dp = dp * dp * dp * dp; // fast exp
                 float v = peak * dp;
-                if (v <= (float)sustainLevel) { currVal = sustainLevel; currState = 4; }
+                if (v <= (float)evaluatedSustainLevel) { currVal = evaluatedSustainLevel; currState = 4; }
                 else { currVal = (uint16_t)v; currState = 3; }
-              } else { currVal = sustainLevel; currState = 4; }
-            } else { currVal = sustainLevel; currState = 4; }
+              } else { currVal = evaluatedSustainLevel; currState = 4; }
+            } else { currVal = evaluatedSustainLevel; currState = 4; }
           }
           else if (decaySamples > 0.0f) {
             // AD (sustain 0), with optional decay repeats: peak -> 0, then complete.
             float totalSegs = (float)(decayRepeats + 1);
-            float seg = decayElapsed * invDecaySamples; // segments elapsed
+            float seg = decayElapsed * evaluatedInvDecaySamples; // segments elapsed
             if (seg < totalSegs) {
               float local = seg - (float)((uint32_t)seg); // fractional position in segment
               float dp = 1.0f - local;
@@ -456,7 +537,7 @@ class Env {
           }
           else {
             // AR (sustain 0, no decay): deterministic release peak -> 0.
-            float t = decayElapsed * invReleaseSamples;
+            float t = decayElapsed * evaluatedInvReleaseSamples;
             if (t < 1.0f) {
               float rp = 1.0f - t;
               rp = rp * rp * rp; // fast exp
@@ -501,6 +582,11 @@ class Env {
     // Per-note durations in samples (computed in start()).
     float attackSamples = 0.0f, holdSamples = 0.0f, decaySamples = 0.0f, releaseSamples = 0.0f;
     float invAttackSamples = 0.0f, invDecaySamples = 0.0f, invReleaseSamples = 0.0001f;
+    #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
+    std::atomic<uint16_t> attackScaleQ12Value{4096};
+    #else
+    uint16_t attackScaleQ12Value = 4096;
+    #endif
     float resetTransitionMs = 0.0f;
     float resetTransitionSamples = 0.0f, invResetTransitionSamples = 0.0f;
     // Audio-frame anchors (see audioFrameCount() in M16.h).
