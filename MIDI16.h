@@ -294,6 +294,30 @@ public:
   void sendContinue() { sendRealtimeMessage(251); }
   void sendStop()     { sendRealtimeMessage(252); }
 
+  /** Enable or disable MIDI Thru. When enabled, every received MIDI byte is
+   *  copied to the MIDI output, including Real-Time, System Common and SysEx
+   *  data. Disabled by default. */
+  void setMidiThru(bool enabled) { _midiThru = enabled; }
+
+  /** Return whether MIDI Thru is enabled. */
+  bool getMidiThru() const { return _midiThru; }
+
+  /** Enable MIDI Extend mode. Up to extendPoly simultaneous note events are
+   *  delivered locally; additional notes are sent to MIDI output. Other MIDI
+   *  messages are both delivered locally and passed to MIDI output. */
+  void setMidiExtend(bool enabled) { _midiExtend = enabled; }
+
+  /** Set the local polyphony limit used by MIDI Extend mode (1-127 voices). */
+  void setExtendPoly(uint8_t voices) {
+    _extendPoly = voices < 1 ? 1 : (voices > 127 ? 127 : voices);
+  }
+
+  /** Return the local polyphony limit used by MIDI Extend mode. */
+  uint8_t getExtendPoly() const { return _extendPoly; }
+
+  /** Return whether MIDI Extend mode is enabled. */
+  bool getMidiExtend() const { return _midiExtend; }
+
   // ── Receive ──────────────────────────────────────────────────────────────
 
   /** Read one complete MIDI event. Returns the status byte (channel stripped
@@ -307,17 +331,26 @@ public:
     while (srcAvail() && !eventQueueFull()) {
       int b = srcRead();
       if (b < 0) break;
+      #if IS_ESP32()
+      if (_midiThru && !_midiExtend && !_clockTaskActive)
+        Serial2.write((uint8_t)b);
+      #else
+      if (_midiThru && !_midiExtend) Serial2.write((uint8_t)b);
+      #endif
       parseByte((uint8_t)b);
     }
 
     MidiEvent event;
-    if (!eventPop(event)) return 0;
-    message[0] = event.status;
-    message[1] = event.data1;
-    message[2] = event.data2;
-    return (message[0] < 240)
-      ? (uint8_t)(message[0] & 0xF0)
-      : message[0];
+    while (eventPop(event)) {
+      if (!routeExtendedEvent(event)) continue;
+      message[0] = event.status;
+      message[1] = event.data1;
+      message[2] = event.data2;
+      return (message[0] < 240)
+        ? (uint8_t)(message[0] & 0xF0)
+        : message[0];
+    }
+    return 0;
   }
 
   uint8_t getStatus()  { return message[0] - (message[0] & 0x0F); }
@@ -394,6 +427,14 @@ private:
 
   int      recievePin;
   int      transmitPin;
+  volatile bool _midiThru = false;
+  volatile bool _midiExtend = false;
+  uint8_t _extendPoly = 8;
+  uint8_t _localActiveNotes = 0;
+  // Positive entries count locally owned notes; negative entries count
+  // notes owned by the thru destination. Same-pitch retriggers stay on the
+  // original path so their note-offs cannot be misrouted.
+  int8_t _noteRoute[16][128] = {};
   uint8_t *message        = nullptr;
   unsigned long _prevClockTime = 0;
   float    _clockDeltas[7]     = {};  // 8-sample window (current + 7 stored)
@@ -443,6 +484,91 @@ private:
     _eventWrite = (uint8_t)((_eventWrite + 1) & (EVENT_QUEUE_SIZE - 1));
   }
 
+  static uint8_t eventLength(uint8_t status) {
+    if (status >= 0xF8) return 1;
+    uint8_t type = status & 0xF0;
+    return (type == 0xC0 || type == 0xD0) ? 2 : 3;
+  }
+
+  bool routeExtendedEvent(const MidiEvent &event) {
+    const uint8_t type = event.status & 0xF0;
+    const bool noteOn = type == 0x90 && event.data2 > 0;
+    const bool noteOff = type == 0x80 || (type == 0x90 && event.data2 == 0);
+    const bool extending = _midiExtend;
+    const bool byteThru = _midiThru && !extending;
+
+    if (event.status >= 0xF8) {
+      if (extending) sendRealtimeMessage(event.status);
+      return true;
+    }
+
+    if (noteOn) {
+      const uint8_t channel = event.status & 0x0F;
+      int8_t &route = _noteRoute[channel][event.data1 & 0x7F];
+      bool toLocal;
+      if (route > 0) toLocal = true;
+      else if (route < 0) toLocal = false;
+      else toLocal = !extending || _localActiveNotes < _extendPoly;
+
+      if (toLocal) {
+        if (extending || route > 0) {
+          if (route < 127) ++route;
+          if (_localActiveNotes < 127) ++_localActiveNotes;
+        }
+        return true;
+      }
+      if (route > -127) --route;
+      if (!byteThru)
+        sendChannelMessage(event.status, event.data1, event.data2, 3);
+      return false;
+    }
+
+    if (noteOff) {
+      const uint8_t channel = event.status & 0x0F;
+      int8_t &route = _noteRoute[channel][event.data1 & 0x7F];
+      if (route > 0) {
+        --route;
+        if (_localActiveNotes > 0) --_localActiveNotes;
+        return true;
+      }
+      if (route < 0) {
+        ++route;
+        if (!byteThru)
+          sendChannelMessage(event.status, event.data1, event.data2, 3);
+        return false;
+      }
+      if (!extending) return true;
+      sendChannelMessage(event.status, event.data1, event.data2, 3);
+      return false;
+    }
+
+    if (type == 0xB0 && (event.data1 == 120 || event.data1 == 123)) {
+      const uint8_t channel = event.status & 0x0F;
+      bool hasLocalNotes = false;
+      bool hasThruNotes = false;
+      for (uint8_t note = 0; note < 128; ++note) {
+        int8_t &route = _noteRoute[channel][note];
+        if (route > 0) {
+          _localActiveNotes -= (uint8_t)route;
+          hasLocalNotes = true;
+        } else if (route < 0) {
+          hasThruNotes = true;
+        }
+        route = 0;
+      }
+      if (!byteThru &&
+          (hasThruNotes || (extending && !hasLocalNotes)))
+        sendChannelMessage(event.status, event.data1, event.data2, 3);
+      return extending ? hasLocalNotes : (hasLocalNotes || !hasThruNotes);
+    }
+
+    if (extending) {
+      sendChannelMessage(event.status, event.data1, event.data2,
+                         eventLength(event.status));
+    }
+    return true;
+  }
+
   void beginChannelMessage(uint8_t status) {
     _runningStatus = status;
     _parseStatus = status;
@@ -459,6 +585,17 @@ private:
       return;
     }
 
+    // MIDI Extend passes System Common and SysEx bytes unchanged. Channel
+    // messages are forwarded as complete events by routeExtendedEvent().
+    if (_midiExtend && _insideSysEx) {
+      Serial2.write(value);
+      if (value == 0xF7) {
+        _insideSysEx = false;
+        _systemDataRemaining = 0;
+      }
+      return;
+    }
+
     if (value & 0x80) {
       if (value < 0xF0) {
         _insideSysEx = false;
@@ -470,6 +607,7 @@ private:
       // System Common cancels running status. MIDI16 does not expose these
       // message types, but consuming their known data lengths keeps subsequent
       // channel messages aligned.
+      if (_midiExtend) Serial2.write(value);
       _runningStatus = 0;
       _parseStatus = 0;
       _parseDataCount = 0;
@@ -490,6 +628,7 @@ private:
 
     if (_insideSysEx) return;
     if (_systemDataRemaining > 0) {
+      if (_midiExtend) Serial2.write(value);
       --_systemDataRemaining;
       return;
     }
@@ -678,6 +817,7 @@ private:
       while (Serial2.available()) {
         uint8_t b = (uint8_t)Serial2.read();
         if (b == 0xF8) self->tsPush(micros());
+        if (self->_midiThru) Serial2.write(b);
         self->rxPush(b);
       }
 
