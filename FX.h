@@ -26,6 +26,17 @@
 
 class FX {
 
+  private:
+    static uint16_t* softClipAtan1Table() {
+      static uint16_t table[1025] = {};
+      return table;
+    }
+
+    static bool& softClipAtan1TableInitialized() {
+      static bool initialized = false;
+      return initialized;
+    }
+
   public:
     #if IS_ESP32() || IS_RP2040()
     std::atomic<bool> _fxLock{false};
@@ -49,6 +60,19 @@ class FX {
         if (sample_in <= 0) sample_in = MIN_16 - (sample_in + MAX_16);
       }
       return clip16(sample_in);
+    }
+
+    /** Fold only values that exceed the signed 16-bit audio range.
+     * In-range samples pass unchanged; overrange 32-bit sums reflect at each
+     * 16-bit boundary without applying extra gain before the fold.
+     */
+    inline int16_t waveFoldOverrange(int32_t sample_in) {
+      const int64_t range = (int64_t)MAX_16 - MIN_16;
+      const int64_t period = range * 2;
+      int64_t folded = ((int64_t)sample_in - MIN_16) % period;
+      if (folded < 0) folded += period;
+      if (folded > range) folded = period - folded;
+      return clip16((int32_t)(MIN_16 + folded));
     }
 
     /** Ring modulation with a dry/wet control.
@@ -204,6 +228,50 @@ class FX {
     int16_t softClipAtan(int32_t sample_in, float amount) {
       int32_t samp = 38000 * atan(amount * (sample_in * (float)MAX_16_INV)); // 20831
       return clip16(samp);
+    }
+
+    /** Prepare the fast amount-1 atan clipper lookup table.
+     * Call once during setup, before audio starts. The table covers the input
+     * range 0-65536 with linear interpolation and reproduces the softClipAtan
+     * curve while avoiding atan() in the real-time sample path.
+     */
+    void initSoftClipAtan1Table() {
+      if (softClipAtan1TableInitialized()) return;
+      uint16_t* table = softClipAtan1Table();
+      for (uint32_t i = 0; i <= 1024; ++i) {
+        const int32_t input = (int32_t)(i << 6);
+        int32_t output = 38000 * atan(input * (float)MAX_16_INV);
+        output = max((int32_t)0, min((int32_t)32768, output));
+        table[i] = (uint16_t)output;
+      }
+      softClipAtan1TableInitialized() = true;
+    }
+
+    /** Fast lookup equivalent of softClipAtan(sample, 1.0f).
+     * Call initSoftClipAtan1Table() during setup before using this in audio.
+     */
+    inline int16_t softClipAtan1Fast(int32_t sample_in) {
+      if (!softClipAtan1TableInitialized())
+        return softClipAtan(sample_in, 1.0f);
+
+      const bool negative = sample_in < 0;
+      uint32_t magnitude = negative
+          ? (uint32_t)(-(int64_t)sample_in) : (uint32_t)sample_in;
+      if (magnitude > 65536U) magnitude = 65536U;
+      const uint16_t index = (uint16_t)(magnitude >> 6);
+      uint32_t outputMagnitude = softClipAtan1Table()[index];
+      if (index < 1024) {
+        const uint32_t fraction = magnitude & 63U;
+        const int32_t difference =
+            (int32_t)softClipAtan1Table()[index + 1] - outputMagnitude;
+        outputMagnitude += (uint32_t)((difference * (int32_t)fraction) >> 6);
+      }
+      if (negative) {
+        return outputMagnitude >= 32768U
+            ? MIN_16 : (int16_t)-(int32_t)outputMagnitude;
+      }
+      return outputMagnitude >= 32767U
+          ? MAX_16 : (int16_t)outputMagnitude;
     }
 
     /** Cubic Soft Clipping
