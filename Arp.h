@@ -68,11 +68,15 @@ class Arp {
       if (arpDirection == ARP_ORDER) {
         nextValue = initValues[arpIndex++] + (currOctave * 12);
         updateUpIndex();
+        prevValue = nextValue;
+        hasPreviousValue = true;
         return nextValue;
       }
       if (arpDirection == ARP_UP) {
         nextValue = sortedValues[arpIndex++] + (currOctave * 12);
         updateUpIndex();
+        prevValue = nextValue;
+        hasPreviousValue = true;
         return nextValue;
       }
       if (arpDirection == ARP_UP_DOWN) {
@@ -82,6 +86,7 @@ class Arp {
           currOctave++;
           if (currOctave >= octaveRange) currOctave = 0;
           prevValue = nextValue;
+          hasPreviousValue = true;
           return nextValue;
         }
         if (upDownDirection == ARP_UP) {
@@ -109,20 +114,18 @@ class Arp {
           }
         }
         prevValue = nextValue;
+        hasPreviousValue = true;
         return nextValue;
       }
       if (arpDirection == ARP_DOWN) {
         nextValue = sortedValues[arpIndex--] + (currOctave * 12);
         updateDownIndex();
+        prevValue = nextValue;
+        hasPreviousValue = true;
         return nextValue;
       }
       if (arpDirection == ARP_RANDOM) {
-        // Random pitch from available pitches
-        int randIndex = random(arpSize);
-        int randOctave = random(octaveRange);
-        nextValue = sortedValues[randIndex] + (randOctave * 12);
-        prevValue = nextValue;
-        return nextValue;
+        return nextRandomPitch();
       }
       if (arpDirection == ARP_RANDOM2) {
         // UP_DOWN pattern with 30% chance of octave shift
@@ -163,6 +166,7 @@ class Arp {
           nextValue += octaveShift * direction;
         }
         prevValue = nextValue;
+        hasPreviousValue = true;
         return nextValue;
       }
       return 0; // in case it ever gets here
@@ -263,6 +267,46 @@ class Arp {
     int upDownDirection = ARP_UP;
     int stepDiv = 1;
     int prevValue = 0;
+    bool hasPreviousValue = false;
+
+    int nextRandomPitch() {
+      int candidate = sortedValues[random(arpSize)] +
+                      (random(octaveRange) * 12);
+      if (!hasPreviousValue || candidate != prevValue) {
+        prevValue = candidate;
+        hasPreviousValue = true;
+        return candidate;
+      }
+
+      // Choose uniformly from available entries whose pitch differs from the
+      // previous random step. If every entry is the same pitch, repetition is
+      // unavoidable and the initially selected candidate is retained.
+      int alternativeCount = 0;
+      for (int octave = 0; octave < octaveRange; ++octave) {
+        for (int index = 0; index < arpSize; ++index) {
+          if (sortedValues[index] + octave * 12 != prevValue)
+            ++alternativeCount;
+        }
+      }
+      if (alternativeCount > 0) {
+        int alternative = random(alternativeCount);
+        for (int octave = 0; octave < octaveRange; ++octave) {
+          for (int index = 0; index < arpSize; ++index) {
+            int pitch = sortedValues[index] + octave * 12;
+            if (pitch == prevValue) continue;
+            if (alternative-- == 0) {
+              candidate = pitch;
+              octave = octaveRange;
+              break;
+            }
+          }
+        }
+      }
+
+      prevValue = candidate;
+      hasPreviousValue = true;
+      return candidate;
+    }
 
     void updateUpIndex() {
       if (arpIndex >= arpSize) {
