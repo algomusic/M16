@@ -21,6 +21,8 @@
 #ifndef BOB_H_
 #define BOB_H_
 
+
+
 #include <Arduino.h>
 #include <math.h>
 #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
@@ -174,10 +176,36 @@ public:
     KQ_ = K_ * Qadjust_;
   }
 
+  /** Keyboard tracking: 0 disables tracking; +/-1 follows/inverts octaves.
+   * MIDI note 69 (440 Hz) leaves the base cutoff unchanged. Pass an integer
+   * MIDI note or a floating-point frequency in Hz. Call on the control thread.
+   */
+  void setPitchTrackingAmount(float amount) { if (setTrackingAmount(amount)) applyPitchTracking(); }
+  void setPitchTracking(int pitch) { if (setTrackingPitch(pitch)) applyPitchTracking(); }
+  void setPitchTracking(float frequency) { if (setTrackingFrequency(frequency)) applyPitchTracking(); }
+  void setPitchTracking(double frequency) { setPitchTracking((float)frequency); }
+  float getPitchTrackingAmount() const { return _trackingAmount; }
+  float getPitchTrackingMultiplier() const { return _trackingMultiplier; }
+  float getPitchTrackedFrequency() const { return trackedFrequency(); }
+  // Advanced modulation graphs can consume the tracked value without changing
+  // coefficients here. Re-enable automatic application for ordinary use.
+  void setPitchTrackingAutoApply(bool enabled) { _pitchTrackingAutoApply = enabled; if (enabled) applyPitchTracking(); }
+  void setPitchTrackingBaseFrequency(float frequency) {
+    if (!isfinite(frequency) || frequency < 0.0f) return;
+    setTrackingBase(frequency);
+    _pitchTrackingUsesNormalised = false;
+    applyPitchTracking();
+  }
+
   /** Set cutoff frequency in Hz
    * @param freq Frequency in Hz (5-20000)
    */
   void setFreq(float freq) {
+    if (!_pitchTrackingApplying) {
+      _pitchTrackingUsesNormalised = false;
+      setTrackingBase(max(0.0f, freq));
+      if (_pitchTrackingAutoApply) freq = trackedFrequency();
+    }
     // Reduce effect above 5kHz to limit aliasing
     if (freq > 5000.0f) {
       freq = 5000.0f + (freq - 5000.0f) * 0.4f;
@@ -198,7 +226,10 @@ public:
    */
   void setNormalisedCutoff(float cutoff_val) {
     _normalisedCutoff = max(0.0f, min(1.0f, cutoff_val));
-    setFreq(20000.0f * _normalisedCutoff * _normalisedCutoff * _normalisedCutoff);
+    const float base = 20000.0f * _normalisedCutoff * _normalisedCutoff * _normalisedCutoff;
+    setFreq(_pitchTrackingApplying && _pitchTrackingAutoApply
+        ? trackedFrequency() : base);
+    if (!_pitchTrackingApplying) _pitchTrackingUsesNormalised = true;
   }
 
   /** Alias for setNormalisedCutoff for backwards compatibility */
@@ -229,6 +260,60 @@ public:
   }
 
 private:
+  // Pitch tracking is control-thread state, local to this filter.
+  float _trackingBase = 0.0f;
+  float _trackingAmount = 0.0f;
+  float _trackingMidiPitch = 69.0f;
+  float _trackingMultiplier = 1.0f;
+  void setTrackingBase(float hz) {
+    if (isfinite(hz) && hz >= 0.0f) _trackingBase = hz;
+  }
+  bool setTrackingAmount(float value) {
+    if (!isfinite(value)) return false;
+    if (value < -1.0f) value = -1.0f;
+    if (value > 1.0f) value = 1.0f;
+    if (_trackingAmount == value) return false;
+    _trackingAmount = value;
+    updateTrackingMultiplier();
+    return true;
+  }
+  bool setTrackingPitch(int pitch) {
+    if (pitch < 0) pitch = 0;
+    if (pitch > 127) pitch = 127;
+    if (_trackingMidiPitch == (float)pitch) return false;
+    _trackingMidiPitch = (float)pitch;
+    updateTrackingMultiplier();
+    return true;
+  }
+  bool setTrackingFrequency(float hz) {
+    if (!isfinite(hz) || hz <= 0.0f) return false;
+    float pitch = 69.0f + 12.0f * (log2f(hz) - log2f(440.0f));
+    if (_trackingMidiPitch == pitch) return false;
+    _trackingMidiPitch = pitch;
+    updateTrackingMultiplier();
+    return true;
+  }
+  float trackedFrequency() const {
+    float result = _trackingBase * _trackingMultiplier;
+    return isfinite(result) ? result : 3.402823466e38f;
+  }
+  void updateTrackingMultiplier() {
+    float exponent = (_trackingMidiPitch - 69.0f) * _trackingAmount * (1.0f / 12.0f);
+    if (exponent > 100.0f) exponent = 100.0f;
+    if (exponent < -100.0f) exponent = -100.0f;
+    _trackingMultiplier = _trackingAmount == 0.0f ? 1.0f : exp2f(exponent);
+  }
+  bool _pitchTrackingAutoApply = true;
+  bool _pitchTrackingApplying = false;
+  bool _pitchTrackingUsesNormalised = false;
+  void applyPitchTracking() {
+    if (!_pitchTrackingAutoApply) return;
+    _pitchTrackingApplying = true;
+    if (_pitchTrackingUsesNormalised) setNormalisedCutoff(_normalisedCutoff);
+    else setFreq(trackedFrequency());
+    _pitchTrackingApplying = false;
+  }
+
   #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
   std::atomic<bool> _bobLock{false};
   #endif
@@ -248,7 +333,7 @@ private:
   float KQ_;
   float pbg_;
   float oldinput_;
-  float Fbase_;
+  float Fbase_ = 0.0f;
   float _normalisedCutoff = 0.0f;  // Stored normalized cutoff (0.0-1.0)
   int32_t ampComp = (int32_t)(MAX_16 * 1.4f);
   float ampCompHalf_ = ampComp * 0.5f;  // Precomputed for output scaling
