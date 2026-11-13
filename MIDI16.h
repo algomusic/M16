@@ -32,6 +32,99 @@ public:
   static const uint8_t cont                = 0xFB;
   static const uint8_t stop                = 0xFC;
 
+  /** Coalesce control values on the caller's control thread. Call take()
+   * regularly, including after input stops, to deliver the final value.
+   * Times are unsigned milliseconds; interval zero disables rate limiting.
+   */
+  class LatestValue {
+  public:
+    void setInterval(uint32_t milliseconds) { interval = milliseconds; }
+    void reset(int32_t value = 0, uint32_t now = 0) {
+      latest = delivered = value; lastUpdate = now; pending = false;
+    }
+    void submit(int32_t value) { latest = value; pending = latest != delivered; }
+    bool take(uint32_t now, int32_t &value) {
+      if (!pending || (uint32_t)(now - lastUpdate) < interval) return false;
+      value = delivered = latest; pending = false; lastUpdate = now;
+      return true;
+    }
+  private:
+    int32_t latest = 0, delivered = 0;
+    uint32_t interval = 0, lastUpdate = 0;
+    bool pending = false;
+  };
+
+  /** MIDI controller pickup with a 0..127 target and selectable tolerance.
+   * A context change resets pickup, for example when editing another connector.
+   */
+  class ControllerPickup {
+  public:
+    void reset() { initialized = hasLast = pickedUp = false; }
+    bool process(uint8_t value, uint8_t target, uint8_t context = 0,
+                 uint8_t tolerance = 1) {
+      value &= 127; target &= 127;
+      if (!initialized || context != previousContext ||
+          (!pickedUp && target != previousTarget)) {
+        initialized = true; previousTarget = target; previousContext = context;
+        hasLast = false; pickedUp = false;
+      }
+      if (pickedUp) return true;
+      const bool crossed = hasLast &&
+          ((last < target && value >= target) || (last > target && value <= target));
+      const int difference = (int)value - (int)target;
+      if ((difference >= -(int)tolerance && difference <= (int)tolerance) || crossed)
+        pickedUp = true;
+      last = value; hasLast = true;
+      return pickedUp;
+    }
+  private:
+    uint8_t previousTarget = 0, previousContext = 0, last = 0;
+    bool initialized = false, hasLast = false, pickedUp = false;
+  };
+
+  /** Fixed-capacity held-note tracker. Supply a shared press order if notes
+   * must be ordered alongside other inputs such as touch pads. */
+  class HeldNotes {
+  public:
+    static const int capacity = 32;
+    struct Note {
+      uint8_t channel = 0, note = 0, velocity = 0, polyPressure = 0;
+      uint32_t pressOrder = 0;
+      bool held = false;
+    };
+    Note& operator[](int index) { return notes[index]; }
+    const Note& operator[](int index) const { return notes[index]; }
+    void reset() { for (int i = 0; i < capacity; ++i) notes[i] = Note{}; }
+    int newest() const {
+      int result = -1;
+      for (int i = 0; i < capacity; ++i)
+        if (notes[i].held && (result < 0 || notes[i].pressOrder > notes[result].pressOrder)) result = i;
+      return result;
+    }
+    void noteOn(uint8_t channel, uint8_t pitch, uint8_t velocity, uint32_t order) {
+      int freeSlot = -1, oldest = 0, slot = -1;
+      for (int i = 0; i < capacity; ++i) {
+        if (notes[i].held && notes[i].channel == channel && notes[i].note == pitch) { slot = i; break; }
+        if (!notes[i].held && freeSlot < 0) freeSlot = i;
+        if (notes[i].pressOrder < notes[oldest].pressOrder) oldest = i;
+      }
+      if (slot < 0) slot = freeSlot >= 0 ? freeSlot : oldest;
+      notes[slot] = {channel, pitch, velocity, 0, order, true};
+    }
+    void noteOff(uint8_t channel, uint8_t pitch) {
+      for (int i = 0; i < capacity; ++i)
+        if (notes[i].held && notes[i].channel == channel && notes[i].note == pitch) notes[i].held = false;
+    }
+    void setPolyPressure(uint8_t channel, uint8_t pitch, uint8_t pressure) {
+      for (int i = 0; i < capacity; ++i)
+        if (notes[i].held && notes[i].channel == channel && notes[i].note == pitch) {
+          notes[i].polyPressure = pressure; break;
+        }
+    }
+  private:
+    Note notes[capacity] = {};
+  };
+
   /** Optional standard-MIDI pressure tracker, owned by the control thread.
    * Channel state costs 16 bytes. Applications keep one poly-pressure byte per
    * active voice, clear it on Note On, and stop updating that voice at Note Off.
