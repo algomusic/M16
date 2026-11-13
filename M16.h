@@ -183,7 +183,7 @@ private:
 
 
 // globals
-int SAMPLE_RATE = 44100;
+int SAMPLE_RATE = 48000;
 float SAMPLE_RATE_INV = 1.0f / SAMPLE_RATE;
 #define MAX_16 32767
 #define MIN_16 -32767
@@ -363,13 +363,16 @@ void setIsDualCore(bool dualCore) {
   #define HALF_TABLE_SIZE (TABLE_SIZE / 2)
 #endif
 #ifndef FULL_TABLE_SIZE
-  #define FULL_TABLE_SIZE (TABLE_SIZE * 3) // accomodates low, mid, and high freq band limited waves
+  #define FULL_TABLE_SIZE (TABLE_SIZE * 4) // four frequency bands per oscillator wavetable
+#endif
+#if FULL_TABLE_SIZE < (TABLE_SIZE * 4)
+  #error "FULL_TABLE_SIZE must hold at least four oscillator wavetable bands"
 #endif
 
 const int16_t _TABLE_SIZE = TABLE_SIZE;  // For backwards compatibility
 const float TABLE_SIZE_INV = 1.0f / TABLE_SIZE;
 const int16_t _HALF_TABLE_SIZE = HALF_TABLE_SIZE;
-const int16_t _FULL_TABLE_SIZE = FULL_TABLE_SIZE;
+const int32_t _FULL_TABLE_SIZE = FULL_TABLE_SIZE;
 
 int16_t prevWaveVal = 0;
 int16_t leftAudioOuputValue = 0;
@@ -981,6 +984,7 @@ inline bool audioEffectsTaskIsActive() {
   static volatile uint32_t _audioDmaStarvationYields = 0;
   static uint16_t _audioConsecutiveFastDmaWrites = 0;
   static uint16_t _audioConsecutiveUnpacedProducerBlocks = 0;
+  static TickType_t _audioEffectsLastIdleYieldTick = 0;
   static bool _audioProducerBlockWasPaced = false;
 
   // The global post-process hook runs here on Core 0 after both ESP32 voice
@@ -1321,6 +1325,27 @@ inline bool audioEffectsTaskIsActive() {
                                        std::memory_order_release);
       _blockSequence[0] = sequence + 1;
       xTaskNotifyGive(_audioEffectsTaskHandle);
+      #if M16_PRODUCER_UNPACED_YIELD_BLOCKS > 0
+        // When DSP is too slow to fill the effects queue, the Core 0 producer
+        // never blocks for space and can starve IDLE0 indefinitely.
+        if (waitedForSpace) {
+          _audioConsecutiveUnpacedProducerBlocks = 0;
+        } else if (++_audioConsecutiveUnpacedProducerBlocks >=
+                   M16_PRODUCER_UNPACED_YIELD_BLOCKS) {
+          _audioConsecutiveUnpacedProducerBlocks = 0;
+          // A yield every 32 blocks can itself cause repeated underruns on a
+          // heavily loaded patch. The watchdog only needs an occasional idle
+          // opportunity, so space forced yields at least 500 ms apart.
+          const TickType_t now = xTaskGetTickCount();
+          const TickType_t interval = pdMS_TO_TICKS(500) > 0
+              ? pdMS_TO_TICKS(500) : 1;
+          if ((TickType_t)(now - _audioEffectsLastIdleYieldTick) >= interval) {
+            _audioEffectsLastIdleYieldTick = now;
+            _audioProducerStarvationYields++;
+            vTaskDelay(1);
+          }
+        }
+      #endif
       return true;
     }
 
@@ -1501,6 +1526,7 @@ inline bool audioEffectsTaskIsActive() {
       _audioProducerStarvationYields = 0;
       _audioConsecutiveFastDmaWrites = 0;
       _audioConsecutiveUnpacedProducerBlocks = 0;
+      _audioEffectsLastIdleYieldTick = xTaskGetTickCount();
       _audioProducerBlockWasPaced = false;
 
       audioCallback1Handle = NULL;
