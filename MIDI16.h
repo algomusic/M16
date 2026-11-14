@@ -20,6 +20,7 @@
 class MIDI16 {
 
 public:
+  enum MidiThruMode { MIDI_THRU_NO_DATA, MIDI_THRU_ALL_DATA, MIDI_THRU_UNUSED_DATA };
   static const uint8_t noteOn              = 0x90;
   static const uint8_t noteOff             = 0x80;
   static const uint8_t polyphonicAfterTouch = 0xA0;
@@ -390,7 +391,35 @@ public:
   /** Enable or disable MIDI Thru. When enabled, every received MIDI byte is
    *  copied to the MIDI output, including Real-Time, System Common and SysEx
    *  data. Disabled by default. */
-  void setMidiThru(bool enabled) { _midiThru = enabled; }
+  void setMidiThru(bool enabled) {
+    _modeThruActive = false;
+    _midiThruMode = enabled ? MIDI_THRU_ALL_DATA : MIDI_THRU_NO_DATA;
+    _midiThru = enabled;
+  }
+
+  /** Select application-aware thru. Realtime is forwarded in every mode.
+   * UNUSED_DATA automatically forwards System Common and SysEx; the sketch
+   * calls forwardUnhandledMessage() for each unhandled channel event.
+   * MIDI Extend takes precedence while enabled. Call on the MIDI control thread.
+   */
+  void setMidiThruMode(MidiThruMode mode) {
+    if (mode != MIDI_THRU_NO_DATA && mode != MIDI_THRU_ALL_DATA &&
+        mode != MIDI_THRU_UNUSED_DATA) return;
+    _midiThruMode = mode;
+    _modeThruActive = true;
+    _midiThru = (mode == MIDI_THRU_ALL_DATA);
+  }
+  MidiThruMode getMidiThruMode() const { return _midiThruMode; }
+
+  /** Forward the last read channel message if the application did not use it. */
+  void forwardUnhandledMessage() {
+    if (!_modeThruActive || _midiExtend || _midiThruMode != MIDI_THRU_UNUSED_DATA ||
+        _lastWireStatus < 0x80 || _lastWireStatus >= 0xF0) return;
+    const uint8_t status = _lastWireStatus;
+    const uint8_t type = status & 0xF0;
+    sendChannelMessage(status, message[1], message[2],
+                       (type == 0xC0 || type == 0xD0) ? 2 : 3);
+  }
 
   /** Return whether MIDI Thru is enabled. */
   bool getMidiThru() const { return _midiThru; }
@@ -434,29 +463,46 @@ public:
     // Drain only bytes already available. An incomplete channel message stays
     // in parser state until a later call, rather than blocking the audio/control
     // loop or discarding data bytes that have not reached the UART yet.
-    while (srcAvail() && !eventQueueFull()) {
-      int b = srcRead();
-      if (b < 0) break;
-      #if IS_ESP32()
-      if (_midiThru && !_midiExtend && !_clockTaskActive)
-        Serial2.write((uint8_t)b);
-      #else
-      if (_midiThru && !_midiExtend) Serial2.write((uint8_t)b);
-      #endif
-      parseByte((uint8_t)b);
-    }
+    for (;;) {
+      while (srcAvail() && !eventQueueFull()) {
+        // In selective mode, let the sketch decide about the previous channel
+        // event before consuming later SysEx/System Common bytes.
+        if ((_midiExtend || (_modeThruActive && _midiThruMode == MIDI_THRU_UNUSED_DATA)) &&
+            _eventRead != _eventWrite) break;
+        #if IS_ESP32()
+        // Leave bytes in the RX ring until the worker has space to forward them.
+        if (_clockTaskActive) {
+          const int nextByte = srcPeek();
+          if (nextByte >= 0xF8) {
+            if ((_midiExtend || (_modeThruActive && !_midiThru)) &&
+                !txRealtimeHasSpace()) break;
+          } else if ((_midiExtend || (_modeThruActive &&
+                     _midiThruMode == MIDI_THRU_UNUSED_DATA)) &&
+                     !txMessageHasSpace()) break;
+        }
+        #endif
+        int b = srcRead();
+        if (b < 0) break;
+        #if IS_ESP32()
+        if (_midiThru && !_midiExtend && !_clockTaskActive)
+          Serial2.write((uint8_t)b);
+        #else
+        if (_midiThru && !_midiExtend) Serial2.write((uint8_t)b);
+        #endif
+        parseByte((uint8_t)b);
+      }
 
-    MidiEvent event;
-    while (eventPop(event)) {
+      MidiEvent event;
+      if (!eventPop(event)) return 0;
       if (!routeExtendedEvent(event)) continue;
       message[0] = event.status;
       message[1] = event.data1;
       message[2] = event.data2;
+      _lastWireStatus = event.wireStatus;
       return (message[0] < 240)
         ? (uint8_t)(message[0] & 0xF0)
         : message[0];
     }
-    return 0;
   }
 
   uint8_t getStatus()  { return message[0] - (message[0] & 0x0F); }
@@ -529,11 +575,15 @@ private:
     uint8_t status;
     uint8_t data1;
     uint8_t data2;
+    uint8_t wireStatus;
   };
 
   int      recievePin;
   int      transmitPin;
   volatile bool _midiThru = false;
+  volatile bool _modeThruActive = false;
+  volatile MidiThruMode _midiThruMode = MIDI_THRU_NO_DATA;
+  uint8_t _lastWireStatus = 0;
   volatile bool _midiExtend = false;
   uint8_t _extendPoly = 8;
   uint8_t _localActiveNotes = 0;
@@ -574,10 +624,12 @@ private:
     return true;
   }
 
-  void eventPush(uint8_t status, uint8_t data1 = 0, uint8_t data2 = 0) {
+  void eventPush(uint8_t status, uint8_t data1 = 0, uint8_t data2 = 0,
+                 uint8_t wireStatus = 0) {
     // Collapse consecutive updates for the same controller, retaining the
     // existing MIDI16 sweep-coalescing optimization with running status too.
-    if ((status & 0xF0) == 0xB0 && _eventRead != _eventWrite) {
+    if (!(_modeThruActive && _midiThruMode == MIDI_THRU_UNUSED_DATA) &&
+        (status & 0xF0) == 0xB0 && _eventRead != _eventWrite) {
       uint8_t previous = (uint8_t)((_eventWrite - 1) & (EVENT_QUEUE_SIZE - 1));
       MidiEvent &last = _eventQueue[previous];
       if (last.status == status && last.data1 == data1) {
@@ -586,7 +638,7 @@ private:
       }
     }
     if (eventQueueFull()) return;
-    _eventQueue[_eventWrite] = {status, data1, data2};
+    _eventQueue[_eventWrite] = {status, data1, data2, wireStatus ? wireStatus : status};
     _eventWrite = (uint8_t)((_eventWrite + 1) & (EVENT_QUEUE_SIZE - 1));
   }
 
@@ -687,14 +739,18 @@ private:
     // MIDI Real-Time bytes may appear anywhere, including between a status and
     // its data. Report them without changing any parser or running-status state.
     if (value >= 0xF8) {
+      if (_modeThruActive && !_midiThru && !_midiExtend)
+        sendRealtimeMessage(value);
       eventPush(value);
       return;
     }
 
     // MIDI Extend passes System Common and SysEx bytes unchanged. Channel
     // messages are forwarded as complete events by routeExtendedEvent().
-    if (_midiExtend && _insideSysEx) {
-      Serial2.write(value);
+    const bool forwardSystem = _midiExtend ||
+        (_modeThruActive && _midiThruMode == MIDI_THRU_UNUSED_DATA);
+    if (forwardSystem && _insideSysEx && (value < 0x80 || value == 0xF7)) {
+      sendChannelMessage(value, 0, 0, 1);
       if (value == 0xF7) {
         _insideSysEx = false;
         _systemDataRemaining = 0;
@@ -713,7 +769,7 @@ private:
       // System Common cancels running status. MIDI16 does not expose these
       // message types, but consuming their known data lengths keeps subsequent
       // channel messages aligned.
-      if (_midiExtend) Serial2.write(value);
+      if (forwardSystem) sendChannelMessage(value, 0, 0, 1);
       _runningStatus = 0;
       _parseStatus = 0;
       _parseDataCount = 0;
@@ -734,7 +790,7 @@ private:
 
     if (_insideSysEx) return;
     if (_systemDataRemaining > 0) {
-      if (_midiExtend) Serial2.write(value);
+      if (forwardSystem) sendChannelMessage(value, 0, 0, 1);
       --_systemDataRemaining;
       return;
     }
@@ -752,7 +808,7 @@ private:
     uint8_t data2 = (_parseDataNeeded == 2) ? _parseData[1] : 0;
     if ((status & 0xF0) == 0x90 && data2 == 0)
       status = (uint8_t)(0x80 | (status & 0x0F));
-    eventPush(status, data1, data2);
+    eventPush(status, data1, data2, _parseStatus);
 
     // Prepare for the next running-status message without requiring another
     // status byte. A new explicit status will simply replace this state.
@@ -801,6 +857,15 @@ private:
   std::atomic<uint32_t> _txDroppedMessages{0};
   std::atomic<uint32_t> _txDroppedRealtime{0};
   std::atomic<uint32_t> _txBackpressure{0};
+
+  bool txMessageHasSpace() const {
+    return ((_txMessageW.load(std::memory_order_relaxed) + 1) & (TX_MESSAGE_SIZE - 1)) !=
+           _txMessageR.load(std::memory_order_acquire);
+  }
+  bool txRealtimeHasSpace() const {
+    return ((_txRealtimeW.load(std::memory_order_relaxed) + 1) & (TX_REALTIME_SIZE - 1)) !=
+           _txRealtimeR.load(std::memory_order_acquire);
+  }
 
   bool txMessagePush(uint8_t status, uint8_t data1, uint8_t data2,
                      uint8_t length) {
@@ -854,16 +919,23 @@ private:
                          std::memory_order_release);
     }
 
-    uint8_t r = _txMessageR.load(std::memory_order_relaxed);
-    if (r == _txMessageW.load(std::memory_order_acquire)) return;
-    TxMessage &message = _txMessages[r];
-    if (Serial2.availableForWrite() < message.length) {
-      _txBackpressure.fetch_add(1, std::memory_order_relaxed);
-      return;
+    // Drain up to four single-byte System Common/SysEx entries per pass so
+    // their sustained throughput can match the incoming 31250-baud stream.
+    // Ordinary complete channel messages retain the one-message budget.
+    for (uint8_t budget = 0; budget < 4; ++budget) {
+      uint8_t r = _txMessageR.load(std::memory_order_relaxed);
+      if (r == _txMessageW.load(std::memory_order_acquire)) return;
+      TxMessage &message = _txMessages[r];
+      if (Serial2.availableForWrite() < message.length) {
+        _txBackpressure.fetch_add(1, std::memory_order_relaxed);
+        return;
+      }
+      const bool singleByte = message.length == 1;
+      Serial2.write(message.data, message.length);
+      _txMessageR.store((uint8_t)((r + 1) & (TX_MESSAGE_SIZE - 1)),
+                        std::memory_order_release);
+      if (!singleByte) break;
     }
-    Serial2.write(message.data, message.length);
-    _txMessageR.store((uint8_t)((r + 1) & (TX_MESSAGE_SIZE - 1)),
-                      std::memory_order_release);
   }
 
   void drainQueuedTxDirect() {
@@ -900,6 +972,13 @@ private:
     ts = _tsBuf[_tsR]; _tsR = (_tsR + 1) % TS_SIZE; return true;
   }
 
+  // The worker owns UART input and byte-thru in all-data mode.
+  void receiveClockTaskByte(uint8_t b) {
+    if (b == 0xF8) tsPush(micros());
+    if (_midiThru && !_midiExtend) Serial2.write(b);
+    rxPush(b);
+  }
+
   // Clock task: sole owner of Serial2 reads when active.
   // Timestamps 0xF8 immediately, then forwards all bytes to the RX ring.
   // tsPush before rxPush ensures the timestamp is always available by the
@@ -922,9 +1001,7 @@ private:
       // Incoming: drain Serial2 into RX ring, timestamp clock bytes immediately
       while (Serial2.available()) {
         uint8_t b = (uint8_t)Serial2.read();
-        if (b == 0xF8) self->tsPush(micros());
-        if (self->_midiThru) Serial2.write(b);
-        self->rxPush(b);
+        self->receiveClockTaskByte(b);
       }
 
       // Adaptive sleep: when sending clock, sleep until 1ms before the next
