@@ -17,6 +17,14 @@
 #include <freertos/task.h>
 #endif
 
+// ESP8266 exposes its full-duplex hardware UART as Serial; the other supported
+// boards use Serial2 for the MIDI port.
+#if IS_ESP8266()
+  #define MIDI16_UART Serial
+#else
+  #define MIDI16_UART Serial2
+#endif
+
 class MIDI16 {
 
 public:
@@ -291,7 +299,7 @@ public:
     message = new uint8_t[3];
     #if IS_ESP32()
     #include <HardwareSerial.h>
-    Serial2.begin(31250, SERIAL_8N1, rx, tx);
+    MIDI16_UART.begin(31250, SERIAL_8N1, rx, tx);
     #endif
     #if IS_ESP8266()
     Serial.begin(31250);
@@ -299,7 +307,7 @@ public:
     #if IS_RP2040()
     Serial2.setRX(rx);
     Serial2.setTX(tx);
-    Serial2.begin(31250);
+    MIDI16_UART.begin(31250);
     #endif
   }
 
@@ -485,9 +493,9 @@ public:
         if (b < 0) break;
         #if IS_ESP32()
         if (_midiThru && !_midiExtend && !_clockTaskActive)
-          Serial2.write((uint8_t)b);
+          MIDI16_UART.write((uint8_t)b);
         #else
-        if (_midiThru && !_midiExtend) Serial2.write((uint8_t)b);
+        if (_midiThru && !_midiExtend) MIDI16_UART.write((uint8_t)b);
         #endif
         parseByte((uint8_t)b);
       }
@@ -1030,28 +1038,28 @@ private:
     #if IS_ESP32()
     if (_clockTaskActive) return rxAvail();
     #endif
-    return Serial2.available() > 0;
+    return MIDI16_UART.available() > 0;
   }
 
   int srcRead() {
     #if IS_ESP32()
     if (_clockTaskActive) return rxPop();
     #endif
-    return Serial2.read();
+    return MIDI16_UART.read();
   }
 
   int srcPeek() {
     #if IS_ESP32()
     if (_clockTaskActive) return rxPeek();
     #endif
-    return Serial2.peek();
+    return MIDI16_UART.peek();
   }
 
   int srcCount() {
     #if IS_ESP32()
     if (_clockTaskActive) return rxCount();
     #endif
-    return Serial2.available();
+    return MIDI16_UART.available();
   }
 
   void sendChannelMessage(uint8_t status, uint8_t data1, uint8_t data2,
@@ -1062,9 +1070,9 @@ private:
       return;
     }
     #endif
-    Serial2.write(status);
-    if (length > 1) Serial2.write(data1);
-    if (length > 2) Serial2.write(data2);
+    MIDI16_UART.write(status);
+    if (length > 1) MIDI16_UART.write(data1);
+    if (length > 2) MIDI16_UART.write(data2);
   }
 
   void sendRealtimeMessage(uint8_t value) {
@@ -1074,11 +1082,13 @@ private:
       return;
     }
     #endif
-    Serial2.write(value);
+    MIDI16_UART.write(value);
   }
 
-  void writeByte(uint8_t v) { Serial2.write(v); }
+  void writeByte(uint8_t v) { MIDI16_UART.write(v); }
 
 };
+
+#undef MIDI16_UART
 
 #endif /* MIDI16_H_ */
