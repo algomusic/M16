@@ -411,6 +411,19 @@ public:
   /** Return whether MIDI Extend mode is enabled. */
   bool getMidiExtend() const { return _midiExtend; }
 
+  /** Forward the most recent event returned by read(). Supports channel and
+   *  Real-Time messages; SysEx and System Common are available through byte thru. */
+  void forwardReceivedMessage() {
+    uint8_t status = message[0];
+    if (status >= 0xF8) {
+      sendRealtimeMessage(status);
+    } else if (status >= 0x80 && status < 0xF0) {
+      uint8_t type = status & 0xF0;
+      uint8_t length = (type == 0xC0 || type == 0xD0) ? 2 : 3;
+      sendChannelMessage(status, message[1], message[2], length);
+    }
+  }
+
   // ── Receive ──────────────────────────────────────────────────────────────
 
   /** Read one complete MIDI event. Returns the status byte (channel stripped
