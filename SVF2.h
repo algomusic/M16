@@ -313,57 +313,41 @@ public:
     #if defined(ESP32) || defined(ESP_PLATFORM) || defined(ARDUINO_ARCH_RP2040)
     M16_ATOMIC_GUARD_BLOCKING(_svfLock, {
       calcFilter(input);
-
-      int32_t lpfAmnt = 0;
-      int32_t bpfAmnt = 0;
-      int32_t hpfAmnt = 0;
-
-      if (mix < 0.5f) {
-        // LPF to BPF transition
-        float lpfMix = 1.0f - mix * 2.0f;
-        float bpfMix = mix * 2.0f;
-        lpfAmnt = (int32_t)(low * lpfMix);
-        bpfAmnt = (int32_t)(band * bpfMix);
-      } else {
-        // BPF to HPF transition
-        float bpfMix = 1.0f - (mix - 0.5f) * 2.0f;
-        float hpfMix = (mix - 0.5f) * 2.0f;
-        bpfAmnt = (int32_t)(band * bpfMix);
-        hpfAmnt = (int32_t)(high * hpfMix);
-      }
-
-      int32_t sum = lpfAmnt + bpfAmnt + hpfAmnt;
-      if (sum > MAX_16) prevOutput_ = MAX_16;
-      else if (sum < -MAX_16) prevOutput_ = -MAX_16;
-      else prevOutput_ = (int16_t)sum;
+      prevOutput_ = mixFilterOutput(mix);
     });
     #else
     calcFilter(input);
-
-    int32_t lpfAmnt = 0;
-    int32_t bpfAmnt = 0;
-    int32_t hpfAmnt = 0;
-
-    if (mix < 0.5f) {
-      // LPF to BPF transition
-      float lpfMix = 1.0f - mix * 2.0f;
-      float bpfMix = mix * 2.0f;
-      lpfAmnt = (int32_t)(low * lpfMix);
-      bpfAmnt = (int32_t)(band * bpfMix);
-    } else {
-      // BPF to HPF transition
-      float bpfMix = 1.0f - (mix - 0.5f) * 2.0f;
-      float hpfMix = (mix - 0.5f) * 2.0f;
-      bpfAmnt = (int32_t)(band * bpfMix);
-      hpfAmnt = (int32_t)(high * hpfMix);
-    }
-
-    int32_t sum = lpfAmnt + bpfAmnt + hpfAmnt;
-    if (sum > MAX_16) prevOutput_ = MAX_16;
-    else if (sum < -MAX_16) prevOutput_ = -MAX_16;
-    else prevOutput_ = (int16_t)sum;
+    prevOutput_ = mixFilterOutput(mix);
     #endif
     return prevOutput_;
+  }
+
+  /** Filter mix without a state lock. Only one audio core may advance or
+   * inspect this filter's state; coefficient setters can run on another core.
+   * The lowpass, bandpass and highpass endpoints avoid crossfade math.
+   */
+  inline int16_t nextFiltMixUnlocked(int32_t input, float mix) {
+    calcFilter(clip16(input));
+    prevOutput_ = mixFilterOutput(mix);
+    return prevOutput_;
+  }
+
+  /** True when the state used by the low/band/high filter is exactly silent.
+   * Call only from the exclusive owner of this filter's audio state.
+   */
+  inline bool isSilentUnlocked() const { return buf0 == 0 && buf1 == 0; }
+
+  /** Drain an unused filter with zero input, without calculating a mix. If
+   * fixed-point rounding leaves the state stationary, clear that residual so
+   * subsequent calls can bypass the filter. Exclusive audio owner only. */
+  inline void drainUnusedUnlocked() {
+    if (isSilentUnlocked()) return;
+    const int32_t previous0 = buf0, previous1 = buf1;
+    calcFilter(0);
+    if (buf0 == previous0 && buf1 == previous1) {
+      reset();
+      prevOutput_ = 0;
+    }
   }
 
   /** Calculate next allpass sample with DC blocking
@@ -409,6 +393,23 @@ public:
   }
 
 private:
+  inline int16_t mixFilterOutput(float mix) const {
+    int32_t sum;
+    if (mix == 0.0f) sum = low;
+    else if (mix == 0.5f) sum = band;
+    else if (mix == 1.0f) sum = high;
+    else if (mix < 0.5f) {
+      const float bpfMix = mix * 2.0f;
+      sum = (int32_t)(low * (1.0f - bpfMix)) + (int32_t)(band * bpfMix);
+    } else {
+      const float hpfMix = (mix - 0.5f) * 2.0f;
+      sum = (int32_t)(band * (1.0f - hpfMix)) + (int32_t)(high * hpfMix);
+    }
+    if (sum > MAX_16) return MAX_16;
+    if (sum < -MAX_16) return -MAX_16;
+    return (int16_t)sum;
+  }
+
   // Pitch tracking is control-thread state, local to this filter.
   float _trackingBase = 0.0f;
   float _trackingAmount = 0.0f;

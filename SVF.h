@@ -347,7 +347,13 @@ class SVF {
       int32_t bpfAmnt = 0;
       int32_t hpfAmnt = 0;
 
-      if (mix < 0.5f) {
+      if (mix == 0.0f) {
+          lpfAmnt = low;
+      } else if (mix == 0.5f) {
+          bpfAmnt = band;
+      } else if (mix == 1.0f) {
+          hpfAmnt = high;
+      } else if (mix < 0.5f) {
           // LPF to BPF transition
           float lpfMix = 1.0f - mix * 2.0f;
           float bpfMix = mix * 2.0f;
