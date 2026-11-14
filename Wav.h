@@ -1023,7 +1023,7 @@ public:
     uint8_t row[16];
     uint32_t written = 0;
     while (written < fileSize) {
-      uint32_t toRead = min(16UL, fileSize - written);
+      uint32_t toRead = min((uint32_t)16, fileSize - written);
       src.read(row, toRead);
       hdrFile.print("  ");
       for (uint32_t i = 0; i < toRead; i++) {
