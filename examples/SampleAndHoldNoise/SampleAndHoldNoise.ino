@@ -16,7 +16,7 @@ void setup() {
   sampleAndHold.setSandH(true);
   sampleAndHold.setFreq(holdRate);
 
-  seti2sPins(38, 39, 40, -1); // BCK, WS, DOUT, DIN (unused)
+  // seti2sPins(38, 39, 40, -1); // BCK, WS, DOUT, DIN (unused)
   audioStart();
 }
 

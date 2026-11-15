@@ -38,7 +38,7 @@ void setup() {
   exciterFilter.setFreq(SAMPLE_RATE / 2); // at the Nyquist to avoid aliasing
   dampeningFilter.setFreq(10000);
   stepTime = millis();
-  seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
+  // seti2sPins(16, 17, 18, 21); // BCK, WS, DOUT, DIN
   // useInternalDAC();
   audioStart();
 }

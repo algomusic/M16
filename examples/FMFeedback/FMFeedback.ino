@@ -27,7 +27,7 @@ void setup() {
   osc.sinGen();
   osc.setFreq(freq);
 
-  seti2sPins(16, 17, 18, 21);
+  // seti2sPins(16, 17, 18, 21);
   // useInternalDAC();
   audioStart();
 
