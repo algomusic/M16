@@ -614,8 +614,14 @@ public:
   /** Return the current value of the Oscil. */
   int16_t getValue() {
     if (pulseWidthEnabled()) return renderPulseWidth(0, true, false, nullptr, 0, false);
-    int idx = phase_fractional >> 16; // 16.16 fixed-point
-    return bandPtr[idx];
+    #if IS_ESP32() || IS_RP2040()
+      int16_t* currentBand = (int16_t*)__atomic_load_n((uintptr_t*)&bandPtr, __ATOMIC_RELAXED);
+    #else
+      int16_t* currentBand = bandPtr;
+    #endif
+    if (currentBand == nullptr) return 0;
+    int idx = (getPhaseRaw() >> 16) & (TABLE_SIZE - 1);
+    return currentBand[idx];
   }
 
   /** Get a blend of this Osc and another.
@@ -1924,7 +1930,7 @@ public:
     crackleAmnt = max(1, min(MAX_16, amnt));
 	}
 
-  /** Stretch a periodic wavetable to a duty fraction, clamped to 0.05..0.95.
+  /** Stretch a periodic wavetable to a duty fraction, clamped to 0.001..0.999.
    * The master phase/frequency is independent of duty. Duty is quantized to
    * 1/65536; NaN is ignored. next()/next2()/nextUnlocked() use linear PWM reads.
    * Safe to publish from a control task on ESP32/RP2040. Give each PWM Osc one
@@ -1932,6 +1938,9 @@ public:
    * Table assignment/generation and setPhase() remain setup/owner operations.
    * PWM also applies to phMod variants, morph/window rendering and ringMod.
    * atTime(), feedback() and particle() retain their specialised behaviour.
+   * Narrow widths compress part of the waveform into few samples and can
+   * produce aliasing, particularly at high pitches. next2() uses the same
+   * linear-interpolated PWM path as next().
    * Noise, crackle and sample-and-hold are not periodic PWM sources.
    */
   inline void setPulseWidth(float width) {
