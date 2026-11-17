@@ -12,6 +12,8 @@
 #ifndef MIDI16_H_
 #define MIDI16_H_
 
+#include <stdint.h>
+
 #if IS_ESP32()
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -25,10 +27,14 @@
   #define MIDI16_UART Serial2
 #endif
 
+/** Values accepted by MIDI16::setMidiThruMode(). */
+static const uint8_t MIDI_THRU_OFF = 0;
+static const uint8_t MIDI_THRU_ALL = 1;
+static const uint8_t MIDI_THRU_UNUSED = 2;
+
 class MIDI16 {
 
 public:
-  enum MidiThruMode { MIDI_THRU_NO_DATA, MIDI_THRU_ALL_DATA, MIDI_THRU_UNUSED_DATA };
   static const uint8_t noteOn              = 0x90;
   static const uint8_t noteOff             = 0x80;
   static const uint8_t polyphonicAfterTouch = 0xA0;
@@ -401,7 +407,7 @@ public:
    *  data. Disabled by default. */
   void setMidiThru(bool enabled) {
     _modeThruActive = false;
-    _midiThruMode = enabled ? MIDI_THRU_ALL_DATA : MIDI_THRU_NO_DATA;
+    _midiThruMode = enabled ? MIDI_THRU_ALL : MIDI_THRU_OFF;
     _midiThru = enabled;
   }
 
@@ -410,18 +416,18 @@ public:
    * calls forwardUnhandledMessage() for each unhandled channel event.
    * MIDI Extend takes precedence while enabled. Call on the MIDI control thread.
    */
-  void setMidiThruMode(MidiThruMode mode) {
-    if (mode != MIDI_THRU_NO_DATA && mode != MIDI_THRU_ALL_DATA &&
-        mode != MIDI_THRU_UNUSED_DATA) return;
+  void setMidiThruMode(uint8_t mode) {
+    if (mode != MIDI_THRU_OFF && mode != MIDI_THRU_ALL &&
+        mode != MIDI_THRU_UNUSED) return;
     _midiThruMode = mode;
     _modeThruActive = true;
-    _midiThru = (mode == MIDI_THRU_ALL_DATA);
+    _midiThru = (mode == MIDI_THRU_ALL);
   }
-  MidiThruMode getMidiThruMode() const { return _midiThruMode; }
+  uint8_t getMidiThruMode() const { return _midiThruMode; }
 
   /** Forward the last read channel message if the application did not use it. */
   void forwardUnhandledMessage() {
-    if (!_modeThruActive || _midiExtend || _midiThruMode != MIDI_THRU_UNUSED_DATA ||
+    if (!_modeThruActive || _midiExtend || _midiThruMode != MIDI_THRU_UNUSED ||
         _lastWireStatus < 0x80 || _lastWireStatus >= 0xF0) return;
     const uint8_t status = _lastWireStatus;
     const uint8_t type = status & 0xF0;
@@ -444,6 +450,20 @@ public:
 
   /** Return the local polyphony limit used by MIDI Extend mode. */
   uint8_t getExtendPoly() const { return _extendPoly; }
+
+  /** Restrict MIDI Extend's local note allowance to one MIDI channel (1-16).
+   * Set to 0 to allow notes from all channels locally. Messages on other
+   * channels are forwarded and their note-off routing is tracked separately.
+   */
+  void setExtendChannel(uint8_t channel) {
+    if (channel == 0) _extendChannel = 0xFF;
+    else if (channel <= 16) _extendChannel = channel - 1;
+  }
+
+  /** Return the MIDI Extend local channel (1-16), or 0 for all channels. */
+  uint8_t getExtendChannel() const {
+    return _extendChannel == 0xFF ? 0 : _extendChannel + 1;
+  }
 
   /** Return whether MIDI Extend mode is enabled. */
   bool getMidiExtend() const { return _midiExtend; }
@@ -475,7 +495,7 @@ public:
       while (srcAvail() && !eventQueueFull()) {
         // In selective mode, let the sketch decide about the previous channel
         // event before consuming later SysEx/System Common bytes.
-        if ((_midiExtend || (_modeThruActive && _midiThruMode == MIDI_THRU_UNUSED_DATA)) &&
+        if ((_midiExtend || (_modeThruActive && _midiThruMode == MIDI_THRU_UNUSED)) &&
             _eventRead != _eventWrite) break;
         #if IS_ESP32()
         // Leave bytes in the RX ring until the worker has space to forward them.
@@ -485,7 +505,7 @@ public:
             if ((_midiExtend || (_modeThruActive && !_midiThru)) &&
                 !txRealtimeHasSpace()) break;
           } else if ((_midiExtend || (_modeThruActive &&
-                     _midiThruMode == MIDI_THRU_UNUSED_DATA)) &&
+                     _midiThruMode == MIDI_THRU_UNUSED)) &&
                      !txMessageHasSpace()) break;
         }
         #endif
@@ -590,10 +610,11 @@ private:
   int      transmitPin;
   volatile bool _midiThru = false;
   volatile bool _modeThruActive = false;
-  volatile MidiThruMode _midiThruMode = MIDI_THRU_NO_DATA;
+  volatile uint8_t _midiThruMode = MIDI_THRU_OFF;
   uint8_t _lastWireStatus = 0;
   volatile bool _midiExtend = false;
   uint8_t _extendPoly = 8;
+  uint8_t _extendChannel = 0xFF; // 0xFF means all MIDI channels.
   uint8_t _localActiveNotes = 0;
   // Positive entries count locally owned notes; negative entries count
   // notes owned by the thru destination. Same-pitch retriggers stay on the
@@ -636,7 +657,7 @@ private:
                  uint8_t wireStatus = 0) {
     // Collapse consecutive updates for the same controller, retaining the
     // existing MIDI16 sweep-coalescing optimization with running status too.
-    if (!(_modeThruActive && _midiThruMode == MIDI_THRU_UNUSED_DATA) &&
+    if (!(_modeThruActive && _midiThruMode == MIDI_THRU_UNUSED) &&
         (status & 0xF0) == 0xB0 && _eventRead != _eventWrite) {
       uint8_t previous = (uint8_t)((_eventWrite - 1) & (EVENT_QUEUE_SIZE - 1));
       MidiEvent &last = _eventQueue[previous];
@@ -674,7 +695,9 @@ private:
       bool toLocal;
       if (route > 0) toLocal = true;
       else if (route < 0) toLocal = false;
-      else toLocal = !extending || _localActiveNotes < _extendPoly;
+      else toLocal = !extending ||
+          ((_extendChannel == 0xFF || channel == _extendChannel) &&
+           _localActiveNotes < _extendPoly);
 
       if (toLocal) {
         if (extending || route > 0) {
@@ -756,7 +779,7 @@ private:
     // MIDI Extend passes System Common and SysEx bytes unchanged. Channel
     // messages are forwarded as complete events by routeExtendedEvent().
     const bool forwardSystem = _midiExtend ||
-        (_modeThruActive && _midiThruMode == MIDI_THRU_UNUSED_DATA);
+        (_modeThruActive && _midiThruMode == MIDI_THRU_UNUSED);
     if (forwardSystem && _insideSysEx && (value < 0x80 || value == 0xF7)) {
       sendChannelMessage(value, 0, 0, 1);
       if (value == 0xF7) {
