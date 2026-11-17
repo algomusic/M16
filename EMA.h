@@ -32,6 +32,8 @@ public:
 
   /** Set resonance - no-op for compatibility with other M16 filters */
   inline void setRes(float resonance) { (void)resonance; }
+  inline float getRes() const { return 0.0f; }
+  inline void setThreadSafe(bool enable) { (void)enable; }
 
   /** Reset filter state to zero - useful for consistent attack transients */
   inline void reset() {
@@ -42,15 +44,21 @@ public:
   /** Set cutoff frequency in Hz
    * @param freqVal Frequency 40-10000 Hz
    */
-  inline void setFreq(int32_t freq_val) {
-    int32_t clampedFreq = max((int32_t)40, min((int32_t)10000, freq_val));
-    if (coefficientSource == SOURCE_FREQ && f == clampedFreq) return;
+  /** Set cutoff in Hz with Bob/SVF style pitch tracking support. */
+  inline void setFreq(float freqVal) {
+    if (!_pitchTrackingApplying) {
+      _pitchTrackingUsesNormalised = false;
+      setTrackingBase(max(0.0f, freqVal));
+      if (_pitchTrackingAutoApply) freqVal = trackedFrequency();
+    }
+    const float clampedFreq = max(40.0f, min(10000.0f, freqVal));
+    const float cutVal = clampedFreq * 0.0001f;
+    const int16_t coefficient = (int16_t)max(10,
+        (int)((1.0f - powf(1.0f - cutVal, 0.3f)) * 1024.0f + 0.5f));
+    if (abs((int)coefficient -
+            (int)alpha_val.load(std::memory_order_relaxed)) >= 1)
+      alpha_val.store(coefficient, std::memory_order_relaxed);
     f = clampedFreq;
-    float cutVal = f * 0.0001;
-    alpha_val.store(
-        (int16_t)max((int32_t)10,
-                     (int32_t)((1.0f - pow((1.0f - cutVal), 0.3f)) * 1024)),
-        std::memory_order_relaxed);
     coefficientSource = SOURCE_FREQ;
   }
 
@@ -64,20 +72,44 @@ public:
    */
   inline void setCutoff(float cutoff_val) {
     float cutVal = clamp01(cutoff_val);
-    if (coefficientSource == SOURCE_CUTOFF && cutVal == normalizedCutoff) return;
     normalizedCutoff = cutVal;
-    f = max(40.0f, cutVal * 10000.0f);
-    alpha_val.store(
-        (int16_t)max((int32_t)10,
-                     (int32_t)((1.0f - pow((1.0f - cutVal), 0.2f)) * 1024.0f)),
-        std::memory_order_relaxed);
+    const float baseFrequency = max(40.0f, cutVal * 10000.0f);
+    if (!_pitchTrackingApplying) {
+      _pitchTrackingUsesNormalised = true;
+      setTrackingBase(baseFrequency);
+    }
+    f = max(40.0f, min(10000.0f, baseFrequency *
+        (_pitchTrackingAutoApply ? _trackingMultiplier : 1.0f)));
+    const float effectiveCutoff = f * 0.0001f;
+    const int16_t coefficient = (int16_t)max(10,
+        (int)((1.0f - powf(1.0f - effectiveCutoff, 0.2f)) * 1024.0f + 0.5f));
+    if (abs((int)coefficient -
+            (int)alpha_val.load(std::memory_order_relaxed)) >= 1)
+      alpha_val.store(coefficient, std::memory_order_relaxed);
     coefficientSource = SOURCE_CUTOFF;
+  }
+  inline void setNormalisedCutoff(float cutoff_val) { setCutoff(cutoff_val); }
+
+  void setPitchTrackingAmount(float amount) { if (setTrackingAmount(amount)) applyPitchTracking(); }
+  void setPitchTracking(int pitch) { if (setTrackingPitch(pitch)) applyPitchTracking(); }
+  void setPitchTracking(float frequency) { if (setTrackingFrequency(frequency)) applyPitchTracking(); }
+  void setPitchTracking(double frequency) { setPitchTracking((float)frequency); }
+  float getPitchTrackingAmount() const { return _trackingAmount; }
+  float getPitchTrackingMultiplier() const { return _trackingMultiplier; }
+  float getPitchTrackedFrequency() const { return trackedFrequency(); }
+  void setPitchTrackingAutoApply(bool enabled) { _pitchTrackingAutoApply = enabled; if (enabled) applyPitchTracking(); }
+  void setPitchTrackingBaseFrequency(float frequency) {
+    if (!isfinite(frequency) || frequency < 0.0f) return;
+    setTrackingBase(frequency);
+    _pitchTrackingUsesNormalised = false;
+    applyPitchTracking();
   }
 
   /** Return cutoff as normalized value */
   inline float getCutoff() const {
     return normalizedCutoff;
   }
+  inline float getNormalisedCutoff() const { return getCutoff(); }
 
   /** Convert a normalized cutoff to EMA's integer coefficient.
    * Intended for building a lookup table during setup(), not for audio-rate use.
@@ -140,6 +172,55 @@ public:
 private:
   static inline float clamp01(float value) {
     return max(0.0f, min(1.0f, value));
+  }
+
+  float _trackingBase = 10000.0f;
+  float _trackingAmount = 0.0f;
+  float _trackingMidiPitch = 69.0f;
+  float _trackingMultiplier = 1.0f;
+  bool _pitchTrackingAutoApply = true;
+  bool _pitchTrackingApplying = false;
+  bool _pitchTrackingUsesNormalised = false;
+
+  void setTrackingBase(float hz) { if (isfinite(hz) && hz >= 0.0f) _trackingBase = hz; }
+  bool setTrackingAmount(float value) {
+    if (!isfinite(value)) return false;
+    value = max(-1.0f, min(1.0f, value));
+    if (_trackingAmount == value) return false;
+    _trackingAmount = value;
+    updateTrackingMultiplier();
+    return true;
+  }
+  bool setTrackingPitch(int pitch) {
+    pitch = max(0, min(127, pitch));
+    if (_trackingMidiPitch == (float)pitch) return false;
+    _trackingMidiPitch = (float)pitch;
+    updateTrackingMultiplier();
+    return true;
+  }
+  bool setTrackingFrequency(float hz) {
+    if (!isfinite(hz) || hz <= 0.0f) return false;
+    const float pitch = 69.0f + 12.0f * (log2f(hz) - log2f(440.0f));
+    if (_trackingMidiPitch == pitch) return false;
+    _trackingMidiPitch = pitch;
+    updateTrackingMultiplier();
+    return true;
+  }
+  float trackedFrequency() const {
+    const float result = _trackingBase * _trackingMultiplier;
+    return isfinite(result) ? result : 3.402823466e38f;
+  }
+  void updateTrackingMultiplier() {
+    float exponent = (_trackingMidiPitch - 69.0f) * _trackingAmount * (1.0f / 12.0f);
+    exponent = max(-100.0f, min(100.0f, exponent));
+    _trackingMultiplier = _trackingAmount == 0.0f ? 1.0f : exp2f(exponent);
+  }
+  void applyPitchTracking() {
+    if (!_pitchTrackingAutoApply) return;
+    _pitchTrackingApplying = true;
+    if (_pitchTrackingUsesNormalised) setCutoff(normalizedCutoff);
+    else setFreq(trackedFrequency());
+    _pitchTrackingApplying = false;
   }
 
   enum : uint8_t {
